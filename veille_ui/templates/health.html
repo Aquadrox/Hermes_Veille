@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Santé — Veilles{% endblock %}
+{% block content %}
+<h1>Santé</h1>
+
+<section class="card">
+  <h2>Veilles</h2>
+  <table class="list">
+    <thead><tr><th>Veille</th><th>État</th><th>Dernier run</th><th>Dernier rapport</th><th>Seuil</th></tr></thead>
+    <tbody>
+    {% for row in rows %}{% set v = row.veille %}{% set st = row.status %}{% set cls = status_class(row) %}
+      <tr>
+        <td><a href="/veilles/{{ v.slug }}">{{ v.name }}</a></td>
+        <td><span class="badge {{ cls }}">{% if not st.exists %}job absent{% elif row.running %}en cours{% elif st.paused %}en pause{% elif cls == 'bad' %}en échec{% else %}actif{% endif %}</span></td>
+        <td>{{ st.last_run_at|dt }} {% if st.last_status %}({{ st.last_status }}){% endif %}</td>
+        <td>{{ row.last_report.date if row.last_report else "—" }}</td>
+        <td>{{ (v.max_age_hours / 24)|round(1) }} j</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="small muted">Le chien de garde de l'hôte applique les mêmes seuils et alerte par e-mail (ALERT_EMAIL).</p>
+</section>
+
+<section class="card">
+  <h2>Brevo</h2>
+  {% if brevo.error %}<p class="err">{{ brevo.error }}</p>{% else %}
+  <p>Compte : {{ brevo.email }}</p>
+  <ul>{% for p in brevo.plans %}<li>{{ p.type }} — {{ p.credits }} crédits ({{ p.credits_type }})</li>{% endfor %}</ul>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Journal d'audit</h2>
+  <table class="list">
+    <thead><tr><th>Date</th><th>Origine</th><th>Action</th><th>Veille</th><th>Détail</th></tr></thead>
+    <tbody>
+    {% for e in audit %}<tr><td>{{ e.at|dt }}</td><td>{{ e.actor }}</td><td>{{ e.action }}</td><td>{{ e.slug }}</td><td class="small">{{ e.detail }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

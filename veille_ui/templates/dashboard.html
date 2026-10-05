@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="head">
+  <h1>Veilles</h1>
+  <a class="button primary" href="/veilles/new">+ Nouvelle veille</a>
+</div>
+{% if not rows %}
+<section class="card"><p>Aucune veille. <a href="/veilles/new">Créer la première</a>.</p></section>
+{% else %}
+<div class="table-wrap">
+<table class="list">
+  <thead>
+    <tr><th>Veille</th><th>Fréquence</th><th>État</th><th>Prochain run</th><th>Dernier run</th><th>Dernier rapport</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}{% include "partials/row.html" %}{% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

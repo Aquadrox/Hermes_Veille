@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}{{ "Nouvelle veille" if creating else "Modifier " ~ values.name }} — Veilles{% endblock %}
+{% block content %}
+<div class="head">
+  <h1>{{ "Nouvelle veille" if creating else "Modifier « " ~ values.name ~ " »" }}</h1>
+  {% if not creating %}<a href="/veilles/{{ values.slug }}">← Retour</a>{% endif %}
+</div>
+
+{% if creating and templates_ %}
+<p class="small muted">Brief de départ :
+  {% for t in templates_ %}<a href="/veilles/new?template={{ t }}"{% if t == template %} class="current"{% endif %}>{{ t }}</a>{{ " · " if not loop.last }}{% endfor %}
+  <span>(changer de modèle recharge le formulaire)</span></p>
+{% endif %}
+
+<form method="post" action="{{ '/veilles/new' if creating else '/veilles/' ~ values.slug ~ '/edit' }}" class="stack">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+
+  <section class="card">
+    <h2>Identité</h2>
+    <div class="grid2">
+      <label>Nom <input name="name" value="{{ values.name }}" required maxlength="80"></label>
+      {% if creating %}
+      <label>Identifiant <span class="muted small">(facultatif, déduit du nom)</span>
+        <input name="slug" value="{{ values.slug }}" pattern="[a-z0-9][a-z0-9\-]{0,38}[a-z0-9]" maxlength="40"></label>
+      {% else %}
+      <label>Identifiant <input value="{{ values.slug }}" disabled></label>
+      {% endif %}
+    </div>
+    <label>Sujet <span class="muted small">(une ligne : sert au prompt et à l'e-mail)</span>
+      <input name="subject" value="{{ values.subject }}" maxlength="200"></label>
+  </section>
+
+  <section class="card">
+    <h2>Fréquence</h2>
+    {% set f = values.freq %}
+    <div class="grid4 freq" hx-get="/fragments/schedule" hx-trigger="change, keyup changed delay:400ms from:#cron_expr"
+         hx-include="[data-freq]" hx-target="#schedule-preview">
+      <label>Rythme
+        <select name="freq_kind" id="freq_kind" data-freq>
+          {% for k, label in [("daily","Tous les jours"),("weekdays","Du lundi au vendredi"),("weekly","Chaque semaine"),("monthly","Chaque mois"),("cron","Expression cron (avancé)")] %}
+          <option value="{{ k }}"{% if f.kind == k %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select></label>
+      <label data-show="daily weekdays weekly monthly">Heure
+        <input type="time" name="time" data-freq value="{{ '%02d:%02d'|format(f.hour|default(8)|int, f.minute|default(0)|int) }}"></label>
+      <label data-show="weekly">Jour
+        <select name="dow" data-freq>
+          {% for i in [1,2,3,4,5,6,0] %}<option value="{{ i }}"{% if f.dow|default(1)|int == i %} selected{% endif %}>{{ DAYS[i] }}</option>{% endfor %}
+        </select></label>
+      <label data-show="monthly">Jour du mois
+        <input type="number" name="day" min="1" max="28" data-freq value="{{ f.day|default(1) }}"></label>
+      <label data-show="cron">Expression cron
+        <input name="cron_expr" id="cron_expr" data-freq value="{{ values.cron_expr }}" placeholder="0 8 * * 1"></label>
+    </div>
+    <div id="schedule-preview" hx-get="/fragments/schedule" hx-trigger="load" hx-include="[data-freq]"></div>
+    <p class="muted small">Heure de Paris. La période couverte par le rapport suit le rythme (24 h, semaine, mois).</p>
+  </section>
+
+  <section class="card">
+    <h2>Destinataires</h2>
+    <label>Une adresse par ligne <span class="muted small">(envoi en copie cachée : ils ne se voient pas)</span>
+      <textarea name="recipients" rows="4" required>{{ values.recipients }}</textarea></label>
+  </section>
+
+  <section class="card">
+    <h2>Brief de mission</h2>
+    <p class="muted small">Le prompt éditable : périmètre, thèmes, règles de fiabilité, structure, mise en forme.
+      Relu à chaque exécution.</p>
+    <textarea name="brief" rows="22" class="mono" required>{{ values.brief }}</textarea>
+    <p><button type="button" hx-post="/fragments/brief" hx-include="[name=brief]" hx-target="#brief-preview">Aperçu</button></p>
+    <div id="brief-preview"></div>
+  </section>
+
+  <section class="card">
+    <h2>Rapport PDF</h2>
+    <div class="grid2">
+      <label>Titre <input name="pdf_title" value="{{ values.pdf_title }}" placeholder="(nom de la veille)"></label>
+      <label>En-tête courant <input name="pdf_header" value="{{ values.pdf_header }}" placeholder="(titre)"></label>
+      <label>Pied de page <input name="pdf_footer" value="{{ values.pdf_footer }}"></label>
+      <label>Public <input name="pdf_audience" value="{{ values.pdf_audience }}"></label>
+      <label>Couleur d'accent <input type="color" name="pdf_accent" value="{{ values.pdf_accent }}"></label>
+    </div>
+    <details>
+      <summary>Avancé</summary>
+      <label>Modèle <span class="muted small">(vide : modèle par défaut de Hermes)</span>
+        <input name="model" value="{{ values.model }}" placeholder="deepseek-v4-pro"></label>
+    </details>
+  </section>
+
+  <p><button class="primary">{{ "Créer la veille" if creating else "Enregistrer" }}</button></p>
+</form>
+{% endblock %}

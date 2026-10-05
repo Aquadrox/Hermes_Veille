@@ -1,0 +1,35 @@
+{% set v = row.veille %}{% set st = row.status %}
+<tr id="row-{{ v.slug }}">
+  <td data-label="Veille">
+    <a href="/veilles/{{ v.slug }}"><strong>{{ v.name }}</strong></a>
+    <div class="muted small">{{ v.subject }} · {{ row.recipients|length }} destinataire{{ 's' if row.recipients|length > 1 }}</div>
+    {% if error %}<div class="err small">{{ error }}</div>{% endif %}
+  </td>
+  <td data-label="Fréquence">{{ row.schedule_human }}</td>
+  <td data-label="État">
+    {% set cls = status_class(row) %}
+    <span class="badge {{ cls }}">
+      {% if not st.exists %}job absent{% elif row.running %}en cours{% elif st.paused %}en pause{% elif cls == 'bad' %}en échec{% else %}actif{% endif %}
+    </span>
+  </td>
+  <td data-label="Prochain run">{{ st.next_run_at|dt }}</td>
+  <td data-label="Dernier run">{{ st.last_run_at|dt }}{% if st.last_status %} <span class="muted small">({{ st.last_status }})</span>{% endif %}</td>
+  <td data-label="Dernier rapport">
+    {% if row.last_report and row.last_report.pdf %}
+    <a href="/veilles/{{ v.slug }}/reports/{{ row.last_report.pdf }}" target="_blank" rel="noopener">{{ row.last_report.date }}</a>
+    {% else %}—{% endif %}
+  </td>
+  <td class="actions">
+    {% if st.exists %}
+      {% if st.paused %}
+      <button hx-post="/veilles/{{ v.slug }}/resume" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML">Reprendre</button>
+      {% else %}
+      <button hx-post="/veilles/{{ v.slug }}/pause" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML">Pause</button>
+      <button hx-post="/veilles/{{ v.slug }}/run" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML"
+              hx-confirm="Lancer « {{ v.name }} » maintenant ? Un rapport sera envoyé aux destinataires."
+              {% if row.running %}disabled{% endif %}>Lancer</button>
+      {% endif %}
+    {% endif %}
+    <a class="button" href="/veilles/{{ v.slug }}/edit">Modifier</a>
+  </td>
+</tr>
