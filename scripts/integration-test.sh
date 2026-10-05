@@ -145,7 +145,10 @@ contains "$out" '"isError":true' || fail "archivage MCP sans confirmation accept
 contains "$(as_root tail -3 "$DATA/veilles/.audit.log")" '"actor": "telegram", "action": "resume"' || fail "audit MCP absent"
 out="$(mcp_call list_reports '{"slug":"industrie-4-0"}')"
 contains "$out" "$DATA/veilles/industrie-4-0/rapports/" || fail "chemin hôte du PDF absent : $out"
-ok "lecture, pause/reprise effectives, confirmation d'archivage exigée, audit « telegram », chemins hôte"
+out="$(mcp_call get_costs '{"slug":"industrie-4-0"}')"
+contains "$out" '"isError":false' || fail "MCP get_costs : $out"
+contains "$(curl -s -b "$JAR" "$BASE/veilles/industrie-4-0")" 'Aucune exécution mesurée' || fail "section coûts absente"
+ok "lecture, pause/reprise effectives, confirmation d'archivage exigée, audit « telegram », chemins hôte, coûts"
 
 # --- 8. Chien de garde de l'hôte ---
 log "chien de garde (hôte, dry-run)"

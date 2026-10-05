@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from veille_core import hermes, paths, schedule, service, store, version
+from veille_core import deepseek, hermes, paths, pricing, schedule, service, store, version
 from veille_core.store import StoreError
 
 from . import auth
@@ -52,13 +52,23 @@ def fmt_dt(value) -> str:
         except ValueError:
             return value
     if value.tzinfo:
-        value = value.astimezone()
+        value = value.astimezone(schedule.ZONE)
     days = ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."]
     return f"{days[value.weekday()]} {value:%d/%m/%Y %H:%M}"
 
 
 def fmt_size(n) -> str:
     return f"{(n or 0) / 1024:.0f} Ko"
+
+
+def fmt_usd(value) -> str:
+    if value is None:
+        return "—"
+    return f"{value:.4f} $" if value < 0.01 else f"{value:.2f} $"
+
+
+def fmt_int(value) -> str:
+    return f"{int(value or 0):,}".replace(",", "\u202f")
 
 
 def status_class(row: dict) -> str:
@@ -77,6 +87,8 @@ def status_class(row: dict) -> str:
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 templates.env.filters["dt"] = fmt_dt
 templates.env.filters["size"] = fmt_size
+templates.env.filters["usd"] = fmt_usd
+templates.env.filters["num"] = fmt_int
 templates.env.globals["status_class"] = status_class
 templates.env.globals["DAYS"] = schedule.DAYS
 templates.env.globals["VERSION"] = version()
@@ -262,8 +274,10 @@ def create_app() -> FastAPI:
         row = service.describe(v)
         logs = store.list_run_logs(slug)
         runs = hermes.runs(v.job_id, 10) if v.job_id and row["status"]["exists"] else []
+        nxt = schedule.next_runs(v.schedule, 3)
         return {"row": row, "v": v, "reports": store.list_reports(slug), "logs": logs, "runs": runs,
-                "next_runs": schedule.next_runs(v.schedule, 3)}
+                "next_runs": nxt, "next_peak": bool(nxt) and pricing.is_peak(nxt[0]),
+                "costs": service.costs(slug)}
 
     @app.get("/veilles/{slug}", response_class=HTMLResponse)
     def detail(request: Request, slug: str):
@@ -303,7 +317,9 @@ def create_app() -> FastAPI:
     def schedule_preview(request: Request):
         try:
             expr = schedule.to_cron(freq_from_form(request.query_params))
-            ctx = {"expr": expr, "human": schedule.describe(expr), "runs": schedule.next_runs(expr, 3)}
+            runs = schedule.next_runs(expr, 3)
+            ctx = {"expr": expr, "human": schedule.describe(expr), "runs": runs,
+                   "peak": pricing.is_peak(runs[0])}
         except schedule.ScheduleError as exc:
             ctx = {"error": str(exc)}
         return render(request, "partials/schedule_preview.html", **ctx)
@@ -341,6 +357,7 @@ def create_app() -> FastAPI:
     @app.get("/health", response_class=HTMLResponse)
     def health(request: Request):
         return render(request, "health.html", rows=service.overview(), brevo=brevo_account(),
+                      deepseek=deepseek.balance(), costs=service.costs_overview(),
                       audit=service.read_audit(40))
 
     # -------------------------------------------------------------- actions

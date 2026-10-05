@@ -175,3 +175,32 @@ def test_unconfigured_ui_refuses_login(env, monkeypatch):
     c = TestClient(create_app(), base_url="http://localhost")
     assert "pas configurée" in c.get("/login").text
     assert c.post("/login", data={"password": "x"}).status_code == 401
+
+
+def test_costs_section_and_peak_warning(client, env):
+    from test_costs import make_db
+
+    csrf = login(client)
+    client.post("/veilles/new", data=create_form(csrf, freq_kind="weekly", dow="1", time="08:00"))
+    page = client.get("/veilles/veille-cyber").text
+    assert "Aucune exécution mesurée" in page
+    assert "heure pleine DeepSeek" in page                      # lundi 8h Paris = 06h UTC
+    make_db(env, store.load("veille-cyber").job_id)
+    page = client.get("/veilles/veille-cyber").text
+    assert "Coût des exécutions" in page and "pleine ×2" in page and "creuse" in page
+    r = client.get("/fragments/schedule", params={"freq_kind": "weekly", "dow": "1", "time": "06:30"})
+    assert "Heure pleine" not in r.text
+    r = client.get("/fragments/schedule", params={"freq_kind": "weekly", "dow": "1", "time": "08:00"})
+    assert "Heure pleine DeepSeek" in r.text
+
+
+def test_health_shows_deepseek_balance_and_costs(client, monkeypatch):
+    import veille_ui.app as app_mod
+
+    monkeypatch.setattr(app_mod, "brevo_account", lambda: {"error": "hors ligne"})
+    monkeypatch.setattr(app_mod.deepseek, "balance", lambda: {"available": True, "balances": [
+        {"currency": "USD", "total": "12.50", "granted": "0.00", "topped_up": "12.50"}]})
+    csrf = login(client)
+    client.post("/veilles/new", data=create_form(csrf))
+    page = client.get("/health").text
+    assert "DeepSeek" in page and "12.50 USD" in page and "Total" in page

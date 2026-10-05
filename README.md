@@ -7,7 +7,8 @@ Chaque veille a son sujet, son brief de mission, sa fréquence et ses destinatai
 (badges de maturité/confiance, sources numérotées, graphiques, encadrés d'analyse), le convertit
 en **PDF stylé** et l'**envoie par e-mail** (destinataires en copie cachée).
 
-La veille d'origine, **Industrie 4.0** (chaque lundi à 8h), est créée ou migrée automatiquement.
+La veille d'origine, **Industrie 4.0** (chaque lundi à 6h30, en heures creuses DeepSeek), est créée
+ou migrée automatiquement.
 
 ## Pourquoi un conteneur ?
 
@@ -91,7 +92,7 @@ destinataires », « Mets la veille industrie-4-0 en pause », « Crée une veil
 industriel, chaque lundi à 8h, pour moi@exemple.fr »…
 
 - **Transport stdio via `docker exec -i`** : aucun port réseau n'est ouvert.
-- **`trust: untrusted`** : les 10 outils de lecture s'exécutent directement ; les 12 outils de
+- **`trust: untrusted`** : les 11 outils de lecture s'exécutent directement ; les 12 outils de
   modification demandent ton **approbation dans Telegram**. `run_veille_now` et
   `send_test_email` envoient de vrais e-mails ; `archive_veille` exige en plus de répéter le slug.
 - Chaque action est tracée dans le journal d'audit avec l'origine « telegram ».
@@ -99,10 +100,32 @@ industriel, chaque lundi à 8h, pour moi@exemple.fr »…
   `--print` affiche la configuration YAML sans rien modifier ; `--uninstall` la retire.
 
 Outils : `list_veilles`, `get_veille`, `get_brief`, `list_brief_templates`, `list_reports`,
-`read_report`, `get_run_log`, `run_history`, `preview_schedule`, `health` (lecture) ;
+`read_report`, `get_run_log`, `run_history`, `preview_schedule`, `get_costs`, `health` (lecture) ;
 `create_veille`, `update_veille`, `set_recipients`, `add_recipients`, `remove_recipients`,
 `update_brief`, `edit_brief`, `pause_veille`, `resume_veille`, `run_veille_now`,
 `send_test_email`, `archive_veille` (modification).
+
+## Consommation et coût
+
+DeepSeek renvoie, à chaque appel, le nombre de tokens consommés : entrée, dont lue en cache,
+sortie. Son API ne donne en revanche **ni le coût par requête ni d'historique** : seulement le
+solde du compte. Hermes enregistre ces tokens par exécution dans sa base (`state.db`, une
+session `cron_<job>_<date>` par run).
+
+L'application en calcule le **coût réel** :
+- avec les tarifs de [`veille/pricing.json`](veille/pricing.json), modifiable sans reconstruire
+  l'image en le copiant dans `data/veilles/pricing.json` ;
+- **heures pleines comprises** : du lundi au vendredi, 01h–04h et 06h–10h UTC, DeepSeek facture le
+  **double**. L'estimation de Hermes, elle, n'applique que le tarif creux.
+
+Où le voir :
+- **Interface** : section « Coût des exécutions » de chaque veille (durée, tokens, heure pleine ou
+  creuse, coût) ; page Santé avec le solde DeepSeek et le coût du mois par veille.
+- **Telegram** : « Combien a coûté la veille industrie-4-0 ce mois-ci ? » (outil `get_costs`).
+- **CLI** : `docker exec veille-hermes veillectl costs [slug] [--days N]`.
+
+L'aperçu d'une fréquence signale quand elle tombe en heures pleines. Exemple : lundi 8h Paris
+= 06h UTC, au tarif ×2. Lundi 6h30 tombe en heures creuses : 04h30 UTC l'été, 05h30 l'hiver.
 
 ## Ligne de commande (`veillectl`)
 
@@ -115,6 +138,7 @@ docker exec veille-hermes veillectl create --name "Veille Cyber OT" --schedule "
     --recipients rssi@exemple.fr,dsi@exemple.fr --template vierge
 docker exec veille-hermes veillectl edit veille-cyber-ot --schedule "0 8 * * 1"
 docker exec veille-hermes veillectl pause|resume|run|test-email|archive <slug>
+docker exec veille-hermes veillectl costs industrie-4-0
 docker exec veille-hermes veillectl reconcile
 ```
 
