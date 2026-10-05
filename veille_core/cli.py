@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import hermes, schedule, service, store
+from . import hermes, schedule, service, store, version
 
 
 def _print_overview() -> int:
@@ -60,6 +60,7 @@ def _brief_from(args) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="veillectl", description="Gestion des veilles")
+    ap.add_argument("--version", action="version", version=f"veillectl {version()}")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list")
     for name in ("show", "pause", "resume", "archive", "test-email"):

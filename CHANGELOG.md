@@ -7,6 +7,8 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.2.1] — 2026-10-05
+
 Multi-veilles et interface web de gestion. Migration automatique depuis la v0.2.
 
 ### Ajouté
@@ -17,6 +19,8 @@ Multi-veilles et interface web de gestion. Migration automatique depuis la v0.2.
   fraîcheur), rendu du prompt, **adaptateur unique** vers `hermes cron`, opérations métier
   (création, modification, pause, reprise, lancement, archivage, réconciliation) et journal d'audit.
 - `veillectl` — CLI de gestion des veilles dans le conteneur.
+- Fichier `VERSION` (source unique du numéro de version) : affiché par `veillectl --version`
+  et en pied de page de l'interface, copié dans l'image.
 - **Interface web** `veille_ui/` (FastAPI + Jinja + HTMX) : tableau de bord, création et édition
   (fréquence avec aperçu, destinataires, brief avec aperçu, PDF), lancement immédiat avec journal
   en direct, rapports, historique, e-mail de test, archivage, page santé (crédits Brevo, audit).
@@ -68,7 +72,7 @@ Automatique au premier démarrage : `data/veille/` → `data/veilles/industrie-4
 job conservés (édité, pas recréé), lien de compatibilité `data/veille`. Annulée proprement si
 l'édition du job échoue. Côté hôte : ajouter `ALERT_EMAIL` au `.env`, puis `make watchdog-install`.
 
-### Antérieur (bascule)
+### Bascule (avant 0.2.1)
 
 #### Modifié
 

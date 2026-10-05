@@ -61,6 +61,7 @@ WORKDIR /opt/veille-app
 RUN UV_PYTHON_DOWNLOADS=never uv venv --quiet --python /usr/bin/python3 /opt/veille-app/.venv \
     && uv pip install --quiet --no-cache --python /opt/veille-app/.venv/bin/python -r requirements-app.txt
 WORKDIR /opt/hermes
+COPY VERSION /opt/veille-app/VERSION
 COPY veille_core/ /opt/veille-app/veille_core/
 COPY veille_ui/ /opt/veille-app/veille_ui/
 COPY --chmod=0755 docker/bin/veillectl /usr/local/bin/veillectl

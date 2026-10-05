@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from veille_core import hermes, paths, schedule, service, store
+from veille_core import hermes, paths, schedule, service, store, version
 from veille_core.store import StoreError
 
 from . import auth
@@ -79,6 +79,7 @@ templates.env.filters["dt"] = fmt_dt
 templates.env.filters["size"] = fmt_size
 templates.env.globals["status_class"] = status_class
 templates.env.globals["DAYS"] = schedule.DAYS
+templates.env.globals["VERSION"] = version()
 
 
 # --------------------------------------------------------------------------

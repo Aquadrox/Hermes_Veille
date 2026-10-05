@@ -204,3 +204,11 @@ def test_cli_list_and_create(env, capsys):
     out = capsys.readouterr().out
     assert "cyber" in out and "du lundi au vendredi à 8h" in out
     assert main(["show", "inconnue"]) == 1
+
+
+def test_version_is_semver():
+    import re
+
+    from veille_core import version
+
+    assert re.fullmatch(r"\d+\.\d+\.\d+", version())
