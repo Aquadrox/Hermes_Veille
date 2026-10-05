@@ -12,7 +12,7 @@ PYTHON     ?= python3
 .DEFAULT_GOAL := help
 
 .PHONY: help env build up down restart logs ps veilles run-now shell verify smoke integration test lint \
-        bump version release update backup ui-password tunnel watchdog-install watchdog-check
+        bump version mcp-install mcp-check release update backup ui-password tunnel watchdog-install watchdog-check
 
 help: ## Affiche cette aide
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -62,7 +62,7 @@ integration: ## Test de bout en bout du conteneur complet (migration, interface,
 	IMAGE=$(IMAGE) IMAGE_TAG=$(IMAGE_TAG) ./scripts/integration-test.sh
 
 test: ## Tests unitaires avec couverture (pip install -r requirements-dev.txt)
-	$(PYTHON) -m pytest -q --cov=veille_core --cov=veille_ui --cov-report=term-missing --cov-fail-under=75
+	$(PYTHON) -m pytest -q --cov=veille_core --cov=veille_ui --cov=veille_mcp --cov-report=term-missing --cov-fail-under=75
 
 lint: ## ruff + shellcheck (+ hadolint s'il est installé)
 	ruff check .
@@ -89,6 +89,12 @@ backup: ## Archive horodatée de ./data (sans .env) dans $(BACKUP_DIR)/
 
 ui-password: ## Génère le hash du mot de passe et le secret de l'interface (à coller dans .env)
 	@docker run --rm -it --entrypoint /opt/veille-app/.venv/bin/python -w /opt/veille-app $(IMAGE):$(IMAGE_TAG) -m veille_ui.passwd
+
+mcp-install: ## Branche le serveur MCP sur le Hermes de l'hôte (Telegram), trust: untrusted
+	./scripts/install-mcp-host.sh
+
+mcp-check: ## Liste les outils exposés par le serveur MCP du conteneur
+	@docker exec -u hermes $(CONTAINER) veille-mcp --check
 
 tunnel: ## Rappelle la commande de tunnel SSH vers l'interface
 	@echo "Depuis ton poste :  ssh -N -L 8088:127.0.0.1:8088 <utilisateur>@<serveur>"

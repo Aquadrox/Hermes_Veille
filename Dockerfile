@@ -6,7 +6,8 @@
 #   1. les dépendances système de la chaîne PDF   (pandoc, WeasyPrint, poppler)
 #   2. les skills custom                           (auto-synchronisés au boot)
 #   3. les gabarits des veilles + un hook de seed   (réconciliation à chaque boot)
-#   4. veille_core / veillectl + l'interface web   (venv séparé, service s6)
+#   4. veille_core / veillectl, l'interface web     (venv séparé, service s6)
+#   5. veille-mcp : serveur MCP pour piloter les veilles depuis Hermes (Telegram)
 #
 # Tout l'état vit dans le volume /opt/data ; l'image reste stateless et
 # remplaçable par un simple `docker compose pull && up -d`.
@@ -64,7 +65,9 @@ WORKDIR /opt/hermes
 COPY VERSION /opt/veille-app/VERSION
 COPY veille_core/ /opt/veille-app/veille_core/
 COPY veille_ui/ /opt/veille-app/veille_ui/
-COPY --chmod=0755 docker/bin/veillectl /usr/local/bin/veillectl
+COPY veille_mcp/ /opt/veille-app/veille_mcp/
+# veillectl (CLI) et veille-mcp (serveur MCP stdio pour Hermes)
+COPY --chmod=0755 docker/bin/ /usr/local/bin/
 # Service s6-rc (même schéma que le `dashboard` amont), ajouté au bundle `user`.
 COPY --chmod=0755 docker/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
 

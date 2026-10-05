@@ -74,6 +74,36 @@ connexion, la vérification de l'en-tête `Host` (contre le *DNS rebinding*), un
 (aucun script en ligne, HTMX embarqué) et des noms de fichiers en liste blanche. Sans
 `VEILLE_UI_PASSWORD_HASH`, l'interface reste **désactivée**.
 
+## Piloter depuis Telegram (MCP)
+
+Le serveur MCP `veille-mcp` expose les veilles au **Hermes de l'hôte** (celui qui porte
+Telegram) : on interroge, modifie et lance les veilles en conversation, sans passer par
+l'interface.
+
+```bash
+make mcp-install              # déclare le serveur dans ~/.hermes/config.yaml et le teste
+hermes gateway restart        # charge les outils
+```
+
+Puis, dans Telegram : « Liste mes veilles », « Résume le dernier rapport de la veille
+industrie-4-0 », « Passe la veille cyber au mardi 7h30 », « Ajoute dsi@exemple.fr aux
+destinataires », « Mets la veille industrie-4-0 en pause », « Crée une veille sur l'hydrogène
+industriel, chaque lundi à 8h, pour moi@exemple.fr »…
+
+- **Transport stdio via `docker exec -i`** : aucun port réseau n'est ouvert.
+- **`trust: untrusted`** : les 10 outils de lecture s'exécutent directement ; les 12 outils de
+  modification demandent ton **approbation dans Telegram**. `run_veille_now` et
+  `send_test_email` envoient de vrais e-mails ; `archive_veille` exige en plus de répéter le slug.
+- Chaque action est tracée dans le journal d'audit avec l'origine « telegram ».
+- Variante prudente : `./scripts/install-mcp-host.sh --readonly` (lecture seule) ;
+  `--print` affiche la configuration YAML sans rien modifier ; `--uninstall` la retire.
+
+Outils : `list_veilles`, `get_veille`, `get_brief`, `list_brief_templates`, `list_reports`,
+`read_report`, `get_run_log`, `run_history`, `preview_schedule`, `health` (lecture) ;
+`create_veille`, `update_veille`, `set_recipients`, `add_recipients`, `remove_recipients`,
+`update_brief`, `edit_brief`, `pause_veille`, `resume_veille`, `run_veille_now`,
+`send_test_email`, `archive_veille` (modification).
+
 ## Ligne de commande (`veillectl`)
 
 Tout ce que fait l'interface est aussi disponible dans le conteneur :
@@ -97,6 +127,7 @@ docker exec veille-hermes veillectl reconcile
 | `make logs` | suit les logs du gateway |
 | `make verify` | vérifie conteneur, veilles, jobs et interface |
 | `make tunnel` | rappelle la commande de tunnel SSH |
+| `make mcp-install` / `make mcp-check` | branche le serveur MCP sur le Hermes de l'hôte / liste ses outils |
 | `make ui-password` | génère le hash du mot de passe et le secret de l'interface |
 | `make backup` | archive horodatée de `./data` (sans `.env`, 10 dernières conservées) |
 | `make test` / `make lint` | tests unitaires avec couverture / ruff + shellcheck (+ hadolint) |
@@ -194,10 +225,11 @@ veille-hermes/
 ├── veille/                       # gabarit du prompt + modèles de brief
 ├── veille_core/                  # cœur multi-veilles + CLI veillectl
 ├── veille_ui/                    # interface web (FastAPI + Jinja + HTMX)
+├── veille_mcp/                   # serveur MCP (stdio) pour piloter les veilles depuis Hermes
 ├── skills/                       # brevo-email, styled-pdf-report
 ├── docker/                       # hook d'amorçage, service s6 de l'interface, veillectl
 ├── deploy/systemd/               # units de la surveillance (sur l'hôte)
-├── scripts/                      # deploy.sh, smoke-test.sh, watchdog.py, install-watchdog.sh
+├── scripts/                      # déploiement, tests (smoke, intégration), watchdog, MCP, versions
 ├── tests/                        # pytest (faux binaire hermes pour le cœur et l'interface)
 ├── VERSION                       # numéro de version (source unique)
 ├── docs/PLAN-CONTAINERISATION.md # analyse + plan de conteneurisation (archive)
@@ -214,9 +246,10 @@ Docker.
 ## Architecture
 
 Le conteneur n'a besoin que d'accès **sortants** (recherche web, API DeepSeek, API Brevo). Le
-seul port publié est celui de l'interface, lié à `127.0.0.1`. La livraison se fait **uniquement
-par e-mail** (`deliver: local`) ; le gateway Telegram de l'hôte reste indépendant. L'interface
-et `veillectl` ne parlent à Hermes que par sa CLI publique (`hermes cron …`) et la lecture de
+seul port publié est celui de l'interface, lié à `127.0.0.1` ; le serveur MCP passe par
+`docker exec -i` (stdio), sans port. La livraison se fait **uniquement
+par e-mail** (`deliver: local`) ; le gateway Telegram de l'hôte reste indépendant. L'interface,
+`veillectl` et `veille-mcp` ne parlent à Hermes que par sa CLI publique (`hermes cron …`) et la lecture de
 `cron/jobs.json`, isolées dans `veille_core/hermes.py`.
 
 ## Licence

@@ -123,7 +123,31 @@ N_JOBS="$(as_root python3 -c "import json,sys; d=json.load(open(sys.argv[1])); p
 [ "$N_JOBS" = 1 ] || fail "$N_JOBS jobs après redémarrage (doublon ?)"
 ok "aucun doublon, veille réconciliée « ok »"
 
-# --- 7. Chien de garde de l'hôte ---
+# --- 7. MCP depuis l'hôte (comme le Hermes de Telegram : stdio via docker exec -i) ---
+log "MCP via docker exec -i (lecture, modification, audit)"
+mcp_call() {  # $1 = outil, $2 = arguments JSON ; renvoie la réponse JSON-RPC de l'appel
+    { printf '%s\n' \
+        '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"integration","version":"1"}}}' \
+        '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}"
+      sleep 6; } | docker exec -i -u hermes -e VEILLE_MCP_ACTOR=telegram -e VEILLE_HOST_DATA="$DATA" "$NAME" veille-mcp 2>/dev/null \
+      | grep '"id":2'
+}
+out="$(mcp_call list_veilles '{}')"
+contains "$out" 'industrie-4-0' || fail "MCP list_veilles : $out"
+out="$(mcp_call pause_veille '{"slug":"industrie-4-0"}')"
+contains "$out" '"isError":false' || fail "MCP pause_veille : $out"
+[ "$(job_state)" = paused ] || fail "pause MCP sans effet côté Hermes"
+out="$(mcp_call resume_veille '{"slug":"industrie-4-0"}')"
+[ "$(job_state)" = active ] || fail "reprise MCP sans effet côté Hermes : $out"
+out="$(mcp_call archive_veille '{"slug":"industrie-4-0","confirm_slug":"non"}')"
+contains "$out" '"isError":true' || fail "archivage MCP sans confirmation accepté : $out"
+contains "$(as_root tail -3 "$DATA/veilles/.audit.log")" '"actor": "telegram", "action": "resume"' || fail "audit MCP absent"
+out="$(mcp_call list_reports '{"slug":"industrie-4-0"}')"
+contains "$out" "$DATA/veilles/industrie-4-0/rapports/" || fail "chemin hôte du PDF absent : $out"
+ok "lecture, pause/reprise effectives, confirmation d'archivage exigée, audit « telegram », chemins hôte"
+
+# --- 8. Chien de garde de l'hôte ---
 log "chien de garde (hôte, dry-run)"
 as_root python3 "$REPO_DIR/scripts/watchdog.py" --volume "$DATA" --container "$NAME" \
     --env-file "$WORK/.env" --state-file "$WORK/state.json" --dry-run \
