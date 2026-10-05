@@ -1,0 +1,15 @@
+# Montées de version proposées en PR (validées par les tests et le smoke test).
+version: 2
+updates:
+  - package-ecosystem: docker          # image amont Hermes (FROM du Dockerfile)
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip             # requirements-app.txt (veille_core / veille_ui)
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

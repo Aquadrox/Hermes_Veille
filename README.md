@@ -1,76 +1,151 @@
 # veille-hermes
 
-Veille technologique hebdomadaire **conteneurisée** (Industrie 4.0, robotique, automatisation,
-IA industrielle).
+Veilles technologiques **conteneurisées** et pilotables depuis une **interface web privée**.
 
-Chaque **lundi à 8h (heure de Paris)**, un agent : recherche les actualités de la semaine écoulée,
-rédige un rapport structuré (badges de maturité/confiance, sources numérotées, graphiques,
-encadrés d'analyse), le convertit en **PDF stylé** et l'**envoie par e-mail**.
+Chaque veille a son sujet, son brief de mission, sa fréquence et ses destinataires. À chaque
+échéance, un agent recherche les actualités de la période écoulée, rédige un rapport structuré
+(badges de maturité/confiance, sources numérotées, graphiques, encadrés d'analyse), le convertit
+en **PDF stylé** et l'**envoie par e-mail** (destinataires en copie cachée).
+
+La veille d'origine, **Industrie 4.0** (chaque lundi à 8h), est créée ou migrée automatiquement.
 
 ## Pourquoi un conteneur ?
 
-La veille n'est pas un simple script : c'est un **job cron interne à
+Une veille n'est pas un simple script : c'est un **job cron interne à
 [Hermes Agent](https://github.com/NousResearch/hermes-agent)**, exécuté par le scheduler de son
-gateway. L'image **dérive de l'image officielle** `nousresearch/hermes-agent`, ce qui apporte la
-supervision s6, un volume de données unique (`/opt/data`) et des mises à jour par simple
-`pull` + recréation.
+gateway. L'image **dérive de l'image officielle** `nousresearch/hermes-agent` (version épinglée),
+ce qui apporte la supervision s6, un volume de données unique (`/opt/data`) et des mises à jour
+par simple reconstruction.
 
 ## Démarrage rapide
 
 ```bash
 # 1. configurer les secrets
-cp .env.example .env && $EDITOR .env        # DEEPSEEK_API_KEY, BREVO_API_KEY, BREVO_SENDER_*
+cp .env.example .env && chmod 600 .env && $EDITOR .env
+#    DEEPSEEK_API_KEY, BREVO_API_KEY, BREVO_SENDER_*, ALERT_EMAIL, VEILLE_RECIPIENTS
 
 # 2. déployer (build + démarrage + vérifications)
 ./scripts/deploy.sh
 
-# 3. déclencher un rapport immédiatement (test de bout en bout)
-make run-now
+# 3. activer l'interface web : générer le mot de passe, coller les 2 lignes dans .env
+make ui-password && docker compose up -d
+
+# 4. déclencher un rapport immédiatement (test de bout en bout)
+make veilles && make run-now VEILLE=industrie-4-0
 ```
 
-Au premier démarrage, le conteneur **s'amorce tout seul** : création des répertoires, copie des
-assets (brief, destinataire) sur le volume, réglage du modèle et du fuseau, création du job cron.
-Les éditions ultérieures du brief et du destinataire, faites **dans le volume**, sont préservées.
+À chaque démarrage, le conteneur **s'amorce et se réconcilie tout seul** : migration de
+l'ancienne disposition, création de la veille par défaut sur une installation neuve (en pause
+si `VEILLE_RECIPIENTS` est vide), puis réalignement de chaque job sur sa veille.
+
+## Interface web
+
+L'interface (FastAPI + HTMX) n'est publiée **que sur `127.0.0.1:8088` de l'hôte** : elle n'est
+jamais exposée au réseau. On y accède par un tunnel SSH depuis son poste :
+
+```bash
+ssh -N -L 8088:127.0.0.1:8088 utilisateur@serveur      # puis http://localhost:8088
+```
+
+ou durablement dans `~/.ssh/config` :
+
+```
+Host veille
+    HostName serveur.exemple
+    User utilisateur
+    LocalForward 8088 127.0.0.1:8088
+```
+
+Fonctions :
+
+- **tableau de bord** : état de chaque veille (active, en pause, en échec), prochain et dernier
+  run, dernier rapport. Pause, reprise et lancement immédiat en un clic ;
+- **créer / modifier une veille** : nom, sujet, fréquence (quotidienne, jours ouvrés,
+  hebdomadaire, mensuelle ou expression cron, avec aperçu des prochaines exécutions),
+  destinataires, brief de mission (à partir d'un modèle, avec aperçu), mise en forme du PDF,
+  modèle LLM ;
+- **détail** : rapports (PDF et Markdown), journal du lancement en cours (rafraîchi en direct),
+  historique d'exécution Hermes, e-mail de test, **archivage** (rien n'est effacé) ;
+- **santé** : état des veilles, crédits Brevo et journal d'audit.
+
+Sécurité, en plus du tunnel : un mot de passe administrateur (hash argon2 dans `.env`), une
+session signée valable 12 h, un jeton CSRF sur chaque action, une limite de tentatives de
+connexion, la vérification de l'en-tête `Host` (contre le *DNS rebinding*), une CSP stricte
+(aucun script en ligne, HTMX embarqué) et des noms de fichiers en liste blanche. Sans
+`VEILLE_UI_PASSWORD_HASH`, l'interface reste **désactivée**.
+
+## Ligne de commande (`veillectl`)
+
+Tout ce que fait l'interface est aussi disponible dans le conteneur :
+
+```bash
+docker exec veille-hermes veillectl list
+docker exec veille-hermes veillectl show industrie-4-0
+docker exec veille-hermes veillectl create --name "Veille Cyber OT" --schedule "30 7 * * 1-5" \
+    --recipients rssi@exemple.fr,dsi@exemple.fr --template vierge
+docker exec veille-hermes veillectl edit veille-cyber-ot --schedule "0 8 * * 1"
+docker exec veille-hermes veillectl pause|resume|run|test-email|archive <slug>
+docker exec veille-hermes veillectl reconcile
+```
 
 ## Exploitation
 
 | Commande | Effet |
 |---|---|
+| `make veilles` | liste les veilles et leur état |
+| `make run-now VEILLE=<slug>` | lance une veille et attend la fin |
 | `make logs` | suit les logs du gateway |
-| `make verify` | vérifie conteneur, job cron et assets |
-| `make run-now` | déclenche un rapport immédiatement |
-| `make smoke` | teste l'image (dépendances, skills, chaîne PDF) |
+| `make verify` | vérifie conteneur, veilles, jobs et interface |
+| `make tunnel` | rappelle la commande de tunnel SSH |
+| `make ui-password` | génère le hash du mot de passe et le secret de l'interface |
+| `make backup` | archive horodatée de `./data` (sans `.env`, 10 dernières conservées) |
+| `make test` / `make lint` | tests unitaires / ruff + shellcheck |
+| `make smoke` | teste l'image (dépendances, chaîne PDF, contrat CLI Hermes, veillectl, interface) |
 | `make shell` | ouvre un shell dans le conteneur |
 | `make down` | arrête le conteneur (volume conservé) |
-| `make update` | met à jour les sources (`git pull`) puis reconstruit et redéploie |
+| `make update` | `git pull`, puis reconstruit et redéploie |
 | `make watchdog-check` | exécute le contrôle de surveillance (sans envoyer d'e-mail) |
 | `make watchdog-install` | installe la surveillance sur l'hôte et teste le canal d'alerte |
 
-Fichiers modifiables sans reconstruire l'image (sur le volume, `./data`) :
+### Disposition du volume (`./data` = `/opt/data`)
 
-- `data/veille/config.md` — le brief de mission (le prompt éditable du rapport)
-- `data/veille/destinataire.txt` — l'adresse d'envoi
-- `data/veille/rapports/` — les rapports produits
+```
+data/veilles/<slug>/
+    veille.json       métadonnées : nom, sujet, fréquence, PDF, lien vers le job Hermes
+    config.md         brief de mission (éditable dans l'interface)
+    recipients.txt    destinataires, un par ligne
+    job-prompt.md     prompt RENDU depuis le gabarit de l'image (ne pas éditer)
+    rapports/         AAAA-MM-JJ-veille.{md,pdf}, -charts.json
+    runs/             journaux des lancements manuels
+data/veilles/.archive/   veilles archivées
+data/veilles/.audit.log  journal d'audit (interface, CLI, amorçage)
+```
+
+Le **job Hermes fait foi** pour l'état (actif / en pause, prochain et dernier run). Le job ne
+contient qu'un prompt court qui renvoie vers `job-prompt.md` : une nouvelle image (gabarit
+corrigé) ou une modification de la veille prend effet au run suivant, **sans recréer le job**.
 
 ## Surveillance (chien de garde)
 
-Le conteneur délivre en `local` : **un échec serait silencieux** — seule l'absence du rapport le
+Le conteneur délivre en `local` : **un échec serait silencieux**, seule l'absence du rapport le
 trahirait. Un chien de garde comble ce trou.
 
-Il tourne **sur l'hôte**, pas dans le conteneur — un contrôleur placé dans ce qu'il surveille ne
-pourrait signaler ni un conteneur arrêté, ni une clé d'API expirée. Il est en outre **déterministe
-(aucun LLM)** : il alerte encore quand la production, elle, est en panne.
+Il tourne **sur l'hôte**, pas dans le conteneur : un contrôleur placé dans ce qu'il surveille ne
+pourrait signaler ni un conteneur arrêté, ni une clé d'API expirée. Il est **déterministe (aucun
+LLM)**, n'utilise que la bibliothèque standard de Python et ne dépend d'aucune installation Hermes
+sur l'hôte : il lit le volume et envoie avec le skill `brevo-email` et le `.env` **du dépôt**.
 
-Contrôles quotidiens (10h, heure de Paris — soit 2 h après le tir du lundi) :
+Contrôle quotidien (10h, heure de Paris) :
 
 1. le conteneur tourne ;
-2. un rapport récent et plausible existe sur le volume (date lue dans le **nom** du fichier, donc
-   immunisée contre les copies, plus un seuil de taille) ;
-3. le dernier run du job s'est terminé en succès.
+2. pour chaque veille **active** (les veilles en pause sont ignorées) : son job existe, son
+   dernier run n'est pas en erreur, et un rapport récent et plausible existe. « Récent » dépend
+   de **sa** fréquence : plus grand écart entre deux tirs + 24 h (8 jours pour une veille
+   hebdomadaire, 2 jours pour une quotidienne).
 
-Comportement : alerte immédiate à la première détection, rappel tous les 3 jours tant que le
-problème persiste, puis **e-mail de rétablissement** au retour à la normale. L'état est conservé
-dans `/var/lib/veille-watchdog/state.json`, ce qui évite le spam quotidien.
+Les alertes vont à `ALERT_EMAIL` : alerte immédiate à chaque nouveau problème, rappel tous les
+3 jours tant qu'il persiste, puis **e-mail de rétablissement**. L'état est conservé dans
+`/var/lib/veille-watchdog/state.json`.
 
 ```bash
 make watchdog-check      # contrôler maintenant (aucun e-mail envoyé)
@@ -81,41 +156,60 @@ make watchdog-install    # (ré)installer la surveillance et tester le canal d'a
 ## Mise à jour
 
 ```bash
-docker compose pull && docker compose up -d     # récupère l'image amont + recrée
+make update          # git pull + build + up -d : données du volume conservées
 ```
 
-Le dépôt est reconstruit et publié sur `ghcr.io` par la CI à chaque push sur `main`, à chaque
-étiquette `v*`, et **automatiquement chaque lundi** (pour suivre les correctifs de l'image amont).
+L'image amont est **épinglée** dans le `Dockerfile`. Dependabot propose ses montées de version
+en PR ; la CI les valide (tests, lint, smoke test sur l'image construite, dont le contrat avec la
+CLI `hermes cron`) **avant** toute publication sur `ghcr.io`.
+
+### Depuis la v0.2 (veille unique dans `data/veille/`)
+
+Rien à faire : au premier démarrage de la nouvelle image, `data/veille/` est déplacé vers
+`data/veilles/industrie-4-0/`, avec l'historique des rapports (anti-répétition) et le **même
+job** (édité, pas recréé). Un lien `data/veille → veilles/industrie-4-0` garde l'ancien chemin
+lisible. `destinataire.txt` devient `recipients.txt`. Ensuite, sur l'hôte :
+
+1. ajoute `ALERT_EMAIL` (et, pour l'interface, le résultat de `make ui-password`) dans `.env` ;
+2. réinstalle la surveillance : `make watchdog-install`.
+
+Avant la mise à jour, une sauvegarde est recommandée : `make backup`.
 
 ## Arborescence
 
 ```
 veille-hermes/
-├── Dockerfile                    # image dérivée : deps système + skills + assets
-├── docker-compose.yml            # service, volume, secrets, fuseau, limites
+├── Dockerfile                    # image dérivée : deps, skills, gabarits, veille_core, interface
+├── docker-compose.yml            # service, volume, secrets, port 127.0.0.1:8088, limites
 ├── Makefile                      # raccourcis d'exploitation
-├── CHANGELOG.md                  # journal des versions
-├── docs/PLAN-CONTAINERISATION.md # analyse + plan par phases (archive)
-├── veille/                       # brief, destinataire, prompt du job (défauts)
+├── requirements-app.txt          # dépendances de veille_core / veille_ui (venv séparé)
+├── veille/                       # gabarit du prompt + modèles de brief
+├── veille_core/                  # cœur multi-veilles + CLI veillectl
+├── veille_ui/                    # interface web (FastAPI + Jinja + HTMX)
 ├── skills/                       # brevo-email, styled-pdf-report
-├── docker/cont-init.d/           # hook d'amorçage du premier démarrage
+├── docker/                       # hook d'amorçage, service s6 de l'interface, veillectl
 ├── deploy/systemd/               # units de la surveillance (sur l'hôte)
 ├── scripts/                      # deploy.sh, smoke-test.sh, watchdog.py, install-watchdog.sh
-└── .github/workflows/build.yml   # CI : build & push ghcr.io
+├── tests/                        # pytest (faux binaire hermes pour le cœur et l'interface)
+├── docs/PLAN-CONTAINERISATION.md # analyse + plan de conteneurisation (archive)
+└── .github/                      # CI (tests → build → smoke → push) + Dependabot
 ```
 
 ## Secrets
 
 Aucun secret n'est versionné. Voir [`.env.example`](.env.example) : `DEEPSEEK_API_KEY`,
-`BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`. Le `.env` est ignoré par git **et**
-par le build Docker.
+`BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `ALERT_EMAIL`,
+`VEILLE_UI_PASSWORD_HASH`, `VEILLE_UI_SECRET`. Le `.env` est ignoré par git **et** par le build
+Docker.
 
 ## Architecture
 
-Le conteneur n'expose aucun port : il n'a besoin que d'accès **sortants** (recherche web, API
-DeepSeek, API Brevo). La livraison se fait **uniquement par e-mail** (`deliver: local`) — le
-gateway Telegram de l'hôte reste indépendant.
+Le conteneur n'a besoin que d'accès **sortants** (recherche web, API DeepSeek, API Brevo). Le
+seul port publié est celui de l'interface, lié à `127.0.0.1`. La livraison se fait **uniquement
+par e-mail** (`deliver: local`) ; le gateway Telegram de l'hôte reste indépendant. L'interface
+et `veillectl` ne parlent à Hermes que par sa CLI publique (`hermes cron …`) et la lecture de
+`cron/jobs.json`, isolées dans `veille_core/hermes.py`.
 
 ## Licence
 
-À définir.
+À définir (les skills et le label de l'image déclarent MIT ; aucun fichier `LICENSE` pour l'instant).
