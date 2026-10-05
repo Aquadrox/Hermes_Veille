@@ -7,6 +7,32 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.2.3] — 2026-10-05
+
+Piloter les veilles depuis Hermes (Telegram) : serveur MCP.
+
+### Ajouté
+
+- **Serveur MCP `veille-mcp`** (`veille_mcp/`, SDK `mcp` 2.3, transport stdio) : 22 outils.
+  - Lecture (annotés `readOnlyHint`) : `list_veilles`, `get_veille`, `get_brief`,
+    `list_brief_templates`, `list_reports`, `read_report` (Markdown d'un rapport, pour le
+    résumer), `get_run_log`, `run_history`, `preview_schedule`, `health`.
+  - Modification : `create_veille`, `update_veille`, `set_recipients`, `add_recipients`,
+    `remove_recipients`, `update_brief`, `edit_brief` (remplacement ciblé), `pause_veille`,
+    `resume_veille`, `run_veille_now`, `send_test_email`, `archive_veille` (`destructiveHint`,
+    exige de répéter le slug).
+  - Fréquences en langage clair (`frequency`, `time`, `day_of_week` « lundi »…, `day_of_month`
+    ou `cron`) ; erreurs métier renvoyées proprement à l'agent ; actions tracées dans le journal
+    d'audit avec leur origine (`VEILLE_MCP_ACTOR`, ex. « telegram ») ; chemins hôte des PDF
+    (`VEILLE_HOST_DATA`) pour les envoyer en pièce jointe ; mode `--readonly`.
+- `scripts/install-mcp-host.sh` (`make mcp-install`) : déclare le serveur dans le Hermes de
+  l'hôte (`docker exec -i`, **aucun port ouvert**, `trust: untrusted` : toute modification
+  demande une approbation dans Telegram), puis teste la connexion avec `hermes mcp test`.
+- Tests : 14 tests à travers le vrai protocole MCP (client en mémoire et sous-processus stdio) ;
+  smoke test avec le **client MCP de Hermes lui-même** (`hermes mcp test` : 22 outils) ;
+  test d'intégration via `docker exec -i` (lecture, pause/reprise effectives, confirmation
+  d'archivage, audit « telegram »).
+
 ## [0.2.2] — 2026-10-05
 
 Suite de tests GitHub et gestion professionnelle des versions.

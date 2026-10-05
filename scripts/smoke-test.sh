@@ -41,7 +41,8 @@ docker run --rm --entrypoint /bin/bash "$REF" -lc '
              /etc/cont-init.d/50-seed-veille \
              /etc/s6-overlay/s6-rc.d/veille-ui/run \
              /etc/s6-overlay/s6-rc.d/user/contents.d/veille-ui \
-             /usr/local/bin/veillectl ; do
+             /usr/local/bin/veillectl \
+             /usr/local/bin/veille-mcp ; do
         [ -f "$s" ] || { echo "MANQUANT: $s"; exit 1; }
     done
     echo "  skills et assets : présents"
@@ -139,6 +140,21 @@ print("  / sans session -> 303 /login : OK")
 PY
 ' || { fail "interface web en échec"; exit 1; }
 ok "interface web fonctionnelle"
+
+# --- 7. Serveur MCP, vu par le client MCP de Hermes lui-même ---
+log "serveur MCP (client MCP de Hermes)"
+docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h "$REF" -lc '
+    set -e
+    H=/opt/hermes/.venv/bin/hermes
+    mkdir -p /tmp/h
+    veille-mcp --check
+    $H config set mcp_servers.veilles.command veille-mcp >/dev/null
+    $H config set mcp_servers.veilles.trust untrusted >/dev/null
+    out=$(timeout 120 $H mcp test veilles 2>&1)
+    echo "$out" | grep -q "Tools discovered: 22" || { echo "$out"; exit 1; }
+    echo "  Hermes : connexion OK, 22 outils découverts"
+' || { fail "serveur MCP en échec"; exit 1; }
+ok "serveur MCP fonctionnel"
 
 echo
 ok "smoke test réussi — l'image est prête"

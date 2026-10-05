@@ -81,7 +81,7 @@ jobs:
       - name: pytest
         run: |
           python -m pytest -q --junitxml=junit.xml \
-            --cov=veille_core --cov=veille_ui --cov-report=term --cov-report=xml --cov-fail-under=75
+            --cov=veille_core --cov=veille_ui --cov=veille_mcp --cov-report=term --cov-report=xml --cov-fail-under=75
       - name: Résumé de couverture
         if: always() && matrix.python == '3.13'
         run: |
