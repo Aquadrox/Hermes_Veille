@@ -19,9 +19,6 @@ concurrency:
   group: image-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/hermes-veille
-
 jobs:
   image:
     name: Build → smoke → intégration → push
@@ -35,9 +32,12 @@ jobs:
       - name: Récupérer le dépôt
         uses: actions/checkout@v4
 
-      - name: Version
+      - name: Version et nom d'image
         id: v
-        run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+          # Docker exige un nom en minuscules (le propriétaire du dépôt est « Aquadrox »).
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/hermes-veille" >> "$GITHUB_ENV"
 
       - name: Préparer Buildx
         uses: docker/setup-buildx-action@v3

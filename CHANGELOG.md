@@ -33,6 +33,11 @@ Suite de tests GitHub et gestion professionnelle des versions.
   images sont étiquetées avec leur version (`X.Y.Z`) et portent le label OCI `version`.
 - `make test` mesure la couverture ; `make lint` inclut hadolint s'il est installé.
 
+### Corrigé
+
+- CI : le nom d'image est mis en minuscules (le propriétaire du dépôt, « Aquadrox », produisait
+  une étiquette Docker invalide).
+
 ### Sécurité
 
 - Dépendances de l'application mises à jour : **Starlette 0.48 → 1.7** (5 avis de sécurité dont
