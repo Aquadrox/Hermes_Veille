@@ -7,6 +7,23 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.2.4] — 2026-10-05
+
+Mise à jour des actions GitHub et Dependabot groupé.
+
+### Modifié
+
+- Actions GitHub en dernière version majeure, toutes sur Node 24 (fin des avertissements de
+  dépréciation de Node 20) : `actions/checkout` 4 → 7, `actions/setup-python` 5 → 7,
+  `actions/upload-artifact` 4 → 7, `docker/setup-buildx-action` 3 → 4,
+  `docker/metadata-action` 5 → 6, `docker/build-push-action` 6 → 7, `docker/login-action`
+  3 → 4, `hadolint/hadolint-action` 3.1 → 3.5. Reprend les PR Dependabot #2, #3, #4, #7 et #9.
+  hadolint 2.15 (embarqué par l'action) ajoute la règle DL3066 : exception justifiée pour le
+  `USER root` voulu (même raison que DL3002).
+- Dependabot : **une PR groupée par écosystème et par mois** (au lieu d'une PR par paquet).
+  Ces PR servent de signal : leur contenu est repris dans la prochaine branche
+  `release/vX.Y.Z`, car chaque merge sur `main` doit incrémenter la version.
+
 ## [0.2.3] — 2026-10-05
 
 Piloter les veilles depuis Hermes (Telegram) : serveur MCP.

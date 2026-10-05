@@ -1,15 +1,38 @@
-# Montées de version proposées en PR (validées par les tests et le smoke test).
+# Montées de version des dépendances.
+#
+# Règle du dépôt : chaque merge sur main = une nouvelle version (VERSION + CHANGELOG).
+# Les PR Dependabot ne modifient pas VERSION : on ne les merge pas telles quelles. Elles
+# servent de SIGNAL. Leur contenu est repris dans la prochaine branche release/vX.Y.Z
+# (make bump), puis la PR Dependabot se ferme d'elle-même. Pour limiter le bruit :
+# une seule PR groupée par écosystème et par mois.
 version: 2
 updates:
   - package-ecosystem: docker          # image amont Hermes (FROM du Dockerfile)
     directory: /
     schedule:
-      interval: weekly
-  - package-ecosystem: pip             # requirements-app.txt (veille_core / veille_ui)
+      interval: monthly
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: pip             # requirements-app.txt / requirements-dev.txt
     directory: /
     schedule:
       interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      python:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
