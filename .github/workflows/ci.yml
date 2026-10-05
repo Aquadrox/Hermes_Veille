@@ -21,7 +21,7 @@ jobs:
     name: Version (VERSION, CHANGELOG, branche)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Cohérence de la version
@@ -35,7 +35,7 @@ jobs:
     name: Lint (ruff, shellcheck, hadolint, compose)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -68,7 +68,7 @@ jobs:
         # 3.11 : python3 d'un hôte Debian 12 (chien de garde) ; 3.13 : celui de l'image.
         python: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -105,7 +105,7 @@ jobs:
     name: Audit des dépendances (pip-audit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"

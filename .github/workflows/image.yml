@@ -30,7 +30,7 @@ jobs:
 
     steps:
       - name: Récupérer le dépôt
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Version et nom d'image
         id: v
