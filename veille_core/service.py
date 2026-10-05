@@ -16,7 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import hermes, paths, render, schedule, store
+from . import hermes, paths, pricing, render, schedule, store
 from .store import PdfOptions, StoreError, Veille
 
 LEGACY_JOB_NAME = "Veille technologique hebdomadaire"
@@ -126,6 +126,73 @@ def _safe_jobs() -> list[dict]:
         return hermes.load_jobs()
     except hermes.HermesError:
         return []
+
+
+# --------------------------------------------------------------------------
+# Consommation et coût
+# --------------------------------------------------------------------------
+def _run_row(run: dict, table: dict) -> dict:
+    total = {c: sum(m[c] for m in run["models"]) for c in hermes._TOKEN_COLS}
+    cost, peak, unknown = 0.0, False, []
+    for m in run["models"]:
+        usd, peak = pricing.run_cost(m["model"], input_tokens=m["input_tokens"],
+                                     cache_read_tokens=m["cache_read_tokens"],
+                                     output_tokens=m["output_tokens"],
+                                     started_at=run["started_at"], table=table)
+        if usd is None:
+            unknown.append(m["model"])
+            usd = m["hermes_estimate_usd"] or 0.0  # repli : estimation de Hermes
+        cost += usd
+    started = dt.datetime.fromtimestamp(run["started_at"], schedule.ZONE) if run["started_at"] else None
+    ended = run["ended_at"]
+    return {
+        "session_id": run["session_id"],
+        "started_at": started,
+        "duration_min": round((ended - run["started_at"]) / 60, 1) if ended and run["started_at"] else None,
+        "models": sorted({m["model"] for m in run["models"] if m["model"]}),
+        "api_calls": sum(m["api_calls"] for m in run["models"]),
+        **total,
+        "peak": peak,
+        "cost_usd": round(cost, 4),
+        "hermes_estimate_usd": round(sum(m["hermes_estimate_usd"] for m in run["models"]), 4),
+        "unpriced_models": unknown,
+    }
+
+
+def costs(slug: str, days: int = 30, limit: int = 50) -> dict:
+    """Exécutions mesurées d'une veille (tokens, durée, heures pleines, coût) et totaux."""
+    v = store.load(slug)
+    table = pricing.load()
+    runs = [_run_row(r, table) for r in hermes.run_usage(v.job_id, limit)]
+    now = dt.datetime.now(schedule.ZONE)
+    since = now - dt.timedelta(days=days)
+    month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    recent = [r for r in runs if r["started_at"] and r["started_at"] >= since]
+    this_month = [r for r in runs if r["started_at"] and r["started_at"] >= month]
+    return {
+        "slug": slug,
+        "runs": runs,
+        "days": days,
+        "total_days_usd": round(sum(r["cost_usd"] for r in recent), 4),
+        "runs_days": len(recent),
+        "total_month_usd": round(sum(r["cost_usd"] for r in this_month), 4),
+        "runs_month": len(this_month),
+        "average_run_usd": round(sum(r["cost_usd"] for r in runs) / len(runs), 4) if runs else None,
+        "pricing_updated": table.get("updated"),
+        "currency": table.get("currency", "USD"),
+    }
+
+
+def costs_overview(days: int = 30) -> dict:
+    rows = []
+    for v in store.list_all():
+        c = costs(v.slug, days)
+        rows.append({"slug": v.slug, "name": v.name, "total_month_usd": c["total_month_usd"],
+                     "runs_month": c["runs_month"], "total_days_usd": c["total_days_usd"],
+                     "average_run_usd": c["average_run_usd"]})
+    return {"days": days, "veilles": rows,
+            "total_month_usd": round(sum(r["total_month_usd"] for r in rows), 4),
+            "total_days_usd": round(sum(r["total_days_usd"] for r in rows), 4)}
 
 
 # --------------------------------------------------------------------------
@@ -356,7 +423,7 @@ def migrate_legacy(actor: str = "seed") -> str | None:
                            footer="Kindara — document interne",
                            audience="direction industrielle & ingénierie"),
         )
-        _apply_schedule(v, expr or "0 8 * * 1")
+        _apply_schedule(v, expr or "30 6 * * 1")
 
         target.parent.mkdir(parents=True, exist_ok=True)
         os.rename(legacy, target)
@@ -411,7 +478,8 @@ def bootstrap_default(actor: str = "seed") -> str | None:
             create_veille(
                 name="Veille Industrie 4.0", slug=LEGACY_SLUG,
                 subject="Industrie 4.0, robotique, automatisation avancée, IA industrielle",
-                schedule_expr="0 8 * * 1", recipients=recipients or [PLACEHOLDER_RECIPIENT],
+                # 6h30 Paris : heures creuses DeepSeek (04h30 UTC l'été, 05h30 l'hiver).
+                schedule_expr="30 6 * * 1", recipients=recipients or [PLACEHOLDER_RECIPIENT],
                 brief=brief, paused=not recipients, actor=actor,
                 pdf={"title": "Veille technologique — Industrie 4.0, robotique & IA industrielle",
                      "header": "Veille technologique · Industrie 4.0",

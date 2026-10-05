@@ -33,6 +33,7 @@ h2 { font-size: 1.05rem; margin: 0 0 .75rem; }
 .muted { color: var(--muted); }
 .small { font-size: .85rem; }
 .err { color: var(--bad); }
+.warn { color: var(--warn); }
 .current { font-weight: 700; text-decoration: none; }
 
 .flash { padding: .6rem .9rem; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); }

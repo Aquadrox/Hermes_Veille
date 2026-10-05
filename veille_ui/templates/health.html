@@ -23,6 +23,25 @@
 </section>
 
 <section class="card">
+  <h2>DeepSeek</h2>
+  {% if deepseek.error %}<p class="err">{{ deepseek.error }}</p>{% else %}
+  <p>Solde : {% for b in deepseek.balances %}<strong>{{ b.total }} {{ b.currency }}</strong>
+    <span class="muted small">(dont offert : {{ b.granted }}, rechargé : {{ b.topped_up }})</span>{{ " · " if not loop.last }}{% endfor %}
+    {% if not deepseek.available %}<span class="err">— solde insuffisant pour appeler l'API</span>{% endif %}</p>
+  {% endif %}
+  <table class="list">
+    <thead><tr><th>Veille</th><th>Mois en cours</th><th>{{ costs.days }} derniers jours</th><th>Moyenne / exécution</th></tr></thead>
+    <tbody>
+    {% for c in costs.veilles %}
+      <tr><td><a href="/veilles/{{ c.slug }}">{{ c.name }}</a></td><td>{{ c.total_month_usd|usd }} <span class="muted small">({{ c.runs_month }})</span></td>
+          <td>{{ c.total_days_usd|usd }}</td><td>{{ c.average_run_usd|usd }}</td></tr>
+    {% endfor %}
+      <tr><td><strong>Total</strong></td><td><strong>{{ costs.total_month_usd|usd }}</strong></td><td><strong>{{ costs.total_days_usd|usd }}</strong></td><td></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
   <h2>Brevo</h2>
   {% if brevo.error %}<p class="err">{{ brevo.error }}</p>{% else %}
   <p>Compte : {{ brevo.email }}</p>

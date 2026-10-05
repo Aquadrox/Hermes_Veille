@@ -2,5 +2,6 @@
 <p class="err small">{{ error }}</p>
 {% else %}
 <p class="small"><strong>{{ human }}</strong> <code>{{ expr }}</code><br>
-<span class="muted">Prochaines exécutions : {% for r in runs %}{{ r|dt }}{{ ", " if not loop.last }}{% endfor %}</span></p>
+<span class="muted">Prochaines exécutions : {% for r in runs %}{{ r|dt }}{{ ", " if not loop.last }}{% endfor %}</span>
+{% if peak %}<br><span class="warn">Heure pleine DeepSeek : tarif ×2. En semaine, préfère entre 6h et 8h l'été (5h–7h l'hiver), ou après 12h (11h l'hiver), ou le week-end.</span>{% endif %}</p>
 {% endif %}

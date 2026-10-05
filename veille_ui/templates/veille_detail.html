@@ -22,7 +22,7 @@
 <section class="card">
   <dl class="grid2">
     <div><dt>Fréquence</dt><dd>{{ row.schedule_human }} <code>{{ v.schedule }}</code></dd></div>
-    <div><dt>Prochaines exécutions</dt><dd>{% if st.paused %}— (en pause){% else %}{% for r in next_runs %}{{ r|dt }}{{ ", " if not loop.last }}{% endfor %}{% endif %}</dd></div>
+    <div><dt>Prochaines exécutions</dt><dd>{% if st.paused %}— (en pause){% else %}{% for r in next_runs %}{{ r|dt }}{{ ", " if not loop.last }}{% endfor %}{% if next_peak %}<br><span class="warn small">heure pleine DeepSeek : tarif ×2</span>{% endif %}{% endif %}</dd></div>
     <div><dt>Dernier run</dt><dd>{{ st.last_run_at|dt }} {% if st.last_status %}({{ st.last_status }}){% endif %}</dd></div>
     <div><dt>Destinataires</dt><dd>{{ row.recipients|join(", ") or "—" }}</dd></div>
     <div><dt>Seuil d'alerte (chien de garde)</dt><dd>{{ (v.max_age_hours / 24)|round(1) }} jours sans rapport</dd></div>
@@ -40,6 +40,39 @@
   {% endif %}
 </section>
 {% endif %}
+
+<section class="card">
+  <h2>Coût des exécutions</h2>
+  {% if costs.runs %}
+  <p>Mois en cours : <strong>{{ costs.total_month_usd|usd }}</strong> ({{ costs.runs_month }} exécution{{ 's' if costs.runs_month > 1 }})
+    · {{ costs.days }} derniers jours : {{ costs.total_days_usd|usd }}
+    · moyenne par exécution : {{ costs.average_run_usd|usd }}</p>
+  <div class="table-wrap">
+  <table class="list">
+    <thead><tr><th>Date</th><th>Durée</th><th>Entrée</th><th>dont cache</th><th>Sortie</th><th>Appels</th><th>Tarif</th><th>Coût</th></tr></thead>
+    <tbody>
+    {% for r in costs.runs[:20] %}
+      <tr>
+        <td>{{ r.started_at|dt }}</td>
+        <td>{{ r.duration_min ~ " min" if r.duration_min is not none else "—" }}</td>
+        <td>{{ (r.input_tokens + r.cache_read_tokens)|num }}</td>
+        <td class="muted">{{ r.cache_read_tokens|num }}</td>
+        <td>{{ r.output_tokens|num }}</td>
+        <td>{{ r.api_calls }}</td>
+        <td>{% if r.peak %}<span class="badge paused">pleine ×2</span>{% else %}<span class="badge ok">creuse</span>{% endif %}</td>
+        <td><strong>{{ r.cost_usd|usd }}</strong>{% if r.unpriced_models %} <span class="muted small" title="tarif inconnu : estimation Hermes">*</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="small muted">Tokens lus dans la base de Hermes (une session par exécution). Coût calculé
+    aux tarifs DeepSeek du {{ costs.pricing_updated }}, heures pleines comprises : lun–ven, 01h–04h
+    et 06h–10h UTC, tarif ×2. L'estimation de Hermes, au seul tarif creux, est disponible via Telegram.</p>
+  {% else %}
+  <p class="muted">Aucune exécution mesurée pour l'instant : le coût apparaîtra après le prochain run.</p>
+  {% endif %}
+</section>
 
 <section class="card">
   <h2>Rapports</h2>

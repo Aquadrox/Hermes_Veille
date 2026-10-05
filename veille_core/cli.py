@@ -6,6 +6,7 @@
   veillectl edit <slug> [--name N] [--subject S] [--schedule CRON] [--recipients ...] [--brief-file F]
   veillectl pause|resume|archive|test-email <slug>
   veillectl run <slug> [--wait]
+  veillectl costs [slug] [--days N]
   veillectl reconcile | migrate | bootstrap
 """
 from __future__ import annotations
@@ -43,6 +44,33 @@ def _show(slug: str) -> int:
     print(f"  répertoire   : {v.dir}")
     for rep in store.list_reports(slug)[:5]:
         print(f"  rapport      : {rep['date']}  {rep.get('pdf', '(pas de PDF)')}")
+    return 0
+
+
+def _usd(value) -> str:
+    return "—" if value is None else f"{value:.4f} $"
+
+
+def _costs(slug: str | None, days: int) -> int:
+    if slug is None:
+        ov = service.costs_overview(days)
+        for r in ov["veilles"]:
+            print(f"{r['slug']:<24} mois : {_usd(r['total_month_usd']):>11} ({r['runs_month']} run(s))  "
+                  f"{days} j : {_usd(r['total_days_usd']):>11}  moyenne/run : {_usd(r['average_run_usd'])}")
+        print(f"{'TOTAL':<24} mois : {_usd(ov['total_month_usd']):>11}  {days} j : {_usd(ov['total_days_usd'])}")
+        return 0
+    c = service.costs(slug, days)
+    if not c["runs"]:
+        print("aucune exécution mesurée (consommation lue dans state.db de Hermes)")
+        return 0
+    for r in c["runs"]:
+        when = r["started_at"].strftime("%Y-%m-%d %H:%M") if r["started_at"] else "?"
+        dur = f"{r['duration_min']} min" if r["duration_min"] is not None else "?"
+        print(f"{when}  {dur:>9}  entrée {r['input_tokens']:>9} (+{r['cache_read_tokens']} en cache)  "
+              f"sortie {r['output_tokens']:>8}  {'PLEINE' if r['peak'] else 'creuse'}  {_usd(r['cost_usd'])}"
+              f"  (estimation Hermes {_usd(r['hermes_estimate_usd'])})")
+    print(f"mois en cours : {_usd(c['total_month_usd'])} ({c['runs_month']} run(s)) — "
+          f"{days} derniers jours : {_usd(c['total_days_usd'])} — tarifs du {c['pricing_updated']}")
     return 0
 
 
@@ -89,6 +117,10 @@ def main(argv: list[str] | None = None) -> int:
     p_edit.add_argument("--brief-file")
     p_edit.add_argument("--model")
 
+    p_costs = sub.add_parser("costs", help="consommation de tokens et coût des exécutions")
+    p_costs.add_argument("slug", nargs="?")
+    p_costs.add_argument("--days", type=int, default=30)
+
     sub.add_parser("reconcile")
     sub.add_parser("migrate")
     sub.add_parser("bootstrap")
@@ -99,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
             return _print_overview()
         if args.cmd == "show":
             return _show(args.slug)
+        if args.cmd == "costs":
+            return _costs(args.slug, args.days)
         if args.cmd == "create":
             v = service.create_veille(
                 name=args.name, slug=args.slug, subject=args.subject,

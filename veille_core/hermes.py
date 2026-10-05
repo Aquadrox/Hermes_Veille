@@ -2,7 +2,8 @@
 
 - Écritures : la CLI `hermes cron` (interface publique), appelée avec une liste
   d'arguments — jamais à travers un shell.
-- Lectures : `cron/jobs.json` directement (Hermes l'écrit de façon atomique).
+- Lectures : `cron/jobs.json` directement (Hermes l'écrit de façon atomique), et
+  `state.db` en lecture seule pour la consommation de tokens des exécutions.
 
 Isoler ce module permet de suivre les évolutions de l'amont sans toucher au reste.
 """
@@ -11,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import threading
 from pathlib import Path
@@ -74,6 +76,64 @@ def find_by_name(name: str, jobs: list[dict] | None = None) -> dict | None:
         if job.get("name") == name:
             return job
     return None
+
+
+def state_db() -> Path:
+    return paths.hermes_home() / "state.db"
+
+
+_TOKEN_COLS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens")
+
+
+def run_usage(job_id: str | None, limit: int = 50, db: Path | None = None) -> list[dict]:
+    """Consommation des exécutions d'un job, la plus récente d'abord.
+
+    Chaque exécution cron est une session Hermes `cron_<job_id>_<AAAAMMJJ_HHMMSS>` dans state.db.
+    Les tokens sont lus par modèle dans `session_model_usage` (boucle principale ET tâches
+    auxiliaires : compression, titres…), sinon sur la ligne de session. Lecture seule ; toute
+    erreur (base absente, schéma différent) donne une liste vide.
+    """
+    if not job_id or not re.fullmatch(r"[0-9A-Za-z-]+", job_id):
+        return []
+    path = db or state_db()
+    if not path.is_file():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+        conn.row_factory = sqlite3.Row
+        try:
+            sessions = conn.execute(
+                "SELECT id, model, started_at, ended_at, end_reason, api_call_count, estimated_cost_usd, "
+                + ", ".join(_TOKEN_COLS)
+                + " FROM sessions WHERE id LIKE ? ESCAPE '\\' ORDER BY started_at DESC LIMIT ?",
+                (f"cron\\_{job_id}\\_%", int(limit)),
+            ).fetchall()
+            runs = []
+            for row in sessions:
+                try:
+                    per_model = conn.execute(
+                        "SELECT model, SUM(api_call_count) AS calls, SUM(estimated_cost_usd) AS est, "
+                        + ", ".join(f"SUM({c}) AS {c}" for c in _TOKEN_COLS)
+                        + " FROM session_model_usage WHERE session_id = ? GROUP BY model",
+                        (row["id"],),
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    per_model = []
+                models = [{"model": m["model"], "api_calls": m["calls"] or 0,
+                           "hermes_estimate_usd": m["est"] or 0.0,
+                           **{c: m[c] or 0 for c in _TOKEN_COLS}} for m in per_model]
+                if not models:  # base antérieure au détail par modèle : ligne de session
+                    models = [{"model": row["model"], "api_calls": row["api_call_count"] or 0,
+                               "hermes_estimate_usd": row["estimated_cost_usd"] or 0.0,
+                               **{c: row[c] or 0 for c in _TOKEN_COLS}}]
+                runs.append({"session_id": row["id"], "started_at": row["started_at"],
+                             "ended_at": row["ended_at"], "end_reason": row["end_reason"],
+                             "models": models})
+            return runs
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
 
 
 def is_paused(job: dict) -> bool:

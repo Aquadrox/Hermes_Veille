@@ -6,9 +6,15 @@ reçoit jamais que l'expression cron 5 champs, interprétée dans son fuseau con
 from __future__ import annotations
 
 import datetime as dt
+import os
 import re
+from zoneinfo import ZoneInfo
 
 from croniter import croniter
+
+# Fuseau des planifications : celui réglé dans Hermes par le seed (Europe/Paris). Explicite, pour ne
+# pas dépendre du fuseau du processus.
+ZONE = ZoneInfo(os.environ.get("VEILLE_TZ", "Europe/Paris"))
 
 DAYS = ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"]
 KINDS = ("daily", "weekdays", "weekly", "monthly", "cron")
@@ -89,7 +95,8 @@ def validate_cron(expr: str) -> None:
 
 
 def next_runs(expr: str, n: int = 3, start: dt.datetime | None = None) -> list[dt.datetime]:
-    it = croniter(expr, start or dt.datetime.now())
+    """Prochaines exécutions. Sans `start` : à partir de maintenant, en heure de Paris (aware)."""
+    it = croniter(expr, start or dt.datetime.now(ZONE))
     return [it.get_next(dt.datetime) for _ in range(n)]
 
 

@@ -14,7 +14,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from veille_core import hermes, paths, schedule, service, store, version
+from veille_core import deepseek, hermes, paths, pricing, schedule, service, store, version
 from veille_core.store import StoreError
 
 USER_ERRORS = (StoreError, schedule.ScheduleError, service.ServiceError, hermes.HermesError)
@@ -42,6 +42,8 @@ Gestion des veilles technologiques automatisées (rapports PDF envoyés par e-ma
   `update_brief` (remplacement complet).
 - `archive_veille` retire la veille du planning (rien n'est effacé) ; il exige de répéter le slug.
 - Heures exprimées à l'heure de Paris.
+- Coûts : `get_costs` donne les tokens et le coût en USD de chaque exécution. DeepSeek facture
+  le double en heures pleines (lun–ven 01h–04h et 06h–10h UTC) ; `preview_schedule` le signale.
 """
 
 
@@ -208,12 +210,39 @@ def preview_schedule(frequency: Frequency = "weekly", time: str = "08:00",
     `day_of_week` (weekly) « lundi »… ou 0–6 (0 = dimanche) ; `day_of_month` (monthly) 1–28 ;
     `cron` : expression 5 champs (frequency = cron)."""
     expr = _guard(_schedule_expr, frequency, time, day_of_week, day_of_month, cron)
+    runs = schedule.next_runs(expr, 3)
+    peak = pricing.is_peak(runs[0])
     return {"cron": expr, "frequency": schedule.describe(expr),
-            "next_runs": [_iso(d) for d in schedule.next_runs(expr, 3)]}
+            "next_runs": [_iso(d) for d in runs],
+            "deepseek_peak": peak,
+            "note": ("heure pleine DeepSeek : tarif ×2 (préférer 6h–8h l'été / 5h–7h l'hiver, après 12h, "
+                     "ou le week-end)") if peak else "heure creuse DeepSeek"}
+
+
+def _cost_run(r: dict) -> dict:
+    return {"date": _iso(r["started_at"]), "duration_min": r["duration_min"], "models": r["models"],
+            "input_tokens": r["input_tokens"] + r["cache_read_tokens"],
+            "input_cached_tokens": r["cache_read_tokens"], "output_tokens": r["output_tokens"],
+            "reasoning_tokens": r["reasoning_tokens"], "api_calls": r["api_calls"],
+            "peak_hours": r["peak"], "cost_usd": r["cost_usd"],
+            "hermes_estimate_usd": r["hermes_estimate_usd"]}
+
+
+def get_costs(slug: str | None = None, days: int = 30) -> dict:
+    """Tokens consommés et coût (USD) des exécutions : détail par exécution pour une veille
+    (`slug`), sinon total du mois et des `days` derniers jours pour chaque veille. Le coût tient
+    compte des heures pleines DeepSeek (×2) ; `hermes_estimate_usd` est l'estimation de Hermes,
+    au seul tarif creux."""
+    days = max(1, min(days, 366))
+    if slug is None:
+        return service.costs_overview(days)
+    c = _guard(service.costs, slug, days)
+    return {**{k: val for k, val in c.items() if k != "runs"}, "runs": [_cost_run(r) for r in c["runs"][:30]]}
 
 
 def health() -> dict:
-    """État général : version, veilles en échec ou sans job, dernières actions du journal d'audit."""
+    """État général : version, veilles en échec ou sans job, solde DeepSeek, coût du mois,
+    dernières actions du journal d'audit."""
     rows = service.overview()
     problems = []
     for r in rows:
@@ -224,7 +253,9 @@ def health() -> dict:
             problems.append(f"{v.slug} : dernier run {st['last_status']} — {st.get('last_error') or ''}".strip())
     return {"version": version(), "veilles": len(rows),
             "actives": sum(1 for r in rows if r["status"]["exists"] and not r["status"]["paused"]),
-            "problems": problems, "audit": service.read_audit(15)}
+            "problems": problems, "deepseek_balance": deepseek.balance(),
+            "cost_month_usd": service.costs_overview()["total_month_usd"],
+            "audit": service.read_audit(15)}
 
 
 # --------------------------------------------------------------------------
@@ -355,7 +386,7 @@ def archive_veille(slug: str, confirm_slug: str) -> dict:
 
 
 READ_TOOLS = [list_veilles, get_veille, get_brief, list_brief_templates, list_reports, read_report,
-              get_run_log, run_history, preview_schedule, health]
+              get_run_log, run_history, preview_schedule, get_costs, health]
 WRITE_TOOLS = [(create_veille, WRITE), (update_veille, WRITE), (set_recipients, WRITE),
                (add_recipients, WRITE), (remove_recipients, WRITE), (update_brief, WRITE),
                (edit_brief, WRITE), (pause_veille, WRITE), (resume_veille, WRITE),

@@ -1,0 +1,19 @@
+{
+  "_comment": "Tarifs DeepSeek en USD par million de tokens, HEURES CREUSES. Aux heures pleines, tout est multiplié par peak.multiplier. Surchargeable par /opt/data/veilles/pricing.json.",
+  "source": "https://api-docs.deepseek.com/quick_start/pricing",
+  "updated": "2026-10-05",
+  "currency": "USD",
+  "peak": {
+    "multiplier": 2,
+    "weekdays": [0, 1, 2, 3, 4],
+    "utc_hours": [[1, 4], [6, 10]],
+    "_comment": "weekdays : 0 = lundi ; utc_hours : plages [début, fin) en heures UTC. Hors jours fériés chinois (non pris en compte)."
+  },
+  "models": {
+    "deepseek-v4-pro":   {"input_cache_hit": 0.022, "input_cache_miss": 0.66, "output": 1.98},
+    "deepseek-v4-flash": {"input_cache_hit": 0.003, "input_cache_miss": 0.15, "output": 0.60},
+    "deepseek-flash":    {"input_cache_hit": 0.003, "input_cache_miss": 0.15, "output": 0.60},
+    "deepseek-chat":     {"input_cache_hit": 0.003, "input_cache_miss": 0.15, "output": 0.60},
+    "deepseek-reasoner": {"input_cache_hit": 0.003, "input_cache_miss": 0.15, "output": 0.60}
+  }
+}

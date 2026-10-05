@@ -7,6 +7,35 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.2.6] — 2026-10-05
+
+Consommation de tokens et coût réel de chaque rapport.
+
+### Ajouté
+
+- **Coût des exécutions**, calculé à partir des tokens que Hermes enregistre par exécution
+  (`state.db`, une session `cron_<job>_<date>` par run, détail par modèle, tâches auxiliaires
+  comprises). La lecture se fait en lecture seule, dans `veille_core/hermes.py` (`run_usage`).
+  - Tarifs DeepSeek dans `veille/pricing.json` (surchargeable dans le volume), **heures pleines
+    comprises** : lun–ven 01h–04h et 06h–10h UTC, tarif ×2. L'estimation de Hermes n'applique que
+    le tarif creux et sous-estimait donc de moitié le rapport du lundi 8h.
+  - Interface : section « Coût des exécutions » par veille (durée, tokens, heure pleine ou creuse,
+    coût, totaux du mois et des 30 jours) ; page Santé : **solde DeepSeek** (`GET /user/balance`)
+    et coût du mois par veille.
+  - Telegram : outil MCP **`get_costs`** (lecture seule, 23 outils au total). `health` ajoute le
+    solde et le coût du mois, et `preview_schedule` signale les heures pleines.
+  - CLI : `veillectl costs [slug] [--days N]`.
+- Aperçu de fréquence (interface et MCP) : avertissement « heure pleine DeepSeek (tarif ×2) »,
+  avec les créneaux creux conseillés.
+- Smoke test : lecture d'une session créée par Hermes lui-même, pour vérifier le contrat avec son
+  schéma de base.
+
+### Modifié
+
+- Veille par défaut d'une installation neuve : **lundi 6h30** (heures creuses), au lieu de 8h.
+- Calculs de planification dans un fuseau explicite (`Europe/Paris`, variable `VEILLE_TZ`), au lieu
+  du fuseau du processus.
+
 ## [0.2.5] — 2026-10-05
 
 Outils de développement à jour (reprend la PR Dependabot groupée #15).

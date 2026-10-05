@@ -36,6 +36,7 @@ docker run --rm --entrypoint /bin/bash "$REF" -lc '
              /opt/hermes/skills/productivity/styled-pdf-report/scripts/build_report.py \
              /opt/hermes/skills/productivity/styled-pdf-report/assets/report.css \
              /opt/hermes/veille-defaults/job-prompt.tmpl.md \
+             /opt/hermes/veille-defaults/pricing.json \
              /opt/hermes/veille-defaults/templates/industrie-4-0.md \
              /opt/hermes/veille-defaults/templates/vierge.md \
              /etc/cont-init.d/50-seed-veille \
@@ -151,10 +152,37 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h "$REF" -lc '
     $H config set mcp_servers.veilles.command veille-mcp >/dev/null
     $H config set mcp_servers.veilles.trust untrusted >/dev/null
     out=$(timeout 120 $H mcp test veilles 2>&1)
-    echo "$out" | grep -q "Tools discovered: 22" || { echo "$out"; exit 1; }
-    echo "  Hermes : connexion OK, 22 outils découverts"
+    echo "$out" | grep -q "Tools discovered: 23" || { echo "$out"; exit 1; }
+    echo "  Hermes : connexion OK, 23 outils découverts"
 ' || { fail "serveur MCP en échec"; exit 1; }
 ok "serveur MCP fonctionnel"
+
+# --- 8. Contrat avec la base de sessions de Hermes (consommation de tokens) ---
+log "lecture de la consommation dans state.db (session créée par Hermes lui-même)"
+docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h "$REF" -lc '
+    set -e
+    mkdir -p /tmp/h && cd /opt/hermes
+    .venv/bin/python - <<"PY"
+from pathlib import Path
+from hermes_state import SessionDB
+db = SessionDB(Path("/tmp/h/state.db"))
+sid = "cron_abc123def456_20261005_063000"
+db.ensure_session(sid, source="cron", model="deepseek-v4-pro")
+db.update_token_counts(sid, input_tokens=1000, output_tokens=200, cache_read_tokens=3000,
+                       model="deepseek-v4-pro", api_call_count=2)
+PY
+    cd /opt/veille-app && PYTHONPATH=/opt/veille-app .venv/bin/python - <<"PY"
+from veille_core import hermes, pricing
+runs = hermes.run_usage("abc123def456")
+assert len(runs) == 1, runs
+m = {x["model"]: x for x in runs[0]["models"]}["deepseek-v4-pro"]
+assert (m["input_tokens"], m["cache_read_tokens"], m["output_tokens"]) == (1000, 3000, 200), m
+usd, _ = pricing.run_cost("deepseek-v4-pro", input_tokens=1000, cache_read_tokens=3000, output_tokens=200)
+assert usd and usd > 0
+print("  session Hermes lue : 1000 / 3000 en cache / 200 tokens, tarif connu")
+PY
+' || { fail "la base de sessions de Hermes a changé — adapter veille_core/hermes.py (run_usage)"; exit 1; }
+ok "lecture de la consommation compatible"
 
 echo
 ok "smoke test réussi — l'image est prête"
