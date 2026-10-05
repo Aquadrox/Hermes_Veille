@@ -15,9 +15,6 @@ on:
     - cron: "0 4 * * 1"
   workflow_dispatch:
 
-env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/hermes-veille
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -56,6 +53,10 @@ jobs:
     steps:
       - name: Récupérer le dépôt
         uses: actions/checkout@v4
+
+      - name: Nom d'image
+        # Docker exige un nom en minuscules (le propriétaire du dépôt est « Aquadrox »).
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/hermes-veille" >> "$GITHUB_ENV"
 
       - name: Préparer Buildx
         uses: docker/setup-buildx-action@v3
