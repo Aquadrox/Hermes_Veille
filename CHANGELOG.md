@@ -7,6 +7,16 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.2.5] — 2026-10-05
+
+Outils de développement à jour (reprend la PR Dependabot groupée #15).
+
+### Modifié
+
+- `requirements-dev.txt` : `pytest-cov` 7.0.0 → 7.1.0, `ruff` 0.15.10 → 0.16.10,
+  `pip-audit` 2.10.0 → 2.10.1 ; même version de `pip-audit` dans le job d'audit de la CI.
+  Aucun effet sur l'image ni sur le serveur.
+
 ## [0.2.4] — 2026-10-05
 
 Mise à jour des actions GitHub et Dependabot groupé.

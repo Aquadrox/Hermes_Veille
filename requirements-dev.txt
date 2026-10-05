@@ -1,8 +1,8 @@
 # Outils de test et de qualité (CI et poste de développement).
 -r requirements-app.txt
 pytest==9.1.1
-pytest-cov==7.0.0
+pytest-cov==7.1.0
 httpx==0.28.1
-ruff==0.15.10
+ruff==0.16.10
 shellcheck-py==0.11.0.1
-pip-audit==2.10.0
+pip-audit==2.10.1

@@ -109,5 +109,5 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
-      - run: pip install pip-audit==2.10.0
+      - run: pip install pip-audit==2.10.1
       - run: pip-audit --requirement requirements-app.txt --desc
