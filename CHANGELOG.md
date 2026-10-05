@@ -16,11 +16,13 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 ### Ajouté
 
 - Cible `make update` — `git pull` puis reconstruction et redéploiement : le cycle de mise à jour.
-
-### Prévu
-
-- Alerte en cas d'échec : le conteneur délivre en `local` (pas de chat), donc un échec est
-  silencieux — prévoir une notification (cron séparé ou supervision externe).
+- **Surveillance (chien de garde)** — `scripts/watchdog.py`, `scripts/install-watchdog.sh` et un
+  timer systemd quotidien (10h) **sur l'hôte** : détecte les pannes silencieuses (conteneur
+  arrêté, rapport trop ancien ou tronqué, dernier run en échec) et prévient par e-mail, avec
+  e-mail de rétablissement et rappel tous les 3 jours. Déterministe (aucun LLM) et volontairement
+  placé **hors** du conteneur : un contrôleur interne ne pourrait signaler ni un conteneur arrêté
+  ni une clé d'API expirée.
+- Cibles `make watchdog-install` et `make watchdog-check`.
 
 ## [0.2.0] — 2026-10-05
 

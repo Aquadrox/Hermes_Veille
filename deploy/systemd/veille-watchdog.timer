@@ -1,0 +1,13 @@
+[Unit]
+Description=Contrôle quotidien de la veille technologique
+
+[Timer]
+# Tous les jours à 10h (heure de Paris) : le tir de production est le lundi à 8h
+# et dure quelques minutes, donc une panne du lundi est détectée le jour même.
+OnCalendar=*-*-* 10:00:00
+# Si la machine était éteinte à l'heure prévue, le contrôle est rattrapé au boot.
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -8,7 +8,7 @@ CONTAINER  ?= veille-hermes
 
 .DEFAULT_GOAL := help
 
-.PHONY: help env build up down restart logs ps run-now shell verify smoke release update
+.PHONY: help env build up down restart logs ps run-now shell verify smoke release update watchdog-install watchdog-check
 
 help: ## Affiche cette aide
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -58,6 +58,12 @@ update: ## Récupère les sources (git pull) puis reconstruit et redéploie
 	$(COMPOSE) build
 	$(COMPOSE) up -d
 	@echo "→ nouvelle version déployée (données du volume conservées)"
+
+watchdog-check: ## Exécute le contrôle de surveillance maintenant (aucun e-mail envoyé)
+	python3 scripts/watchdog.py --dry-run
+
+watchdog-install: ## Installe la surveillance (timer systemd quotidien) et teste le canal
+	./scripts/install-watchdog.sh --test
 
 release: ## Construit et pousse l'image sur le registre
 	docker build -t $(IMAGE):$(IMAGE_TAG) .

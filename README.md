@@ -42,12 +42,41 @@ Les éditions ultérieures du brief et du destinataire, faites **dans le volume*
 | `make smoke` | teste l'image (dépendances, skills, chaîne PDF) |
 | `make shell` | ouvre un shell dans le conteneur |
 | `make down` | arrête le conteneur (volume conservé) |
+| `make update` | met à jour les sources (`git pull`) puis reconstruit et redéploie |
+| `make watchdog-check` | exécute le contrôle de surveillance (sans envoyer d'e-mail) |
+| `make watchdog-install` | installe la surveillance sur l'hôte et teste le canal d'alerte |
 
 Fichiers modifiables sans reconstruire l'image (sur le volume, `./data`) :
 
 - `data/veille/config.md` — le brief de mission (le prompt éditable du rapport)
 - `data/veille/destinataire.txt` — l'adresse d'envoi
 - `data/veille/rapports/` — les rapports produits
+
+## Surveillance (chien de garde)
+
+Le conteneur délivre en `local` : **un échec serait silencieux** — seule l'absence du rapport le
+trahirait. Un chien de garde comble ce trou.
+
+Il tourne **sur l'hôte**, pas dans le conteneur — un contrôleur placé dans ce qu'il surveille ne
+pourrait signaler ni un conteneur arrêté, ni une clé d'API expirée. Il est en outre **déterministe
+(aucun LLM)** : il alerte encore quand la production, elle, est en panne.
+
+Contrôles quotidiens (10h, heure de Paris — soit 2 h après le tir du lundi) :
+
+1. le conteneur tourne ;
+2. un rapport récent et plausible existe sur le volume (date lue dans le **nom** du fichier, donc
+   immunisée contre les copies, plus un seuil de taille) ;
+3. le dernier run du job s'est terminé en succès.
+
+Comportement : alerte immédiate à la première détection, rappel tous les 3 jours tant que le
+problème persiste, puis **e-mail de rétablissement** au retour à la normale. L'état est conservé
+dans `/var/lib/veille-watchdog/state.json`, ce qui évite le spam quotidien.
+
+```bash
+make watchdog-check      # contrôler maintenant (aucun e-mail envoyé)
+make watchdog-install    # (ré)installer la surveillance et tester le canal d'alerte
+./scripts/install-watchdog.sh --uninstall
+```
 
 ## Mise à jour
 
@@ -70,7 +99,8 @@ veille-hermes/
 ├── veille/                       # brief, destinataire, prompt du job (défauts)
 ├── skills/                       # brevo-email, styled-pdf-report
 ├── docker/cont-init.d/           # hook d'amorçage du premier démarrage
-├── scripts/                      # deploy.sh, smoke-test.sh
+├── deploy/systemd/               # units de la surveillance (sur l'hôte)
+├── scripts/                      # deploy.sh, smoke-test.sh, watchdog.py, install-watchdog.sh
 └── .github/workflows/build.yml   # CI : build & push ghcr.io
 ```
 
