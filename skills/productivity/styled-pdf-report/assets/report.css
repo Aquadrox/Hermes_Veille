@@ -1,0 +1,180 @@
+/* =========================================================================
+   Styled PDF Report — stylesheet (WeasyPrint)
+   Tokens substituted by build_report.py: __HEADER__ (top-left), __FOOTER__ (bottom-left).
+   One accent colour + maturity / confidence / source badges.
+   ========================================================================= */
+
+/* ---------- Page & pagination ---------- */
+@page {
+  size: A4;
+  margin: 20mm 15mm 18mm 15mm;
+  @top-left  { content: "__HEADER__"; font-size: 7.5pt; color: #94a3b8; }
+  @top-right { content: string(chap); font-size: 7.5pt; color: #94a3b8; }
+  @bottom-left  { content: "__FOOTER__"; font-size: 7.5pt; color: #94a3b8; }
+  @bottom-right { content: counter(page) " / " counter(pages); font-size: 8pt; color: #475569; font-weight: 600; }
+}
+@page :first {
+  @top-left { content: ""; }
+  @top-right { content: ""; }
+}
+
+/* ---------- Base ---------- */
+html { font-size: 10.2pt; }
+body {
+  font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
+  color: #0f172a;
+  line-height: 1.5;
+  margin: 0;
+  hyphens: none;
+}
+p { margin: 0 0 6pt 0; }
+a { color: #0f766e; text-decoration: none; }
+strong { color: #0b1220; }
+small { font-size: 8pt; color: #64748b; }
+
+/* ---------- Document header (page 1) ---------- */
+.doc-header {
+  border-bottom: 3px solid #0f766e;
+  padding-bottom: 8pt;
+  margin-bottom: 14pt;
+}
+.doc-header h1 {
+  font-size: 20pt;
+  line-height: 1.15;
+  margin: 0 0 4pt 0;
+  color: #0b1220;
+  letter-spacing: -0.2pt;
+}
+.doc-header .subtitle { font-size: 11pt; color: #0f766e; font-weight: 600; margin: 0 0 6pt 0; }
+.doc-header .meta { font-size: 8pt; color: #64748b; margin-top: 4pt; }
+.doc-header .meta span { white-space: nowrap; margin-right: 16pt; }
+
+/* ---------- Headings ---------- */
+h2 {
+  string-set: chap content();
+  font-size: 14pt;
+  color: #0b1220;
+  margin: 16pt 0 8pt 0;
+  padding: 4pt 0 4pt 9pt;
+  border-left: 4px solid #0f766e;
+  background: #f0fdfa;
+  break-after: avoid;
+  page-break-after: avoid;
+}
+h3 { font-size: 11.5pt; color: #0b1220; margin: 10pt 0 4pt 0; break-after: avoid; page-break-after: avoid; }
+h4 { font-size: 10pt; color: #0f766e; margin: 8pt 0 3pt 0; }
+
+/* ---------- Table of contents ---------- */
+nav#TOC {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4pt;
+  padding: 8pt 12pt;
+  margin: 0 0 14pt 0;
+  font-size: 9pt;
+}
+nav#TOC::before { content: "Sommaire"; display: block; font-weight: 700; color: #0f766e; margin-bottom: 4pt; font-size: 10pt; }
+nav#TOC ul { list-style: none; margin: 0; padding-left: 0; }
+nav#TOC > ul > li { margin: 2pt 0; font-weight: 600; }
+nav#TOC ul ul { padding-left: 12pt; font-weight: 400; }
+nav#TOC a { color: #334155; }
+
+/* ---------- Key-figures banner ---------- */
+.keyfigures { margin: 0 0 12pt 0; break-inside: avoid; }
+.keyfigures .fig {
+  display: inline-block;
+  vertical-align: top;
+  box-sizing: border-box;
+  width: 31.5%;
+  margin: 0 1.2% 6pt 0;
+  border: 1px solid #e2e8f0;
+  border-top: 3px solid #0f766e;
+  border-radius: 3pt;
+  padding: 6pt 8pt;
+  background: #f8fafc;
+}
+.keyfigures .fig p { margin: 0; }
+.keyfigures .fig p:first-child { font-size: 14pt; font-weight: 700; color: #0f766e; line-height: 1.15; }
+.keyfigures .fig p + p { font-size: 7.8pt; color: #64748b; margin-top: 2pt; }
+
+/* ---------- Panels (key messages / top 3 / actions) ---------- */
+.panel { border: 1px solid #e2e8f0; border-radius: 4pt; padding: 8pt 10pt; margin: 0 0 12pt 0; break-inside: avoid; }
+.panel h3 { margin-top: 0; }
+.keymessages { background: #f0fdfa; border-left: 4px solid #0f766e; }
+.top3 { background: #f8fafc; border-left: 4px solid #1d4ed8; }
+.actions { background: #fefce8; border-left: 4px solid #b45309; }
+.panel ol, .panel ul { margin: 4pt 0 0 0; padding-left: 16pt; }
+.panel li { margin: 2pt 0; }
+
+/* ---------- Item card ---------- */
+.card { border: 1px solid #e2e8f0; border-radius: 4pt; padding: 7pt 9pt; margin: 0 0 8pt 0; break-inside: avoid; }
+.card > h3:first-child, .card > h4:first-child { margin-top: 0; }
+.card .why { color: #334155; }
+.card .why b, .card .why strong { color: #0f766e; }
+
+/* ---------- Badges ---------- */
+.badge {
+  display: inline-block;
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 1pt 5pt;
+  border-radius: 8pt;
+  margin-right: 3pt;
+  text-transform: uppercase;
+  vertical-align: 1pt;
+}
+.badge.m-annonce    { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+.badge.m-demo       { background: #fef3c7; color: #b45309; border: 1px solid #fcd34d; }
+.badge.m-pilote     { background: #dbeafe; color: #1d4ed8; border: 1px solid #93c5fd; }
+.badge.m-production { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+.badge.c-high       { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+.badge.c-mid        { background: #fef3c7; color: #b45309; border: 1px solid #fcd34d; }
+.badge.c-low        { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
+.badge.s-prim       { background: #e2e8f0; color: #0f172a; border: 1px solid #94a3b8; }
+.badge.s-press      { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+.badge.s-analyst    { background: #ede9fe; color: #6d28d9; border: 1px solid #c4b5fd; }
+.badge.s-pr         { background: #dbeafe; color: #1d4ed8; border: 1px solid #93c5fd; }
+
+/* ---------- Callouts ---------- */
+.callout { border-radius: 4pt; padding: 7pt 9pt; margin: 8pt 0; font-size: 9.4pt; break-inside: avoid; }
+.callout.retain    { background: #f0fdfa; border-left: 4px solid #0f766e; }
+.callout.vigilance { background: #fff7ed; border-left: 4px solid #d97706; }
+.callout.retain::before    { content: "À RETENIR — "; font-weight: 700; color: #0f766e; font-size: 8pt; letter-spacing: 0.03em; }
+.callout.vigilance::before { content: "POINT DE VIGILANCE — "; font-weight: 700; color: #b45309; font-size: 8pt; letter-spacing: 0.03em; }
+
+/* ---------- Tables ---------- */
+table { width: 100%; border-collapse: collapse; margin: 8pt 0; font-size: 8.6pt; break-inside: avoid; }
+thead th { background: #0f766e; color: #ffffff; text-align: left; padding: 4pt 6pt; font-weight: 600; }
+tbody td { border-bottom: 1px solid #e2e8f0; padding: 4pt 6pt; vertical-align: top; }
+tbody tr:nth-child(even) { background: #f8fafc; }
+table code { font-size: 8pt; }
+
+/* ---------- Sources ---------- */
+.sources { font-size: 8.4pt; }
+.sources ol { padding-left: 0; list-style: none; }
+.sources li { margin: 3pt 0; break-inside: avoid; }
+.src-num { display: inline-block; min-width: 13pt; font-weight: 700; color: #0f766e; }
+sup.srcref { color: #0f766e; font-weight: 700; }
+
+/* ---------- Glossary ---------- */
+.glossary dl { margin: 4pt 0; }
+.glossary dt { font-weight: 700; color: #0b1220; font-size: 9pt; margin-top: 4pt; }
+.glossary dd { margin: 0; color: #475569; font-size: 9pt; }
+
+/* ---------- Timeline ---------- */
+.timeline { border-left: 2px solid #cbd5e1; margin: 8pt 0 8pt 4pt; padding-left: 12pt; }
+.timeline .ev { margin: 0 0 6pt 0; break-inside: avoid; }
+.timeline .ev .date { font-weight: 700; color: #0f766e; font-size: 8.6pt; }
+.timeline .ev .desc { color: #334155; font-size: 9pt; }
+
+/* ---------- Charts (inline SVG) ---------- */
+.chart { margin: 8pt 0; break-inside: avoid; text-align: center; }
+.chart .chart-title { font-size: 8.6pt; font-weight: 700; color: #475569; margin-bottom: 2pt; text-align: left; }
+.chart svg { max-width: 100%; }
+.chart .src { font-size: 7.4pt; color: #94a3b8; text-align: left; }
+
+/* ---------- Misc ---------- */
+hr { border: none; border-top: 1px solid #e2e8f0; margin: 12pt 0; }
+.note { background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 4pt; padding: 6pt 8pt; font-size: 8.8pt; color: #475569; }
+.pagebreak { break-after: page; page-break-after: always; }

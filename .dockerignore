@@ -1,0 +1,15 @@
+# Contexte de build : on exclut tout ce qui n'a pas à entrer dans l'image
+# (secrets, données persistantes, historique git).
+.env
+.env.*
+!.env.example
+data/
+.git/
+.gitignore
+*.pdf
+veille/rapports/
+__pycache__/
+*.py[cod]
+docs/
+README.md
+CHANGELOG.md

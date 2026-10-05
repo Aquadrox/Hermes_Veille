@@ -1,0 +1,18 @@
+# --- Secrets (jamais versionnés) ---
+.env
+.env.*
+!.env.example
+
+# --- Données persistantes du conteneur (volume /opt/data) ---
+data/
+
+# --- Artefacts produits ---
+*.pdf
+!docs/**/*.pdf
+veille/rapports/
+
+# --- Divers ---
+__pycache__/
+*.py[cod]
+.DS_Store
+*.log

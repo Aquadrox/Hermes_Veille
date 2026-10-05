@@ -1,0 +1,97 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+#
+# 50-seed-veille — amorçage du premier démarrage.
+#
+# S'exécute une seule fois (marqueur), après les hooks de l'image officielle
+# (01-hermes-setup, 02-reconcile-profiles). Il :
+#   1. crée les répertoires de la veille sur le volume
+#   2. copie les assets par défaut uniquement s'ils sont absents (préserve les éditions)
+#   3. règle le modèle et le fuseau horaire dans config.yaml
+#   4. crée le job cron s'il n'existe pas déjà (idempotent)
+#
+# Volontairement conservateur : tout est « si absent », jamais destructeur.
+# IMPORTANT : les répertoires sont créés EN TANT QUE hermes (sinon ils
+# appartiennent à root et les écritures suivantes échouent en permission).
+
+HERMES_HOME="${HERMES_HOME:-/opt/data}"
+VEILLE_DIR="$HERMES_HOME/veille"
+DEFAULTS="/opt/hermes/veille-defaults"
+MARKER="$VEILLE_DIR/.seeded"
+HERMES_BIN="/opt/hermes/.venv/bin/hermes"
+JOB_NAME="Veille technologique hebdomadaire"
+
+log() { echo "[seed-veille] $*"; }
+
+# Même schéma que le hook officiel : on ne « drop » que si on est root.
+# /command/ n'est pas toujours dans le PATH (docker exec), d'où la résolution.
+S6_SETUIDGID="$(command -v s6-setuidgid 2>/dev/null || echo /command/s6-setuidgid)"
+as_hermes() {
+    [ "$(id -u)" = 0 ] || { "$@"; return; }
+    "$S6_SETUIDGID" hermes "$@"
+}
+
+# --- 1. Répertoires (à chaque boot, idempotent, propriété hermes) ---
+as_hermes mkdir -p "$VEILLE_DIR/rapports" \
+    || { mkdir -p "$VEILLE_DIR/rapports" && chown -R hermes:hermes "$VEILLE_DIR" 2>/dev/null; } \
+    || log "ERREUR : impossible de créer $VEILLE_DIR"
+
+if [ -f "$MARKER" ]; then
+    log "déjà amorcé — rien à faire"
+    exit 0
+fi
+
+log "premier démarrage : amorçage des assets et du job"
+
+# --- 2. Assets (jamais écrasés s'ils existent) ---
+for f in config.md destinataire.txt job-prompt.md; do
+    if [ ! -f "$VEILLE_DIR/$f" ] && [ -f "$DEFAULTS/$f" ]; then
+        if as_hermes cp "$DEFAULTS/$f" "$VEILLE_DIR/$f"; then
+            log "asset seedé : $f"
+        else
+            log "ERREUR : copie de $f impossible (propriété du répertoire ?)"
+        fi
+    fi
+done
+
+# --- 3. Modèle + fuseau horaire ---
+# Le scheduler cron lit la timezone de la config Hermes (pas seulement $TZ).
+if [ -x "$HERMES_BIN" ]; then
+    as_hermes "$HERMES_BIN" config set model.default deepseek-v4-pro >/dev/null 2>&1 \
+        && log "model.default = deepseek-v4-pro" || log "avertissement : model.default non réglé"
+    as_hermes "$HERMES_BIN" config set model.provider deepseek >/dev/null 2>&1 \
+        && log "model.provider = deepseek" || log "avertissement : model.provider non réglé"
+    as_hermes "$HERMES_BIN" config set timezone Europe/Paris >/dev/null 2>&1 \
+        && log "timezone = Europe/Paris" || log "avertissement : timezone non réglée"
+fi
+
+# --- 4. Job cron (idempotent) ---
+if [ ! -x "$HERMES_BIN" ]; then
+    log "avertissement : binaire hermes introuvable ($HERMES_BIN) — job non créé"
+elif as_hermes "$HERMES_BIN" cron list 2>/dev/null | grep -qF "$JOB_NAME"; then
+    log "job déjà présent — non recréé"
+elif [ -f "$VEILLE_DIR/job-prompt.md" ]; then
+    # `deliver local` : le conteneur n'a pas de chat Telegram d'origine (option A) ;
+    # le rapport part par e-mail via le skill brevo-email.
+    if as_hermes "$HERMES_BIN" cron create "every monday 8am" \
+            "$(cat "$VEILLE_DIR/job-prompt.md")" \
+            --name "$JOB_NAME" \
+            --skill brevo-email \
+            --skill styled-pdf-report \
+            --workdir "$VEILLE_DIR" \
+            --deliver local; then
+        log "job cron créé : « $JOB_NAME » (lundi 8h, e-mail seul)"
+    else
+        log "ERREUR : échec de la création du job cron (à créer manuellement)"
+    fi
+else
+    log "avertissement : job-prompt.md absent — job non créé"
+fi
+
+# --- Marqueur ---
+as_hermes touch "$MARKER" 2>/dev/null || touch "$MARKER" 2>/dev/null || true
+
+# --- Contrôle final ---
+log "contenu de $VEILLE_DIR :"
+ls -la "$VEILLE_DIR" 2>/dev/null | sed 's/^/  /'
+log "amorçage terminé"
