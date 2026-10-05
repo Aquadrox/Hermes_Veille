@@ -8,7 +8,7 @@ CONTAINER  ?= veille-hermes
 
 .DEFAULT_GOAL := help
 
-.PHONY: help env build up down restart logs ps run-now shell verify smoke release
+.PHONY: help env build up down restart logs ps run-now shell verify smoke release update
 
 help: ## Affiche cette aide
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -52,6 +52,12 @@ shell: ## Ouvre un shell dans le conteneur
 
 smoke: ## Construit l'image et exécute le test de fumée
 	IMAGE=$(IMAGE):$(IMAGE_TAG) ./scripts/smoke-test.sh
+
+update: ## Récupère les sources (git pull) puis reconstruit et redéploie
+	git pull --ff-only
+	$(COMPOSE) build
+	$(COMPOSE) up -d
+	@echo "→ nouvelle version déployée (données du volume conservées)"
 
 release: ## Construit et pousse l'image sur le registre
 	docker build -t $(IMAGE):$(IMAGE_TAG) .

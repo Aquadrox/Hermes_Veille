@@ -7,9 +7,18 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+### Modifié
+
+- **Bascule effectuée** : le job de veille de l'hôte est mis en pause ; le conteneur est désormais
+  la seule source de production. L'historique des rapports (3 semaines) a été migré dans le volume
+  (`/opt/data/veille/rapports/`) afin de préserver la contrainte anti-répétition.
+
+### Ajouté
+
+- Cible `make update` — `git pull` puis reconstruction et redéploiement : le cycle de mise à jour.
+
 ### Prévu
 
-- Bascule de production : mise en pause du job de l'hôte, démarrage du conteneur seul.
 - Alerte en cas d'échec : le conteneur délivre en `local` (pas de chat), donc un échec est
   silencieux — prévoir une notification (cron séparé ou supervision externe).
 
