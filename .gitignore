@@ -17,3 +17,10 @@ __pycache__/
 .DS_Store
 *.log
 backups/
+
+# --- Artefacts de test ---
+.coverage
+coverage.xml
+junit.xml
+.pytest_cache/
+.ruff_cache/

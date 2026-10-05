@@ -21,3 +21,6 @@ tests/
 CONTRIBUTING.md
 requirements-dev.txt
 .hadolint.yaml
+.coverage
+coverage.xml
+junit.xml
