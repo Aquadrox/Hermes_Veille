@@ -2,16 +2,14 @@
 #
 #   docker compose up -d          (après avoir rempli .env depuis .env.example)
 #
-# Le conteneur fait tourner le gateway Hermes (dont dépend le scheduler cron)
-# et n'expose aucun port : il n'a besoin que d'accès sortants (recherche web,
-# API DeepSeek, API Brevo).
+# Le conteneur fait tourner le gateway Hermes (dont dépend le scheduler cron) et
+# l'interface web de gestion des veilles. L'interface n'est publiée que sur
+# 127.0.0.1 de l'hôte : on y accède par tunnel SSH, jamais depuis le réseau.
 services:
   veille:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        HERMES_BASE: ${HERMES_BASE:-nousresearch/hermes-agent:latest}
     image: ${IMAGE:-ghcr.io/aquadrox/hermes-veille}:${IMAGE_TAG:-latest}
     container_name: veille-hermes
     restart: unless-stopped
@@ -23,8 +21,12 @@ services:
       - HERMES_UID=${HERMES_UID:-10000}
       - HERMES_GID=${HERMES_GID:-10000}
     volumes:
-      # Source de vérité de tout l'état : config, secrets, skills, cron, rapports.
+      # Source de vérité de tout l'état : config, secrets, skills, cron, veilles.
       - ./data:/opt/data
+    ports:
+      # ⚠️ TOUJOURS préfixé par 127.0.0.1 (vérifié par la CI) : accès par tunnel SSH
+      #   ssh -N -L 8088:127.0.0.1:8088 <utilisateur>@<serveur>
+      - "127.0.0.1:${VEILLE_UI_PORT:-8088}:8088"
     command: ["gateway", "run"]
     deploy:
       resources:

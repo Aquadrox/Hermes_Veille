@@ -1,0 +1,5 @@
+#!/bin/sh
+# veillectl — gestion des veilles (voir `veillectl --help`).
+export HERMES_HOME="${HERMES_HOME:-/opt/data}"
+export PYTHONPATH="/opt/veille-app${PYTHONPATH:+:$PYTHONPATH}"
+exec /opt/veille-app/.venv/bin/python -m veille_core "$@"
