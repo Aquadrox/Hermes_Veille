@@ -3,6 +3,9 @@ ignored:
   # USER root final : s6-overlay (/init) doit démarrer en root pour prendre possession
   # du volume ; les services descendent en `hermes` (s6-setuidgid). Idem image amont.
   - DL3002
+  # « USER root » par son nom (hadolint >= 2.15) : root est toujours l'uid 0 ; même
+  # justification que DL3002 ci-dessus.
+  - DL3066
   # Paquets Debian non épinglés : la base est figée par le tag amont et la CI
   # reconstruit chaque semaine pour récupérer les correctifs de sécurité.
   - DL3008

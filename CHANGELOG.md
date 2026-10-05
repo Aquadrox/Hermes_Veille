@@ -18,6 +18,8 @@ Mise à jour des actions GitHub et Dependabot groupé.
   `actions/upload-artifact` 4 → 7, `docker/setup-buildx-action` 3 → 4,
   `docker/metadata-action` 5 → 6, `docker/build-push-action` 6 → 7, `docker/login-action`
   3 → 4, `hadolint/hadolint-action` 3.1 → 3.5. Reprend les PR Dependabot #2, #3, #4, #7 et #9.
+  hadolint 2.15 (embarqué par l'action) ajoute la règle DL3066 : exception justifiée pour le
+  `USER root` voulu (même raison que DL3002).
 - Dependabot : **une PR groupée par écosystème et par mois** (au lieu d'une PR par paquet).
   Ces PR servent de signal : leur contenu est repris dans la prochaine branche
   `release/vX.Y.Z`, car chaque merge sur `main` doit incrémenter la version.
