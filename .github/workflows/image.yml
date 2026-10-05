@@ -40,7 +40,7 @@ jobs:
           echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/hermes-veille" >> "$GITHUB_ENV"
 
       - name: Préparer Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Calculer les étiquettes
         id: meta
