@@ -1,0 +1,14 @@
+# Configuration des outils (le projet n'est pas un paquet installable :
+# veille_core et veille_ui sont copiés dans l'image, voir Dockerfile).
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["veille_ui/static"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501", "B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

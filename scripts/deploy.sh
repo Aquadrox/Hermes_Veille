@@ -59,39 +59,41 @@ log "démarrage du conteneur"
 docker compose up -d
 
 # --- 5. Attente de l'amorçage ---
-log "attente du démarrage du gateway (max 120 s)"
+log "attente de l'amorçage (max 120 s)"
 for i in $(seq 1 24); do
-    if docker exec "$CONTAINER" test -f /opt/data/veille/.seeded 2>/dev/null; then
-        ok "amorçage détecté (assets + job)"
+    if docker exec "$CONTAINER" test -f /opt/data/veilles/.bootstrapped 2>/dev/null; then
+        ok "amorçage détecté (veilles réconciliées)"
         break
     fi
     sleep 5
-    [ "$i" = 24 ] && fail "amorçage non détecté après 120 s — voir : docker compose logs"
+    [ "$i" = 24 ] && fail "amorçage non détecté après 120 s — voir : docker compose logs | grep seed-veille"
 done
 
 # --- 6. Vérifications ---
 echo
-log "vérification du job cron"
-if docker exec "$CONTAINER" hermes cron list 2>/dev/null | grep -q "Veille technologique"; then
-    docker exec "$CONTAINER" hermes cron list 2>/dev/null | grep -A6 "Veille technologique" | head -10
-    ok "job présent"
+log "veilles et jobs"
+if docker exec "$CONTAINER" veillectl list; then
+    ok "veilles lisibles"
 else
-    fail "job absent — vérifie les logs d'amorçage : docker compose logs | grep seed-veille"
+    fail "veillectl en échec — voir : docker compose logs | grep seed-veille"
 fi
 
 echo
-log "assets sur le volume"
-docker exec "$CONTAINER" ls -la /opt/data/veille/ 2>/dev/null || true
+log "interface web (127.0.0.1:8088)"
+if grep -qE '^VEILLE_UI_PASSWORD_HASH=.+' .env; then
+    code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8088/login || true)
+    if [ "$code" = 200 ]; then ok "interface joignable (tunnel : make tunnel)"; else fail "interface injoignable (HTTP $code)"; fi
+else
+    echo "  interface désactivée : génère un mot de passe avec  make ui-password"
+fi
 
 echo
 ok "déploiement terminé"
 cat <<'EOF'
 
 Prochaines étapes :
-  make run-now     # déclencher un rapport immédiatement (test de bout en bout)
-  make logs        # suivre les logs
-  make verify      # revérifier l'état
-
-⚠️  Si le job tourne déjà sur l'hôte, désactive-le pour éviter un double envoi :
-      hermes cron pause <id>
+  make veilles                    # lister les veilles
+  make run-now VEILLE=<slug>      # déclencher un rapport immédiatement (test de bout en bout)
+  make tunnel                     # accès à l'interface web par tunnel SSH
+  make logs                       # suivre les logs
 EOF

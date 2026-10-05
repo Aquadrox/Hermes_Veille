@@ -1,0 +1,8 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Compagnon de ./run : interface désactivée → 125 (« ne pas relancer »),
+# sinon 0 (s6 relance le service après un arrêt inattendu).
+if [ "${VEILLE_UI_ENABLED:-true}" != "true" ] || [ -z "${VEILLE_UI_PASSWORD_HASH:-}" ] || [ -z "${VEILLE_UI_SECRET:-}" ]; then
+    exit 125
+fi
+exit 0

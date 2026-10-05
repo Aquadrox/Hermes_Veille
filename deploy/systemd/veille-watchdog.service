@@ -1,12 +1,13 @@
 [Unit]
-Description=Chien de garde de la veille technologique (contrôle de production)
+Description=Chien de garde des veilles (contrôle de production)
 Documentation=https://github.com/Aquadrox/Hermes_Veille
 After=docker.service network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /root/veille-hermes/scripts/watchdog.py
+# Chemins réécrits par install-watchdog.sh pour pointer sur le dépôt installé.
+ExecStart=/usr/bin/python3 /root/veille-hermes/scripts/watchdog.py --volume /root/veille-hermes/data --env-file /root/veille-hermes/.env
 # Le code de sortie 1 signifie « problème détecté » : la sonde a parfaitement
 # fonctionné et a alerté par e-mail. Ce n'est donc PAS un échec du service
 # (sinon systemd le marquerait « failed » et polluerait le journal).

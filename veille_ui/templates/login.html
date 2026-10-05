@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Connexion — Veilles{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>Connexion</h1>
+  {% if not configured %}
+  <p class="muted">L'interface n'est pas configurée : définis <code>VEILLE_UI_PASSWORD_HASH</code> et
+  <code>VEILLE_UI_SECRET</code> dans <code>.env</code> (<code>make ui-password</code>), puis recrée le conteneur.</p>
+  {% else %}
+  <form method="post" action="/login">
+    <label>Mot de passe
+      <input type="password" name="password" autocomplete="current-password" required autofocus>
+    </label>
+    <button class="primary">Se connecter</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}{{ v.name }} — Veilles{% endblock %}
+{% block content %}
+{% set st = row.status %}{% set cls = status_class(row) %}
+<div class="head">
+  <h1>{{ v.name }} <span class="badge {{ cls }}">{% if not st.exists %}job absent{% elif row.running %}en cours{% elif st.paused %}en pause{% elif cls == 'bad' %}en échec{% else %}actif{% endif %}</span></h1>
+  <div class="actions">
+    {% if st.exists %}
+      {% if st.paused %}
+      <form method="post" action="/veilles/{{ v.slug }}/resume" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Reprendre</button></form>
+      {% else %}
+      <form method="post" action="/veilles/{{ v.slug }}/pause" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Pause</button></form>
+      <form method="post" action="/veilles/{{ v.slug }}/run" class="inline" data-confirm="Lancer maintenant ? Un rapport sera envoyé aux destinataires."><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary"{% if row.running %} disabled{% endif %}>Lancer maintenant</button></form>
+      {% endif %}
+    {% endif %}
+    <form method="post" action="/veilles/{{ v.slug }}/test-email" class="inline" data-confirm="Envoyer un e-mail de test à {{ row.recipients|length }} destinataire(s) ?"><input type="hidden" name="csrf" value="{{ csrf }}"><button>E-mail de test</button></form>
+    <a class="button" href="/veilles/{{ v.slug }}/edit">Modifier</a>
+  </div>
+</div>
+<p class="muted">{{ v.subject }}</p>
+
+<section class="card">
+  <dl class="grid2">
+    <div><dt>Fréquence</dt><dd>{{ row.schedule_human }} <code>{{ v.schedule }}</code></dd></div>
+    <div><dt>Prochaines exécutions</dt><dd>{% if st.paused %}— (en pause){% else %}{% for r in next_runs %}{{ r|dt }}{{ ", " if not loop.last }}{% endfor %}{% endif %}</dd></div>
+    <div><dt>Dernier run</dt><dd>{{ st.last_run_at|dt }} {% if st.last_status %}({{ st.last_status }}){% endif %}</dd></div>
+    <div><dt>Destinataires</dt><dd>{{ row.recipients|join(", ") or "—" }}</dd></div>
+    <div><dt>Seuil d'alerte (chien de garde)</dt><dd>{{ (v.max_age_hours / 24)|round(1) }} jours sans rapport</dd></div>
+    <div><dt>Job Hermes</dt><dd><code>{{ v.job_id or "—" }}</code></dd></div>
+  </dl>
+  {% if st.last_error %}<p class="err small">Dernière erreur : {{ st.last_error }}</p>{% endif %}
+</section>
+
+{% if logs %}
+<section class="card">
+  <h2>Lancements manuels</h2>
+  <div hx-get="/veilles/{{ v.slug }}/runs/{{ logs[0] }}" hx-trigger="load" hx-swap="outerHTML"></div>
+  {% if logs|length > 1 %}
+  <p class="small muted">Précédents : {% for l in logs[1:] %}<a href="/veilles/{{ v.slug }}/runs/{{ l }}" target="_blank" rel="noopener">{{ l }}</a>{{ " · " if not loop.last }}{% endfor %}</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Rapports</h2>
+  {% if reports %}
+  <table class="list">
+    <thead><tr><th>Date</th><th>PDF</th><th>Source Markdown</th></tr></thead>
+    <tbody>
+    {% for r in reports[:30] %}
+      <tr>
+        <td>{{ r.date }}</td>
+        <td>{% if r.pdf %}<a href="/veilles/{{ v.slug }}/reports/{{ r.pdf }}" target="_blank" rel="noopener">{{ r.pdf }}</a> <span class="muted small">{{ r.size|size }}</span>{% else %}—{% endif %}</td>
+        <td>{% if r.md %}<a href="/veilles/{{ v.slug }}/reports/{{ r.md }}" target="_blank" rel="noopener">{{ r.md }}</a>{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">Aucun rapport pour l'instant.</p>{% endif %}
+</section>
+
+{% if runs %}
+<section class="card">
+  <h2>Historique d'exécution (Hermes)</h2>
+  <table class="list">
+    <thead><tr><th>Date</th><th>Statut</th><th>Origine</th><th>Erreur</th></tr></thead>
+    <tbody>
+    {% for r in runs %}<tr><td>{{ r.at|dt }}</td><td>{{ r.status }}</td><td>{{ r.source }}</td><td class="small">{{ r.error or "" }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="card danger">
+  <h2>Archiver</h2>
+  <p class="small muted">Supprime le job planifié et déplace la veille (brief, rapports, destinataires) dans
+    <code>veilles/.archive/</code>. Rien n'est effacé.</p>
+  <form method="post" action="/veilles/{{ v.slug }}/archive" data-confirm="Archiver « {{ v.name }} » ? Elle ne sera plus exécutée.">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger">Archiver la veille</button>
+  </form>
+</section>
+{% endblock %}

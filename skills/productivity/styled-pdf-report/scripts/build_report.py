@@ -97,31 +97,8 @@ def build_header(title, subtitle, meta):
     return f'<div class="doc-header"><h1>{esc(title)}</h1>{sub}<div class="meta">{metas}</div></div>'
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--md", required=True)
-    ap.add_argument("--out", required=True)
-    ap.add_argument("--title", required=True)
-    ap.add_argument("--subtitle", default="")
-    ap.add_argument("--meta", default="")
-    ap.add_argument("--header", default="")
-    ap.add_argument("--footer", default="")
-    ap.add_argument("--accent", default="#0f766e")
-    ap.add_argument("--data", default=None)
-    ap.add_argument("--css", default=None)
-    ap.add_argument("--toc-depth", default="2")
-    args = ap.parse_args()
-
-    if not os.path.exists(args.md):
-        print(f"ERREUR: introuvable {args.md}", file=sys.stderr)
-        sys.exit(2)
-
-    css_path = find_css(args.css)
-    if not os.path.exists(css_path):
-        print(f"ERREUR: feuille de style introuvable ({css_path})", file=sys.stderr)
-        sys.exit(2)
-
-    tmp = tempfile.mkdtemp(prefix="report-build-")
+def build(args, css_path, tmp):
+    """Markdown -> HTML (pandoc) -> charts injected -> PDF (WeasyPrint), inside `tmp`."""
     header_path = os.path.join(tmp, "header.html")
     css_out = os.path.join(tmp, "report.css")
     html_path = os.path.join(tmp, "report.html")
@@ -146,14 +123,15 @@ def main():
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         print("pandoc error:", r.stderr, file=sys.stderr)
-        sys.exit(1)
+        raise SystemExit(1)
 
     with open(html_path, encoding="utf-8") as f:
         html_doc = f.read()
 
     charts = []
     if args.data and os.path.exists(args.data):
-        charts = json.load(open(args.data, encoding="utf-8")).get("charts", [])
+        with open(args.data, encoding="utf-8") as f:
+            charts = json.load(f).get("charts", [])
     n_slots = len(SLOT_RE.findall(html_doc))
     if n_slots < len(charts):
         for c in charts[n_slots:]:
@@ -174,7 +152,35 @@ def main():
     r2 = subprocess.run(["weasyprint", html_path, args.out], capture_output=True, text=True)
     if r2.returncode != 0:
         print("weasyprint error:", r2.stderr, file=sys.stderr)
-        sys.exit(1)
+        raise SystemExit(1)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--md", required=True)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--title", required=True)
+    ap.add_argument("--subtitle", default="")
+    ap.add_argument("--meta", default="")
+    ap.add_argument("--header", default="")
+    ap.add_argument("--footer", default="")
+    ap.add_argument("--accent", default="#0f766e")
+    ap.add_argument("--data", default=None)
+    ap.add_argument("--css", default=None)
+    ap.add_argument("--toc-depth", default="2")
+    args = ap.parse_args()
+
+    if not os.path.exists(args.md):
+        print(f"ERREUR: introuvable {args.md}", file=sys.stderr)
+        sys.exit(2)
+
+    css_path = find_css(args.css)
+    if not os.path.exists(css_path):
+        print(f"ERREUR: feuille de style introuvable ({css_path})", file=sys.stderr)
+        sys.exit(2)
+
+    with tempfile.TemporaryDirectory(prefix="report-build-") as tmp:
+        build(args, css_path, tmp)
 
     print(f"OK: PDF généré -> {args.out}")
 

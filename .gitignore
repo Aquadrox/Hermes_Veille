@@ -16,3 +16,4 @@ __pycache__/
 *.py[cod]
 .DS_Store
 *.log
+backups/

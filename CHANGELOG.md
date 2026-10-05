@@ -7,13 +7,80 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.2.1] — 2026-10-05
+
+Multi-veilles et interface web de gestion. Migration automatique depuis la v0.2.
+
+### Ajouté
+
+- **Plusieurs veilles** : chacune dans `data/veilles/<slug>/` (`veille.json`, brief `config.md`,
+  `recipients.txt`, rapports), avec sa fréquence, ses destinataires et sa mise en forme PDF.
+- `veille_core/` — cœur partagé : stockage, fréquences (préréglages ↔ cron, aperçu, seuil de
+  fraîcheur), rendu du prompt, **adaptateur unique** vers `hermes cron`, opérations métier
+  (création, modification, pause, reprise, lancement, archivage, réconciliation) et journal d'audit.
+- `veillectl` — CLI de gestion des veilles dans le conteneur.
+- Fichier `VERSION` (source unique du numéro de version) : affiché par `veillectl --version`
+  et en pied de page de l'interface, copié dans l'image.
+- **Interface web** `veille_ui/` (FastAPI + Jinja + HTMX) : tableau de bord, création et édition
+  (fréquence avec aperçu, destinataires, brief avec aperçu, PDF), lancement immédiat avec journal
+  en direct, rapports, historique, e-mail de test, archivage, page santé (crédits Brevo, audit).
+  Publiée **sur 127.0.0.1 uniquement** (accès par tunnel SSH), mot de passe argon2, session
+  signée, CSRF, anti-force brute, contrôle de l'en-tête `Host`, CSP stricte. Service s6 dédié :
+  une panne de l'interface n'affecte pas le gateway.
+- Gabarit générique du prompt (`veille/job-prompt.tmpl.md`) et modèles de brief
+  (`veille/templates/industrie-4-0.md`, `veille/templates/vierge.md`).
+- `brevo_send.py` : plusieurs destinataires par fichier, `--bcc` / `--bcc-file` (les
+  destinataires ne se voient pas), `--env-file`.
+- Tests unitaires (pytest, faux binaire `hermes`) : cœur, migration, watchdog, skills, interface.
+- CI : lint (ruff, shellcheck), tests, contrôle « port publié sur 127.0.0.1 uniquement », puis
+  build → **smoke test** → push (plus de publication d'une image non testée). Dependabot.
+- Smoke test étendu : contrat de la CLI `hermes cron`, cycle de vie `veillectl` contre le vrai
+  Hermes, démarrage de l'interface.
+- Cibles `make veilles`, `make run-now VEILLE=<slug>`, `make ui-password`, `make tunnel`,
+  `make backup`, `make test`, `make lint`.
+
 ### Modifié
+
+- **Image amont épinglée** (`nousresearch/hermes-agent:v2026.9.24`) au lieu de `latest`.
+- Hook `50-seed-veille` : s'exécute à **chaque** démarrage (migration, amorçage, réconciliation).
+  Le job ne contient plus qu'un prompt court renvoyant vers `job-prompt.md`, re-rendu au boot :
+  une nouvelle image propage ses corrections de prompt sans recréer les jobs. Auparavant, le
+  texte du prompt était figé dans le job à sa création.
+- Modèle et fournisseur configurables (`VEILLE_MODEL`, `VEILLE_PROVIDER`).
+- **Chien de garde multi-veilles** : seuil de fraîcheur propre à chaque veille, veilles en pause
+  ignorées, lecture directe de `cron/jobs.json`, alertes à `ALERT_EMAIL` (et non plus au
+  destinataire du rapport), envoi avec le skill et le `.env` **du dépôt** : plus aucune
+  dépendance à une installation Hermes sur l'hôte.
+- `build_report.py` : répertoire temporaire supprimé après usage, fichiers correctement fermés.
+
+### Corrigé
+
+- Surveillance : `install-watchdog.sh` ne réécrivait que le chemin du script, pas celui du
+  volume. Installé ailleurs que dans `/root/veille-hermes`, le chien de garde surveillait un
+  volume inexistant.
+- `brevo_send.py --to-file` ignorait toutes les adresses après la première.
+- `make run-now` prenait le premier identifiant de job trouvé (faux dès deux jobs).
+
+### Supprimé
+
+- `veille/destinataire.txt` (adresse personnelle versionnée) : les destinataires vivent dans le
+  volume, et la veille par défaut lit `VEILLE_RECIPIENTS`.
+
+### Migration depuis la v0.2
+
+Automatique au premier démarrage : `data/veille/` → `data/veilles/industrie-4-0/`, historique et
+job conservés (édité, pas recréé), lien de compatibilité `data/veille`. Annulée proprement si
+l'édition du job échoue. Côté hôte : ajouter `ALERT_EMAIL` au `.env`, puis `make watchdog-install`.
+
+### Bascule (avant 0.2.1)
+
+#### Modifié
 
 - **Bascule effectuée** : le job de veille de l'hôte est mis en pause ; le conteneur est désormais
   la seule source de production. L'historique des rapports (3 semaines) a été migré dans le volume
   (`/opt/data/veille/rapports/`) afin de préserver la contrainte anti-répétition.
 
-### Ajouté
+#### Ajouté
 
 - Cible `make update` — `git pull` puis reconstruction et redéploiement : le cycle de mise à jour.
 - **Surveillance (chien de garde)** — `scripts/watchdog.py`, `scripts/install-watchdog.sh` et un

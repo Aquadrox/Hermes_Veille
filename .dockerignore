@@ -13,3 +13,8 @@ __pycache__/
 docs/
 README.md
 CHANGELOG.md
+backups/
+tests/
+.github/
+.ruff_cache/
+.pytest_cache/

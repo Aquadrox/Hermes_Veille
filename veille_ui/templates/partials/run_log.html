@@ -1,0 +1,5 @@
+<div id="run-log"{% if running %} hx-get="/veilles/{{ slug }}/runs/{{ name }}" hx-trigger="every 5s" hx-swap="outerHTML"{% endif %}>
+  <p class="small">Journal <code>{{ name }}</code>
+    {% if running %}<span class="badge run">en cours…</span>{% else %}<span class="badge">terminé</span>{% endif %}</p>
+  <pre class="log">{{ text or "(vide pour l'instant)" }}</pre>
+</div>

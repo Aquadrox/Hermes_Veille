@@ -1,7 +1,7 @@
 ---
 name: brevo-email
 description: "Use when sending email via Brevo API (attachments)."
-version: 1.0.0
+version: 1.1.0
 author: agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -58,8 +58,14 @@ python3 "$SCRIPT" --to someone@example.com --subject "Weekly report" \
 python3 "$SCRIPT" --to a@b.com --cc c@d.com --subject "X" \
   --html "<h1>Hi</h1>" --from-name "Alerts"
 
-# Recipient read from a file (first non-empty line)
+# Recipients read from a file (one address per line, `#` comments allowed)
 python3 "$SCRIPT" --to-file recipients.txt --subject "Digest" --text "Body"
+
+# Several recipients who must NOT see each other: BCC (the sender is the visible To)
+python3 "$SCRIPT" --bcc-file recipients.txt --subject "Digest" --text "Body" --verify
+
+# Credentials from another .env (e.g. on a host without Hermes)
+python3 "$SCRIPT" --env-file /path/to/.env --to ops@x.com --subject "Alert" --text "…"
 ```
 
 Or raw curl:

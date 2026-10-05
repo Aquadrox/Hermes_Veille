@@ -35,8 +35,13 @@ docker run --rm --entrypoint /bin/bash "$REF" -lc '
              /opt/hermes/skills/productivity/styled-pdf-report/SKILL.md \
              /opt/hermes/skills/productivity/styled-pdf-report/scripts/build_report.py \
              /opt/hermes/skills/productivity/styled-pdf-report/assets/report.css \
-             /opt/hermes/veille-defaults/config.md \
-             /etc/cont-init.d/50-seed-veille ; do
+             /opt/hermes/veille-defaults/job-prompt.tmpl.md \
+             /opt/hermes/veille-defaults/templates/industrie-4-0.md \
+             /opt/hermes/veille-defaults/templates/vierge.md \
+             /etc/cont-init.d/50-seed-veille \
+             /etc/s6-overlay/s6-rc.d/veille-ui/run \
+             /etc/s6-overlay/s6-rc.d/user/contents.d/veille-ui \
+             /usr/local/bin/veillectl ; do
         [ -f "$s" ] || { echo "MANQUANT: $s"; exit 1; }
     done
     echo "  skills et assets : présents"
@@ -77,6 +82,63 @@ MD
     echo "  PDF généré : $(stat -c%s "$T/r.pdf") octets"
 ' || { fail "chaîne PDF en échec"; exit 1; }
 ok "chaîne PDF fonctionnelle"
+
+# --- 4. Contrat avec la CLI Hermes (options utilisées par veille_core/hermes.py) ---
+log "contrat de la CLI \`hermes cron\`"
+docker run --rm --entrypoint /bin/bash "$REF" -lc '
+    set -e
+    H=/opt/hermes/.venv/bin/hermes
+    c=$($H cron create --help); e=$($H cron edit --help)
+    for f in --name --workdir --deliver --skill --model --provider --paused; do
+        echo "$c" | grep -q -- "$f" || { echo "cron create sans $f"; exit 1; }
+    done
+    for f in --name --schedule --prompt --workdir --model; do
+        echo "$e" | grep -q -- "$f" || { echo "cron edit sans $f"; exit 1; }
+    done
+    for sub in pause resume run remove runs; do $H cron "$sub" --help >/dev/null; done
+    echo "  options attendues : présentes"
+' || { fail "la CLI hermes cron a changé — adapter veille_core/hermes.py"; exit 1; }
+ok "CLI hermes cron compatible"
+
+# --- 5. veillectl de bout en bout contre le VRAI Hermes (sans gateway) ---
+log "veillectl : création, pause, réconciliation, archivage"
+docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h "$REF" -lc '
+    set -e
+    mkdir -p /tmp/h
+    veillectl create --name "Smoke" --schedule "0 8 * * 1" --recipients smoke@example.org --template vierge
+    veillectl list | grep -q "^smoke"
+    grep -q -- "--bcc-file /tmp/h/veilles/smoke/recipients.txt" /tmp/h/veilles/smoke/job-prompt.md
+    veillectl pause smoke && veillectl list | grep -q "en pause"
+    veillectl resume smoke
+    veillectl reconcile | grep -q "smoke: ok"
+    veillectl archive smoke
+    echo "  cycle de vie : OK"
+' || { fail "veillectl en échec contre la CLI Hermes"; exit 1; }
+ok "veillectl fonctionnel"
+
+# --- 6. Interface web : démarre et exige une session ---
+log "interface web"
+docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h \
+    -e VEILLE_UI_SECRET=smoke -e VEILLE_UI_PASSWORD_HASH=x "$REF" -lc '
+    set -e
+    mkdir -p /tmp/h && cd /opt/veille-app
+    .venv/bin/uvicorn veille_ui.app:app --host 127.0.0.1 --port 8088 >/tmp/ui.log 2>&1 &
+    for _ in $(seq 1 30); do .venv/bin/python -c "import urllib.request as u; u.urlopen(\"http://127.0.0.1:8088/healthz\")" 2>/dev/null && break; sleep 1; done
+    .venv/bin/python - <<"PY"
+import urllib.error, urllib.request
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None
+op = urllib.request.build_opener(NoRedirect)
+try:
+    op.open("http://127.0.0.1:8088/")
+    raise SystemExit("page protégée accessible sans session")
+except urllib.error.HTTPError as e:
+    assert e.code == 303 and e.headers["location"] == "/login", e.code
+print("  / sans session -> 303 /login : OK")
+PY
+' || { fail "interface web en échec"; exit 1; }
+ok "interface web fonctionnelle"
 
 echo
 ok "smoke test réussi — l'image est prête"

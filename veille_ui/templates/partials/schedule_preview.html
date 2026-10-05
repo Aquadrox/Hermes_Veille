@@ -1,0 +1,6 @@
+{% if error %}
+<p class="err small">{{ error }}</p>
+{% else %}
+<p class="small"><strong>{{ human }}</strong> <code>{{ expr }}</code><br>
+<span class="muted">Prochaines exécutions : {% for r in runs %}{{ r|dt }}{{ ", " if not loop.last }}{% endfor %}</span></p>
+{% endif %}

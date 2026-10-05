@@ -1,0 +1,28 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+#
+# veille-ui — interface web de gestion des veilles (service s6-rc supervisé,
+# même schéma que le service `dashboard` de l'image amont).
+#
+# Écoute sur 0.0.0.0:8088 DANS le conteneur ; l'exposition est réglée par
+# docker-compose (127.0.0.1 uniquement — accès par tunnel SSH). Une panne de
+# l'interface n'affecte pas le gateway : s6 la relance seule.
+#
+# Désactivée (VEILLE_UI_ENABLED=false, ou mot de passe non configuré) : le
+# script sort en 0 et ./finish renvoie 125 → s6 ne relance pas, le slot est down.
+
+[ "${VEILLE_UI_ENABLED:-true}" = "true" ] || { echo "[veille-ui] désactivée (VEILLE_UI_ENABLED)"; exit 0; }
+if [ -z "${VEILLE_UI_PASSWORD_HASH:-}" ] || [ -z "${VEILLE_UI_SECRET:-}" ]; then
+    echo "[veille-ui] VEILLE_UI_PASSWORD_HASH / VEILLE_UI_SECRET absents — interface désactivée (make ui-password)"
+    exit 0
+fi
+
+# with-contenv remet HOME à /root : on le ramène sur le volume avant de changer d'utilisateur.
+export HOME=/opt/data
+export HERMES_HOME="${HERMES_HOME:-/opt/data}"
+cd /opt/veille-app || exit 1
+
+set -- /opt/veille-app/.venv/bin/uvicorn veille_ui.app:app \
+    --host 0.0.0.0 --port "${VEILLE_UI_PORT:-8088}" --no-server-header --log-level warning
+[ "$(id -u)" = 0 ] || exec "$@"
+exec s6-setuidgid hermes "$@"

@@ -37,9 +37,12 @@ command -v systemctl >/dev/null || { echo "✗ systemd requis" >&2; exit 1; }
 install -d -m 0755 "$UNIT_DIR"
 
 # Le service est généré pour pointer sur CE dépôt (le fichier versionné utilise
-# le chemin par défaut /root/veille-hermes).
-sed "s|/root/veille-hermes/scripts/watchdog.py|$REPO/scripts/watchdog.py|" \
-    "$REPO/deploy/systemd/$SERVICE" > "$UNIT_DIR/$SERVICE"
+# le chemin par défaut /root/veille-hermes) : script, volume ET .env.
+sed "s|/root/veille-hermes|$REPO|g" "$REPO/deploy/systemd/$SERVICE" > "$UNIT_DIR/$SERVICE"
+
+if ! grep -qE '^ALERT_EMAIL=.+' "$REPO/.env" 2>/dev/null; then
+    echo "⚠️  ALERT_EMAIL absent de $REPO/.env : les alertes iront à BREVO_SENDER_EMAIL"
+fi
 install -m 0644 "$REPO/deploy/systemd/$TIMER" "$UNIT_DIR/$TIMER"
 chmod +x "$REPO/scripts/watchdog.py"
 
@@ -55,5 +58,5 @@ systemctl list-timers "$TIMER" --no-pager | head -3
 if [ "$DO_TEST" = 1 ]; then
     echo
     echo "▸ envoi d'un e-mail de test du canal d'alerte"
-    python3 "$REPO/scripts/watchdog.py" --test-notify
+    python3 "$REPO/scripts/watchdog.py" --env-file "$REPO/.env" --test-notify
 fi
