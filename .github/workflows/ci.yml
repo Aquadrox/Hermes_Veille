@@ -21,7 +21,7 @@ jobs:
     name: Version (VERSION, CHANGELOG, branche)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Cohérence de la version
@@ -35,8 +35,8 @@ jobs:
     name: Lint (ruff, shellcheck, hadolint, compose)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
@@ -47,7 +47,7 @@ jobs:
       - name: shellcheck
         run: shellcheck scripts/*.sh docker/cont-init.d/50-seed-veille docker/s6-rc.d/veille-ui/run docker/s6-rc.d/veille-ui/finish docker/bin/*
       - name: hadolint
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@v3.5.0
         with:
           dockerfile: Dockerfile
       - name: docker compose config
@@ -68,8 +68,8 @@ jobs:
         # 3.11 : python3 d'un hôte Debian 12 (chien de garde) ; 3.13 : celui de l'image.
         python: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -93,7 +93,7 @@ jobs:
           for pkg in root.iter("package"):
               print(f"| {pkg.get('name')} | {float(pkg.get('line-rate')) * 100:.0f} % |")
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && matrix.python == '3.13'
         with:
           name: rapports-de-test
@@ -105,8 +105,8 @@ jobs:
     name: Audit des dépendances (pip-audit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - run: pip install pip-audit==2.10.0

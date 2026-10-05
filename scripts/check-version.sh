@@ -27,7 +27,7 @@ if [ -n "${BASE_REF:-}" ]; then
     else
         newest="$(printf '%s\n%s\n' "$BASE_VERSION" "$VERSION" | sort -V | tail -1)"
         { [ "$newest" = "$VERSION" ] && [ "$VERSION" != "$BASE_VERSION" ]; } \
-            || fail "VERSION $VERSION doit être supérieure à celle de $BASE_REF ($BASE_VERSION) : make bump"
+            || fail "VERSION $VERSION doit être supérieure à celle de $BASE_REF ($BASE_VERSION) : make bump (une PR Dependabot se reprend dans la prochaine branche release/vX.Y.Z, voir CONTRIBUTING.md)"
         echo "✓ $BASE_VERSION → $VERSION"
     fi
 fi

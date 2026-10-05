@@ -31,6 +31,20 @@ git push -u origin release/v0.2.3
 Plusieurs versions peuvent être préparées à la suite : chaque branche part de la précédente
 (`release/v0.2.3` part de `release/v0.2.2`) et elles se mergent **dans l'ordre**.
 
+## Dépendances (Dependabot)
+
+Dependabot ouvre au plus **une PR groupée par écosystème et par mois** (image Docker amont,
+paquets Python, actions GitHub). Ces PR ne modifient pas `VERSION` : la vérification de
+version les refuse, et c'est voulu. On ne les merge pas telles quelles. On reprend leur
+contenu dans la prochaine version :
+
+```bash
+make bump                      # ouvre release/vX.Y.Z
+# appliquer les montées de version proposées, compléter le CHANGELOG, make lint && make test
+```
+
+Une fois la version mergée, Dependabot ferme lui-même sa PR, devenue sans objet.
+
 ## Suite de tests (GitHub Actions)
 
 | Workflow | Déclencheurs | Contrôles |
