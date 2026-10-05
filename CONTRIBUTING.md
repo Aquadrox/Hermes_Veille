@@ -37,7 +37,7 @@ Plusieurs versions peuvent être préparées à la suite : chaque branche part d
 |---|---|---|
 | [`ci`](.github/workflows/ci.yml) | push `main` / `release/**`, PR | version (VERSION > base, CHANGELOG, nom de branche) · ruff · shellcheck · hadolint · `docker compose config` · ports sur 127.0.0.1 · pytest sur Python 3.11 / 3.12 / 3.13, couverture ≥ 75 % · pip-audit |
 | [`image`](.github/workflows/image.yml) | push `main` / `release/**` / `v*`, PR, hebdomadaire | build de l'image → smoke test → **test d'intégration** (conteneur complet) → push sur ghcr.io (`main` et étiquettes uniquement) |
-| [`release`](.github/workflows/release.yml) | merge sur `main` | étiquette `vX.Y.Z` + release GitHub avec les notes du CHANGELOG |
+| [`release`](.github/workflows/release.yml) | merge sur `main` | étiquette `vX.Y.Z` + release GitHub (notes du CHANGELOG) sur le commit d'arrivée de chaque version encore sans étiquette |
 
 Une image n'est **jamais** publiée sans avoir passé le smoke test et le test d'intégration.
 

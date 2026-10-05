@@ -18,7 +18,8 @@ Suite de tests GitHub et gestion professionnelle des versions.
   Python 3.11 / 3.12 / 3.13 avec couverture minimale de 75 % (résumé et rapports JUnit/XML en
   artefacts), audit des dépendances (`pip-audit`).
 - Workflow **`release`** : à chaque merge sur `main`, étiquette `vX.Y.Z` et release GitHub
-  avec la section du CHANGELOG.
+  avec la section du CHANGELOG, posées sur le commit où la version est arrivée sur `main` ;
+  rattrape les versions encore sans étiquette (dont la 0.2.1).
 - `scripts/integration-test.sh` (`make integration`) : conteneur complet (s6, gateway, seed,
   interface) sur un volume v0.2 — migration (même job, historique, lien de compatibilité),
   interface (session, CSRF, Host, pause/reprise effectives côté Hermes, version affichée),
