@@ -1,0 +1,8 @@
+# Exceptions hadolint, chacune justifiée :
+ignored:
+  # USER root final : s6-overlay (/init) doit démarrer en root pour prendre possession
+  # du volume ; les services descendent en `hermes` (s6-setuidgid). Idem image amont.
+  - DL3002
+  # Paquets Debian non épinglés : la base est figée par le tag amont et la CI
+  # reconstruit chaque semaine pour récupérer les correctifs de sécurité.
+  - DL3008

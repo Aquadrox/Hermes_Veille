@@ -1,13 +1,13 @@
-name: build
+name: image
 
-# Tests, puis construction de l'image dérivée, smoke test sur l'image construite,
-# et SEULEMENT ensuite publication sur GitHub Container Registry (ghcr.io).
-# L'image amont est épinglée dans le Dockerfile : ses montées de version arrivent
-# par Dependabot (PR), validées par ce même workflow.
+# Construction de l'image, puis smoke test et test d'intégration de bout en bout sur
+# l'image construite, et SEULEMENT ensuite publication sur ghcr.io (main et étiquettes).
+# L'image amont est épinglée dans le Dockerfile : ses montées de version arrivent par
+# Dependabot (PR), validées par ce même workflow.
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
     tags: ["v*"]
   pull_request:
   schedule:
@@ -15,40 +15,18 @@ on:
     - cron: "0 4 * * 1"
   workflow_dispatch:
 
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/hermes-veille
 
 jobs:
-  test:
+  image:
+    name: Build → smoke → intégration → push
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Dépendances
-        run: pip install -r requirements-app.txt pytest httpx ruff shellcheck-py
-
-      - name: Lint (ruff + shellcheck)
-        run: |
-          ruff check .
-          shellcheck scripts/*.sh docker/cont-init.d/50-seed-veille docker/s6-rc.d/veille-ui/run docker/s6-rc.d/veille-ui/finish docker/bin/veillectl
-
-      - name: Interface publiée sur 127.0.0.1 uniquement
-        run: |
-          # Toute publication de port doit être préfixée par 127.0.0.1 (accès par tunnel SSH).
-          if grep -nE '^\s*-\s*"?[0-9$]' docker-compose.yml | grep -v '127.0.0.1:'; then
-            echo "::error file=docker-compose.yml::port publié hors de 127.0.0.1"; exit 1
-          fi
-
-      - name: Tests unitaires
-        run: python -m pytest -q tests
-
-  build:
-    needs: test
-    runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -56,6 +34,10 @@ jobs:
     steps:
       - name: Récupérer le dépôt
         uses: actions/checkout@v4
+
+      - name: Version
+        id: v
+        run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
 
       - name: Préparer Buildx
         uses: docker/setup-buildx-action@v3
@@ -67,8 +49,11 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.v.outputs.version }},enable={{is_default_branch}}
             type=ref,event=tag
             type=sha,format=short
+          labels: |
+            org.opencontainers.image.version=${{ steps.v.outputs.version }}
 
       - name: Construire (chargée localement, pas encore poussée)
         uses: docker/build-push-action@v6
@@ -81,11 +66,14 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Smoke test de l'image
+      - name: Smoke test
         run: IMAGE=${{ env.IMAGE }} IMAGE_TAG=ci ./scripts/smoke-test.sh
 
+      - name: Test d'intégration (conteneur complet, migration, interface, watchdog)
+        run: IMAGE=${{ env.IMAGE }} IMAGE_TAG=ci ./scripts/integration-test.sh
+
       - name: Se connecter à ghcr.io
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -93,21 +81,19 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pousser l'image testée
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           while read -r tag; do
             [ -n "$tag" ] || continue
             docker tag "$IMAGE:ci" "$tag"
             docker push "$tag"
-          done <<< "${{ steps.meta.outputs.tags }}"
-
-      - name: Résumé
-        if: github.event_name != 'pull_request'
-        run: |
+          done <<< "$TAGS"
           {
-            echo "### Image publiée"
+            echo "### Image publiée (v${{ steps.v.outputs.version }})"
             echo
             echo '```'
-            echo "${{ steps.meta.outputs.tags }}"
+            echo "$TAGS"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

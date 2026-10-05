@@ -11,8 +11,8 @@ PYTHON     ?= python3
 
 .DEFAULT_GOAL := help
 
-.PHONY: help env build up down restart logs ps veilles run-now shell verify smoke test lint \
-        release update backup ui-password tunnel watchdog-install watchdog-check
+.PHONY: help env build up down restart logs ps veilles run-now shell verify smoke integration test lint \
+        bump version release update backup ui-password tunnel watchdog-install watchdog-check
 
 help: ## Affiche cette aide
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -58,12 +58,22 @@ shell: ## Ouvre un shell dans le conteneur
 smoke: ## Construit l'image et exécute le test de fumée
 	IMAGE=$(IMAGE) IMAGE_TAG=$(IMAGE_TAG) ./scripts/smoke-test.sh
 
-test: ## Exécute les tests unitaires (pytest)
-	$(PYTHON) -m pytest -q tests
+integration: ## Test de bout en bout du conteneur complet (migration, interface, watchdog)
+	IMAGE=$(IMAGE) IMAGE_TAG=$(IMAGE_TAG) ./scripts/integration-test.sh
 
-lint: ## ruff + shellcheck
+test: ## Tests unitaires avec couverture (pip install -r requirements-dev.txt)
+	$(PYTHON) -m pytest -q --cov=veille_core --cov=veille_ui --cov-report=term-missing --cov-fail-under=75
+
+lint: ## ruff + shellcheck (+ hadolint s'il est installé)
 	ruff check .
-	shellcheck scripts/*.sh docker/cont-init.d/50-seed-veille docker/s6-rc.d/veille-ui/run docker/s6-rc.d/veille-ui/finish docker/bin/veillectl
+	shellcheck scripts/*.sh docker/cont-init.d/50-seed-veille docker/s6-rc.d/veille-ui/run docker/s6-rc.d/veille-ui/finish docker/bin/*
+	@if command -v hadolint >/dev/null; then hadolint Dockerfile; else echo "(hadolint absent : vérifié par la CI)"; fi
+
+version: ## Affiche la version courante
+	@cat VERSION
+
+bump: ## Nouvelle version de correctif + branche release/vX.Y.Z (PART=minor|major possible)
+	./scripts/bump-version.sh $(or $(PART),patch) --branch
 
 update: ## Récupère les sources (git pull) puis reconstruit et redéploie
 	git pull --ff-only
