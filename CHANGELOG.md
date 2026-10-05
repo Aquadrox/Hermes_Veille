@@ -7,6 +7,43 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.2.2] — 2026-10-05
+
+Suite de tests GitHub et gestion professionnelle des versions.
+
+### Ajouté
+
+- Workflow **`ci`** (push `main` / `release/**`, PR) : cohérence de la version, ruff,
+  shellcheck, hadolint, `docker compose config`, contrôle « ports sur 127.0.0.1 », pytest sur
+  Python 3.11 / 3.12 / 3.13 avec couverture minimale de 75 % (résumé et rapports JUnit/XML en
+  artefacts), audit des dépendances (`pip-audit`).
+- Workflow **`release`** : à chaque merge sur `main`, étiquette `vX.Y.Z` et release GitHub
+  avec la section du CHANGELOG, posées sur le commit où la version est arrivée sur `main` ;
+  rattrape les versions encore sans étiquette (dont la 0.2.1).
+- `scripts/integration-test.sh` (`make integration`) : conteneur complet (s6, gateway, seed,
+  interface) sur un volume v0.2 — migration (même job, historique, lien de compatibilité),
+  interface (session, CSRF, Host, pause/reprise effectives côté Hermes, version affichée),
+  redémarrage sans doublon, chien de garde.
+- `scripts/check-version.sh`, `scripts/bump-version.sh` (`make bump`, `make version`),
+  `requirements-dev.txt`, `CONTRIBUTING.md` (versions, branches `release/vX.Y.Z`, tests),
+  modèle de PR, configuration hadolint justifiée.
+
+### Modifié
+
+- Workflow `build` renommé **`image`** : build → smoke test → test d'intégration → push ; les
+  images sont étiquetées avec leur version (`X.Y.Z`) et portent le label OCI `version`.
+- `make test` mesure la couverture ; `make lint` inclut hadolint s'il est installé.
+
+### Corrigé
+
+- CI : le nom d'image est mis en minuscules (le propriétaire du dépôt, « Aquadrox », produisait
+  une étiquette Docker invalide).
+
+### Sécurité
+
+- Dépendances de l'application mises à jour : **Starlette 0.48 → 1.7** (5 avis de sécurité dont
+  CVE-2026-48710, signalés par `pip-audit`), FastAPI 0.142, Uvicorn 0.54, python-multipart 0.0.32.
+
 ## [0.2.1] — 2026-10-05
 
 Multi-veilles et interface web de gestion. Migration automatique depuis la v0.2.

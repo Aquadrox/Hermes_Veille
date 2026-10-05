@@ -18,3 +18,9 @@ tests/
 .github/
 .ruff_cache/
 .pytest_cache/
+CONTRIBUTING.md
+requirements-dev.txt
+.hadolint.yaml
+.coverage
+coverage.xml
+junit.xml

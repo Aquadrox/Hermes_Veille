@@ -1,0 +1,56 @@
+name: release
+
+# À chaque merge sur main : pour chaque version arrivée sur main (commit du premier parent
+# qui a modifié VERSION) et encore sans étiquette, crée l'étiquette vX.Y.Z sur CE commit et
+# la release GitHub avec la section correspondante du CHANGELOG. Rattrape donc aussi une
+# version mergée avant l'existence de ce workflow.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Vérifier la version
+        run: ./scripts/check-version.sh
+
+      - name: Étiquettes et releases manquantes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          published=""
+          for commit in $(git log --first-parent --reverse --format=%H HEAD -- VERSION); do
+            version="$(git show "$commit:VERSION" | tr -d '[:space:]')"
+            tag="v$version"
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              continue
+            fi
+            # Notes : section « ## [version] » du CHANGELOG tel qu'il était à ce commit.
+            git show "$commit:CHANGELOG.md" | awk -v v="$version" '
+              $0 ~ "^## \\[" v "\\]" { on = 1; next }
+              on && /^## \[/ { exit }
+              on { print }
+            ' > notes.md
+            gh release create "$tag" --target "$commit" --title "$tag" --notes-file notes.md
+            git fetch -q --tags
+            published="$published $tag"
+          done
+          if [ -n "$published" ]; then
+            echo "### Releases publiées :$published" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Toutes les versions de main sont déjà étiquetées." >> "$GITHUB_STEP_SUMMARY"
+          fi

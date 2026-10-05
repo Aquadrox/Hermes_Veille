@@ -1,0 +1,99 @@
+name: image
+
+# Construction de l'image, puis smoke test et test d'intégration de bout en bout sur
+# l'image construite, et SEULEMENT ensuite publication sur ghcr.io (main et étiquettes).
+# L'image amont est épinglée dans le Dockerfile : ses montées de version arrivent par
+# Dependabot (PR), validées par ce même workflow.
+
+on:
+  push:
+    branches: [main, "release/**"]
+    tags: ["v*"]
+  pull_request:
+  schedule:
+    # Reconstruction hebdomadaire (lundi 04:00 UTC) : correctifs des paquets Debian.
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: Build → smoke → intégration → push
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Version et nom d'image
+        id: v
+        run: |
+          echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+          # Docker exige un nom en minuscules (le propriétaire du dépôt est « Aquadrox »).
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/hermes-veille" >> "$GITHUB_ENV"
+
+      - name: Préparer Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Calculer les étiquettes
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.v.outputs.version }},enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.version=${{ steps.v.outputs.version }}
+
+      - name: Construire (chargée localement, pas encore poussée)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: ${{ env.IMAGE }}:ci
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        run: IMAGE=${{ env.IMAGE }} IMAGE_TAG=ci ./scripts/smoke-test.sh
+
+      - name: Test d'intégration (conteneur complet, migration, interface, watchdog)
+        run: IMAGE=${{ env.IMAGE }} IMAGE_TAG=ci ./scripts/integration-test.sh
+
+      - name: Se connecter à ghcr.io
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pousser l'image testée
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while read -r tag; do
+            [ -n "$tag" ] || continue
+            docker tag "$IMAGE:ci" "$tag"
+            docker push "$tag"
+          done <<< "$TAGS"
+          {
+            echo "### Image publiée (v${{ steps.v.outputs.version }})"
+            echo
+            echo '```'
+            echo "$TAGS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

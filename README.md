@@ -99,8 +99,10 @@ docker exec veille-hermes veillectl reconcile
 | `make tunnel` | rappelle la commande de tunnel SSH |
 | `make ui-password` | génère le hash du mot de passe et le secret de l'interface |
 | `make backup` | archive horodatée de `./data` (sans `.env`, 10 dernières conservées) |
-| `make test` / `make lint` | tests unitaires / ruff + shellcheck |
+| `make test` / `make lint` | tests unitaires avec couverture / ruff + shellcheck (+ hadolint) |
 | `make smoke` | teste l'image (dépendances, chaîne PDF, contrat CLI Hermes, veillectl, interface) |
+| `make integration` | test de bout en bout du conteneur complet (migration, interface, watchdog) |
+| `make version` / `make bump` | version courante / nouvelle version + branche `release/vX.Y.Z` |
 | `make shell` | ouvre un shell dans le conteneur |
 | `make down` | arrête le conteneur (volume conservé) |
 | `make update` | `git pull`, puis reconstruit et redéploie |
@@ -160,8 +162,14 @@ make update          # git pull + build + up -d : données du volume conservées
 ```
 
 L'image amont est **épinglée** dans le `Dockerfile`. Dependabot propose ses montées de version
-en PR ; la CI les valide (tests, lint, smoke test sur l'image construite, dont le contrat avec la
-CLI `hermes cron`) **avant** toute publication sur `ghcr.io`.
+en PR ; la CI les valide (tests, lint, smoke test et test d'intégration sur l'image construite,
+dont le contrat avec la CLI `hermes cron`) **avant** toute publication sur `ghcr.io`.
+
+## Versions et CI
+
+Version courante : fichier [`VERSION`](VERSION). Chaque livraison incrémente la version et
+passe par une branche `release/vX.Y.Z` mergée dans `main` ; le merge crée l'étiquette et la
+release GitHub. Détails, suite de tests et commandes locales : [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Depuis la v0.2 (veille unique dans `data/veille/`)
 
@@ -191,8 +199,9 @@ veille-hermes/
 ├── deploy/systemd/               # units de la surveillance (sur l'hôte)
 ├── scripts/                      # deploy.sh, smoke-test.sh, watchdog.py, install-watchdog.sh
 ├── tests/                        # pytest (faux binaire hermes pour le cœur et l'interface)
+├── VERSION                       # numéro de version (source unique)
 ├── docs/PLAN-CONTAINERISATION.md # analyse + plan de conteneurisation (archive)
-└── .github/                      # CI (tests → build → smoke → push) + Dependabot
+└── .github/                      # workflows ci / image / release, Dependabot, modèle de PR
 ```
 
 ## Secrets
