@@ -208,3 +208,29 @@ def test_export_button_downloads_xlsx(data, watch, page):  # noqa: F811
         pg.click("#composants a.button[download]")
     assert dl.value.suggested_filename.endswith(f"-{watch.slug}.xlsx")
     assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")  # pas de défilement horizontal
+
+
+def test_layout_full_width_on_desktop(data, page):
+    """Grand écran : cartes pleine largeur (plus de colonne de 1 200 px), texte courant plafonné
+    (~110 caractères) mais pas les encadrés ; mobile (PWA) : marges de 16 px, sans défilement horizontal."""
+    pg = page
+    metrics = """() => {
+      const card = document.querySelector('#composants').getBoundingClientRect();
+      const prose = document.querySelector('.card.danger p');  // texte courant
+      const flash = document.querySelector('#composants p.flash');
+      return {vw: document.documentElement.clientWidth, card: card.width, left: card.left,
+              header: getComputedStyle(document.querySelector('header.top')).paddingLeft,
+              prose: prose.getBoundingClientRect().width, proseMax: getComputedStyle(prose).maxWidth,
+              flash: flash.getBoundingClientRect().width,
+              overflow: document.documentElement.scrollWidth > window.innerWidth};
+    }"""
+    for width in (1280, 1920, 2560):
+        pg.set_viewport_size({"width": width, "height": 900})
+        m = pg.evaluate(metrics)
+        assert m["card"] >= 0.9 * width and not m["overflow"], m
+        assert m["left"] == pytest.approx(0.02 * width, abs=1), m  # marge proportionnelle (2vw)
+        if width >= 1920:  # texte plafonné, encadré pleine largeur du bloc
+            assert m["proseMax"] != "none" and m["prose"] < m["flash"] < m["card"], m
+    pg.set_viewport_size({"width": 390, "height": 844})
+    m = pg.evaluate(metrics)
+    assert m["left"] == 16 and m["card"] == m["vw"] - 32 and m["header"] == "20px" and not m["overflow"], m
