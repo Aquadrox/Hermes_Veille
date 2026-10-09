@@ -17,7 +17,7 @@
     <a class="button" href="/veilles/{{ v.slug }}/edit">Modifier</a>
   </div>
 </div>
-<p class="muted">{{ v.subject }}</p>
+<p class="muted">{% if v.kind == "composants" %}<span class="badge kind">composants</span> {% endif %}{{ v.subject }}</p>
 
 <section class="card">
   <dl class="grid2">
@@ -27,9 +27,12 @@
     <div><dt>Destinataires</dt><dd>{{ row.recipients|join(", ") or "—" }}</dd></div>
     <div><dt>Seuil d'alerte (chien de garde)</dt><dd>{{ (v.max_age_hours / 24)|round(1) }} jours sans rapport</dd></div>
     <div><dt>Job Hermes</dt><dd><code>{{ v.job_id or "—" }}</code></dd></div>
+    {% if v.components %}<div><dt>Chapitre composants</dt><dd><a href="/veilles/{{ v.components }}">{{ v.components }}</a></dd></div>{% endif %}
   </dl>
   {% if st.last_error %}<p class="err small">Dernière erreur : {{ st.last_error }}</p>{% endif %}
 </section>
+
+{% if v.kind == "composants" %}{% include "partials/components.html" %}{% endif %}
 
 <section class="card" id="rapports">
   <h2>Rapports{% if reports %} <span class="muted small">({{ reports|length }})</span>{% endif %}</h2>

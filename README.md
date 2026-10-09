@@ -70,6 +70,8 @@ Fonctions :
 - **détail** : historique complet des rapports (PDF et Markdown, en tête de page), journal du
   lancement en cours (rafraîchi en direct), coût des exécutions,
   historique d'exécution Hermes, e-mail de test, **archivage** (rien n'est effacé) ;
+- **veille composants** : liste des références, bandeau des fins de vie, avis filtrables par type
+  avec leurs liens sources, état Digi-Key de chaque référence (voir plus bas) ;
 - **santé** : état des veilles, crédits Brevo et journal d'audit.
 
 Sécurité, en plus du tunnel : un mot de passe administrateur (hash argon2 dans `.env`), une
@@ -77,6 +79,47 @@ session signée valable 12 h, un jeton CSRF sur chaque action, une limite de ten
 connexion, la vérification de l'en-tête `Host` (contre le *DNS rebinding*), une CSP stricte
 (aucun script en ligne, HTMX embarqué) et des noms de fichiers en liste blanche. Sans
 `VEILLE_UI_PASSWORD_HASH`, l'interface reste **désactivée**.
+
+## Veille composants (PCN et fins de vie)
+
+Une **veille composants** surveille une liste de références électroniques et détecte les avis
+publiés par les fabricants ou repris par les distributeurs : **fin de vie** (EOL, PDN, obsolète),
+**dernière commande** (LTB), **NRND** et **modifications** (PCN). Les fins de vie sont mises en
+évidence partout : bandeau rouge dans l'interface, encadré rouge dans le PDF, objet d'e-mail
+préfixé « [EOL ×N] ».
+
+```
+dimanche 23h — job de la veille composants
+  1. veillectl components scan <slug>      statut Digi-Key de TOUTES les références (déterministe)
+                                           + lot du jour pour la recherche web (40 par défaut)
+  2. agent : recherche web (pages PCN des fabricants, Mouser, Digi-Key, Farnell…) -> D-pcn.json
+  3. veillectl components finalize …       validation, dédoublonnage, enregistrement, rapport PDF
+lundi 6h30 — job de la veille thématique rattachée
+  6 bis. veillectl components chapter …    chapitre « Composants — PCN & fins de vie » dans son e-mail
+```
+
+- **Liste** : `MPN ; Fabricant ; Réf. interne`, une par ligne, collage depuis un tableur accepté
+  (interface, `veillectl components add --file bom.csv`, ou Telegram : « Ajoute le LM317T de Texas
+  Instruments à la veille composants »).
+- **Incrémental** : chaque référence garde la date de sa dernière vérification (Digi-Key et web) ;
+  la recherche web ne remonte qu'à cette date (moins 30 jours de marge) et un avis déjà connu
+  n'est jamais signalé à nouveau. Avis et dates sont conservés dans `components.json` et
+  `notices.json`, avec leurs liens sources.
+- **Volume** : le statut Digi-Key couvre toutes les références à chaque exécution (≈ 0,6 s par
+  référence, 900 au plus) ; la recherche web, coûteuse en tokens, tourne par **lots**
+  (`batch_size`). Avec 300 références et des lots de 40, chacune est recherchée sur le web toutes les
+  8 semaines environ, et **en priorité** dès que son statut Digi-Key change.
+- **Livraison** : rattachée à une veille thématique (« Chapitre composants » dans son formulaire),
+  la veille composants n'envoie rien elle-même : ses nouveaux avis partent en chapitre de l'e-mail
+  de cette veille. Sinon, elle envoie son propre e-mail (HTML lisible sur mobile + PDF).
+- **Digi-Key** (facultatif mais recommandé) : créer une application « Production » sur
+  [developer.digikey.com](https://developer.digikey.com) avec l'API *Product Information v4*, puis
+  renseigner `DIGIKEY_CLIENT_ID` et `DIGIKEY_CLIENT_SECRET` dans `.env`. Sans ces clés, seule la
+  recherche web est utilisée (le rapport le signale).
+
+Limites : la recherche web reste probabiliste (un avis peut être manqué : le statut Digi-Key sert
+de filet) ; les avis PCN de Digi-Key eux-mêmes ne sont pas lus (leur API exige une connexion
+interactive, OAuth « 3-legged ») ; Mouser et Nexar ne sont pas intégrés.
 
 ## Piloter depuis Telegram (MCP)
 
@@ -92,10 +135,11 @@ hermes gateway restart        # charge les outils
 Puis, dans Telegram : « Liste mes veilles », « Résume le dernier rapport de la veille
 industrie-4-0 », « Passe la veille cyber au mardi 7h30 », « Ajoute dsi@exemple.fr aux
 destinataires », « Mets la veille industrie-4-0 en pause », « Crée une veille sur l'hydrogène
-industriel, chaque lundi à 8h, pour moi@exemple.fr »…
+industriel, chaque lundi à 8h, pour moi@exemple.fr », « Quelles fins de vie ont été détectées
+ce mois-ci ? »…
 
 - **Transport stdio via `docker exec -i`** : aucun port réseau n'est ouvert.
-- **`trust: untrusted`** : les 11 outils de lecture s'exécutent directement ; les 12 outils de
+- **`trust: untrusted`** : les 13 outils de lecture s'exécutent directement ; les 14 outils de
   modification demandent ton **approbation dans Telegram**. `run_veille_now` et
   `send_test_email` envoient de vrais e-mails ; `archive_veille` exige en plus de répéter le slug.
 - Chaque action est tracée dans le journal d'audit avec l'origine « telegram ».
@@ -103,9 +147,10 @@ industriel, chaque lundi à 8h, pour moi@exemple.fr »…
   `--print` affiche la configuration YAML sans rien modifier ; `--uninstall` la retire.
 
 Outils : `list_veilles`, `get_veille`, `get_brief`, `list_brief_templates`, `list_reports`,
-`read_report`, `get_run_log`, `run_history`, `preview_schedule`, `get_costs`, `health` (lecture) ;
+`read_report`, `get_run_log`, `run_history`, `preview_schedule`, `get_costs`, `health`,
+`list_components`, `list_notices` (lecture) ;
 `create_veille`, `update_veille`, `set_recipients`, `add_recipients`, `remove_recipients`,
-`update_brief`, `edit_brief`, `pause_veille`, `resume_veille`, `run_veille_now`,
+`update_brief`, `edit_brief`, `add_components`, `remove_components`, `pause_veille`, `resume_veille`, `run_veille_now`,
 `send_test_email`, `archive_veille` (modification).
 
 ## Consommation et coût
@@ -143,6 +188,11 @@ docker exec veille-hermes veillectl edit veille-cyber-ot --schedule "0 8 * * 1"
 docker exec veille-hermes veillectl pause|resume|run|test-email|archive <slug>
 docker exec veille-hermes veillectl costs industrie-4-0
 docker exec veille-hermes veillectl reconcile
+# veille composants
+docker exec veille-hermes veillectl create --kind composants --name "Composants carte X" \
+    --schedule "0 23 * * 0" --recipients achats@exemple.fr --components-file /opt/data/bom.csv
+docker exec veille-hermes veillectl edit industrie-4-0 --include-components composants-carte-x
+docker exec veille-hermes veillectl components list|notices composants-carte-x [--type EOL]
 ```
 
 ## Exploitation
@@ -188,8 +238,10 @@ veilles/<slug>/
     config.md         brief de mission (éditable dans l'interface)
     recipients.txt    destinataires, un par ligne
     job-prompt.md     prompt RENDU depuis le gabarit de l'image (ne pas éditer)
-    rapports/         AAAA-MM-JJ-veille.{md,pdf}, -charts.json
+    rapports/         AAAA-MM-JJ-veille.{md,pdf}, -charts.json (composants : -pcn.json)
     runs/             journaux des lancements manuels
+    components.json   veille composants : références, statut Digi-Key, dates de vérification
+    notices.json      veille composants : avis PCN / EOL détectés, sources, livraisons
 veilles/.archive/   veilles archivées
 veilles/.audit.log  journal d'audit (interface, CLI, amorçage)
 cron/jobs.json      jobs Hermes (état, prochain et dernier run)
@@ -318,12 +370,14 @@ veille-hermes/
 
 Aucun secret n'est versionné. Voir [`.env.example`](.env.example) : `DEEPSEEK_API_KEY`,
 `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `ALERT_EMAIL`,
-`VEILLE_UI_PASSWORD_HASH`, `VEILLE_UI_SECRET`. Le `.env` est ignoré par git **et** par le build
+`VEILLE_UI_PASSWORD_HASH`, `VEILLE_UI_SECRET`, et facultativement `DIGIKEY_CLIENT_ID`,
+`DIGIKEY_CLIENT_SECRET`. Le `.env` est ignoré par git **et** par le build
 Docker.
 
 ## Architecture
 
-Le conteneur n'a besoin que d'accès **sortants** (recherche web, API DeepSeek, API Brevo). Le
+Le conteneur n'a besoin que d'accès **sortants** (recherche web, API DeepSeek, API Brevo, API
+Digi-Key). Le
 seul port publié est celui de l'interface, lié à `127.0.0.1` ; le serveur MCP passe par
 `docker exec -i` (stdio), sans port. La livraison se fait **uniquement
 par e-mail** (`deliver: local`) ; le gateway Telegram de l'hôte reste indépendant. L'interface,

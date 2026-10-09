@@ -2,7 +2,12 @@
 <tr id="row-{{ v.slug }}">
   <td data-label="Veille">
     <a href="/veilles/{{ v.slug }}"><strong>{{ v.name }}</strong></a>
+    {% if v.kind == "composants" %} <span class="badge kind">composants</span>{% endif %}
     <div class="muted small">{{ v.subject }} · {{ row.recipients|length }} destinataire{{ 's' if row.recipients|length > 1 }}</div>
+    {% set c = row.components %}{% if c %}
+    <div class="small">{% if c.error %}<span class="err">{{ c.error }}</span>{% else %}{{ c.components }} composant{{ 's' if c.components > 1 }} · {{ c.notices }} avis
+      {% if c.critical %}· <a class="badge eol" href="/veilles/{{ v.slug }}#fins-de-vie">{{ c.critical }} en fin de vie</a>{% endif %}{% endif %}</div>
+    {% endif %}
     {% if error %}<div class="err small">{{ error }}</div>{% endif %}
   </td>
   <td data-label="Fréquence">{{ row.schedule_human }}</td>

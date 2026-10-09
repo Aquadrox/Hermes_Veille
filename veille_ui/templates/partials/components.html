@@ -1,0 +1,91 @@
+{# Veille composants : fins de vie en tête, avis filtrables (sans JS), composants suivis. #}
+{% macro badge(t) -%}
+<span class="badge {{ 'eol' if t in ('EOL', 'PDN', 'OBSOLETE') else t|lower }}">{{ NOTICE_TYPES[t][0] }}</span>
+{%- endmacro %}
+{% macro sources(n) -%}
+{% for s in n.sources %}<a href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ s.label }}</a>{{ " · " if not loop.last }}{% endfor %}
+{%- endmacro %}
+
+{% if critical %}
+<section class="card alert-eol" id="fins-de-vie">
+  <h2>⚠ Fins de vie et dernières commandes <span class="small">({{ critical|length }} composant{{ 's' if critical|length > 1 }})</span></h2>
+  <div class="table-wrap">
+  <table class="list">
+    <thead><tr><th>Composant</th><th>Fabricant</th><th>Avis</th><th>Dernière cde</th><th>Détecté</th><th>Sources</th></tr></thead>
+    <tbody>
+    {% for n in critical %}
+      <tr>
+        <td data-label="Composant"><strong>{{ n.mpn }}</strong></td>
+        <td data-label="Fabricant">{{ n.manufacturer }}</td>
+        <td data-label="Avis">{{ badge(n.type) }} {{ n.title }}{% if n.number %} <span class="muted small">({{ n.number }})</span>{% endif %}</td>
+        <td data-label="Dernière cde" class="nowrap"><strong>{{ n.ltb_date or n.eol_date or "—" }}</strong></td>
+        <td data-label="Détecté" class="nowrap">{{ n.found_at }}</td>
+        <td data-label="Sources">{{ sources(n) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="card" id="avis">
+  <h2>Avis détectés <span class="muted small">({{ notice_total }})</span></h2>
+  <p class="small filters">Filtrer :
+    <a href="/veilles/{{ v.slug }}#avis"{% if not ntype %} class="current"{% endif %}>tous</a>
+    {% for t, label in NOTICE_TYPES.items() %} · <a href="/veilles/{{ v.slug }}?type={{ t }}#avis"{% if ntype == t %} class="current"{% endif %}>{{ label[0] }}</a>{% endfor %}
+  </p>
+  {% if notices %}
+  <div class="table-wrap">
+  <table class="list">
+    <thead><tr><th>Détecté</th><th>Type</th><th>Composant</th><th>Avis</th><th>Publié</th><th>Dernière cde</th><th>Sources</th></tr></thead>
+    <tbody>
+    {% for n in notices %}
+      <tr{% if n.type in CRITICAL %} class="crit"{% endif %}>
+        <td data-label="Détecté" class="nowrap">{{ n.found_at }}</td>
+        <td data-label="Type">{{ badge(n.type) }}</td>
+        <td data-label="Composant"><strong>{{ n.mpn }}</strong> <span class="muted small">{{ n.manufacturer }}</span></td>
+        <td data-label="Avis">{{ n.title }}{% if n.number %} <span class="muted small">({{ n.number }})</span>{% endif %}
+          {% if n.scope == "gamme" %}<span class="muted small">· gamme</span>{% endif %}
+          {% if n.summary %}<div class="small muted">{{ n.summary }}</div>{% endif %}</td>
+        <td data-label="Publié" class="nowrap">{{ n.published or "—" }}</td>
+        <td data-label="Dernière cde" class="nowrap">{{ n.ltb_date or n.eol_date or "—" }}</td>
+        <td data-label="Sources">{{ sources(n) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if notices_hidden %}<p class="small muted">{{ notices|length }} avis affichés, {{ notices_hidden }} de plus
+    (fins de vie en tête, puis les plus récents) : filtrer par type, ou <code>veillectl components notices</code>.</p>{% endif %}
+  {% else %}<p class="muted">{{ "Aucun avis de ce type." if ntype else "Aucun avis détecté pour l'instant." }}</p>{% endif %}
+</section>
+
+<section class="card" id="composants">
+  <details>
+    <summary><h2 class="inline">Composants suivis <span class="muted small">({{ comps|length }})</span></h2></summary>
+    <div class="table-wrap">
+    <table class="list">
+      <thead><tr><th>MPN</th><th>Fabricant</th><th>Réf.</th><th>Statut Digi-Key</th><th>Avis le plus critique</th><th>Vérif. Digi-Key</th><th>Recherche web</th></tr></thead>
+      <tbody>
+      {% for c in comps %}{% set dk = c.dk or {} %}
+        <tr>
+          <td data-label="MPN"><strong>{{ c.mpn }}</strong></td>
+          <td data-label="Fabricant">{{ c.manufacturer }}</td>
+          <td data-label="Réf.">{{ c.ref or "—" }}</td>
+          <td data-label="Statut Digi-Key">{% if dk.product_url %}<a href="{{ dk.product_url }}" target="_blank" rel="noopener noreferrer">{{ dk.status }}</a>{% else %}{{ dk.status or "—" }}{% endif %}
+            {% if dk.error %}<div class="small muted">{{ dk.error }}</div>{% endif %}</td>
+          <td data-label="Avis">{% if c.worst %}{{ badge(c.worst.type) }}{% else %}—{% endif %}</td>
+          <td data-label="Vérif. Digi-Key" class="nowrap">{{ dk.checked_at or "jamais" }}</td>
+          <td data-label="Recherche web" class="nowrap">{{ c.web_checked_at or "jamais" }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </details>
+  <p class="small muted">Livraison :
+    {% if linked %}chapitre de l'e-mail de {% for l in linked %}<a href="/veilles/{{ l }}">{{ l }}</a>{{ ", " if not loop.last }}{% endfor %}
+    {% else %}e-mail dédié aux destinataires de cette veille{% endif %}
+    · <a href="/veilles/{{ v.slug }}/edit">Modifier la liste</a></p>
+</section>

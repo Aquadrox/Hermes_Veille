@@ -30,6 +30,15 @@ def args(**kw):
     return argparse.Namespace(**base)
 
 
+def test_html_file_body(tmp_path):
+    f = tmp_path / "d.html"
+    f.write_text("<h1>" + "x" * 200_000 + "</h1>")  # au-delà de la limite d'un argument (128 Ko)
+    payload, _ = brevo.build_payload(args(to="a@x.fr", text="fallback", html_file=str(f)), "me@x.fr", None)
+    assert payload["htmlContent"].startswith("<h1>") and payload["textContent"] == "fallback"
+    with pytest.raises(ValueError, match="--html-file"):
+        brevo.build_payload(args(to="a@x.fr", text=None), "me@x.fr", None)
+
+
 def test_to_file_reads_all_lines(tmp_path):
     f = tmp_path / "r.txt"
     f.write_text("a@x.fr\n\n# commentaire\nb@y.fr\nA@x.fr\n")

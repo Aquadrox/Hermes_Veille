@@ -2,7 +2,10 @@
 {% block content %}
 <div class="head">
   <h1>Veilles</h1>
-  <a class="button primary" href="/veilles/new">+ Nouvelle veille</a>
+  <div class="actions">
+    <a class="button" href="/veilles/new?kind=composants">+ Veille composants</a>
+    <a class="button primary" href="/veilles/new">+ Nouvelle veille</a>
+  </div>
 </div>
 {% if not rows %}
 <section class="card"><p>Aucune veille. <a href="/veilles/new">Créer la première</a>.</p></section>

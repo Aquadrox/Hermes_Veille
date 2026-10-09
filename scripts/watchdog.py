@@ -50,6 +50,8 @@ DEFAULT_BREVO = os.path.join(REPO, "skills", "email", "brevo-email", "scripts", 
 DEFAULT_CONTAINER = "veille-hermes"
 DEFAULT_STATE = "/var/lib/veille-watchdog/state.json"
 DEFAULT_MAX_AGE_HOURS = 192
+# Rapport d'une veille composants : produit sans LLM, court quand rien n'a changé (≈ 19 Ko).
+COMPONENTS_MIN_SIZE = 8000
 ALERT_FROM_NAME = "Surveillance veille"
 REPORT_SUFFIX = "-veille.pdf"
 REPORT_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
@@ -225,7 +227,8 @@ def check_veilles(volume, min_size, now):
             err = (job.get("last_error") or "")[:160]
             problems[f"{slug}:run"] = f"[{label}] dernier run en échec ({status})" + (f" : {err}" if err else "")
         max_age = float(v.get("max_age_hours") or DEFAULT_MAX_AGE_HOURS)
-        prob, det = check_report(v, max_age, min_size, now)
+        vmin = min(min_size, COMPONENTS_MIN_SIZE) if v.get("kind") == "composants" else min_size
+        prob, det = check_report(v, max_age, vmin, now)
         if prob:
             problems[f"{slug}:report"] = f"[{label}] {prob}"
         details.append(f"[{label}] dernier run : {job.get('last_run_at') or '—'} ({status or '—'})"

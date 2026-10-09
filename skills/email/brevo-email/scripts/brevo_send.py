@@ -13,6 +13,7 @@ Examples:
   brevo_send.py --to a@b.com --subject "Report" --body-file r.md --attach r.pdf --verify
   brevo_send.py --bcc-file recipients.txt --subject "Digest" --text "Body" --verify
   brevo_send.py --to a@b.com --subject "X" --html "<h1>hi</h1>" --from-name Alerts
+  brevo_send.py --bcc-file r.txt --subject "Digest" --html-file d.html --text "fallback"
 """
 import argparse
 import base64
@@ -115,8 +116,9 @@ def build_payload(args, sender, sender_name):
         raise ValueError("provide --to, --to-file, --bcc or --bcc-file (no recipient found)")
 
     text = _read_text(args.body_file) if args.body_file else args.text
-    if not text and not args.html:
-        raise ValueError("provide --text, --html or --body-file")
+    html = _read_text(args.html_file) if getattr(args, "html_file", None) else args.html
+    if not text and not html:
+        raise ValueError("provide --text, --html, --html-file or --body-file")
 
     payload = {
         "sender": {**({"name": sender_name} if sender_name else {}), "email": sender},
@@ -126,8 +128,8 @@ def build_payload(args, sender, sender_name):
     }
     if bcc:
         payload["bcc"] = [{"email": a} for a in bcc]
-    if args.html:
-        payload["htmlContent"] = args.html
+    if html:
+        payload["htmlContent"] = html
     if text:
         payload["textContent"] = text
     if args.cc:
@@ -149,6 +151,7 @@ def parse_args(argv=None):
     ap.add_argument("--text", help="plain-text body")
     ap.add_argument("--html", help="HTML body")
     ap.add_argument("--body-file", help="read the plain-text body from a UTF-8 file")
+    ap.add_argument("--html-file", help="read the HTML body from a UTF-8 file (no argv size limit)")
     ap.add_argument("--from", dest="sender", help="sender email (else BREVO_SENDER_EMAIL)")
     ap.add_argument("--from-name", dest="sender_name", help="sender display name")
     ap.add_argument("--reply-to", dest="reply_to")

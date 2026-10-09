@@ -48,7 +48,7 @@ COPY skills/ /opt/hermes/skills/
 # Copiés hors du volume : brief(s) de départ et gabarit du prompt des jobs. Le
 # hook rend à chaque boot le prompt de chaque veille depuis ce gabarit : une
 # nouvelle image propage donc ses corrections de prompt sans recréer les jobs.
-COPY veille/job-prompt.tmpl.md veille/pricing.json /opt/hermes/veille-defaults/
+COPY veille/job-prompt.tmpl.md veille/job-prompt-composants.tmpl.md veille/pricing.json /opt/hermes/veille-defaults/
 COPY veille/templates/ /opt/hermes/veille-defaults/templates/
 COPY --chmod=0755 docker/cont-init.d/50-seed-veille /etc/cont-init.d/50-seed-veille
 

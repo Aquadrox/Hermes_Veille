@@ -8,13 +8,25 @@
   veillectl run <slug> [--wait]
   veillectl costs [slug] [--days N]
   veillectl reconcile | migrate | bootstrap
+
+Veille composants (PCN / fins de vie) :
+  veillectl create --kind composants --name N --schedule "0 23 * * 0" --recipients a@x [--components-file bom.csv]
+  veillectl edit <slug> [--components-file F] [--include-components <slug-composants>|""] [--batch-size N]
+  veillectl components list|notices <slug> [--type EOL]
+  veillectl components add <slug> (--file bom.csv | "MPN;Fabricant;Réf" …)
+  veillectl components remove <slug> MPN …
+  veillectl components scan <slug>                                  (étape 1 du job)
+  veillectl components finalize <slug> <avis.json>                  (étape 5 du job)
+  veillectl components chapter <slug> --for <veille> --append <rapport.md>
 """
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from pathlib import Path
 
-from . import hermes, schedule, service, store, version
+from . import components, hermes, schedule, service, store, version
 
 
 def _print_overview() -> int:
@@ -42,8 +54,53 @@ def _show(slug: str) -> int:
         print(f"  erreur       : {st['last_error']}")
     print(f"  destinataires: {', '.join(r['recipients']) or '—'}")
     print(f"  répertoire   : {v.dir}")
+    if v.components:
+        print(f"  chapitre     : veille composants {v.components}")
+    if r["components"]:
+        print(f"  composants   : {r['components']}")
     for rep in store.list_reports(slug)[:5]:
         print(f"  rapport      : {rep['date']}  {rep.get('pdf', '(pas de PDF)')}")
+    return 0
+
+
+def _components_file(path: str | None) -> list[dict] | None:
+    if not path:
+        return None
+    return components.parse_components(Path(path).read_text(encoding="utf-8"))
+
+
+def _components(args) -> int:
+    slug = args.slug
+    if args.action == "list":
+        for c in components.load_components(service._components_veille(slug).slug)["components"]:
+            dk = c.get("dk") or {}
+            print(f"{c['mpn']:<28} {c['manufacturer']:<24} {c.get('ref', ''):<14} "
+                  f"Digi-Key {dk.get('status') or dk.get('error') or '—':<22} web {c.get('web_checked_at') or 'jamais'}")
+    elif args.action == "notices":
+        for n in service.notices(slug, args.type):
+            print(f"{n['found_at']}  {n['type']:<8} {n['mpn']:<24} {n['title'][:60]:<60} {n['sources'][0]['url']}")
+    elif args.action == "add":
+        items = _components_file(args.file) or []
+        items += components.parse_components("\n".join(args.items))
+        print(f"✓ {service.add_components(slug, items)} composant(s) ajouté(s)")
+    elif args.action == "remove":
+        print(f"✓ {service.remove_components(slug, args.items)} composant(s) retiré(s)")
+    elif args.action == "scan":
+        print(json.dumps(service.components_scan(slug), ensure_ascii=False, indent=1))
+    elif args.action == "finalize":
+        if not args.items:
+            raise store.StoreError("chemin du fichier JSON des avis manquant")
+        print(service.components_finalize(slug, Path(args.items[0])))
+    elif args.action == "chapter":
+        if not (args.for_slug and args.append):
+            raise store.StoreError("--for <veille> et --append <rapport.md> sont requis")
+        prefix = service.components_chapter(slug, args.for_slug, Path(args.append))
+        if prefix is None:
+            print(f"avertissement : veille composants « {slug} » introuvable — chapitre ignoré")
+        else:
+            print("✓ chapitre composants ajouté")
+            if prefix:
+                print(f"PREFIXE_SUJET={prefix}")
     return 0
 
 
@@ -107,6 +164,10 @@ def main(argv: list[str] | None = None) -> int:
     p_create.add_argument("--template", default="vierge")
     p_create.add_argument("--model")
     p_create.add_argument("--paused", action="store_true")
+    p_create.add_argument("--kind", choices=store.KINDS, default="veille")
+    p_create.add_argument("--components-file", help="composants : « MPN ; Fabricant ; Réf » par ligne")
+    p_create.add_argument("--include-components", help="veille : slug de la veille composants en chapitre")
+    p_create.add_argument("--batch-size", type=int)
 
     p_edit = sub.add_parser("edit")
     p_edit.add_argument("slug")
@@ -116,6 +177,19 @@ def main(argv: list[str] | None = None) -> int:
     p_edit.add_argument("--recipients")
     p_edit.add_argument("--brief-file")
     p_edit.add_argument("--model")
+    p_edit.add_argument("--components-file")
+    p_edit.add_argument("--include-components", help='slug, ou "" pour retirer le chapitre')
+    p_edit.add_argument("--batch-size", type=int)
+
+    p_comp = sub.add_parser("components", help="veille composants : PCN et fins de vie")
+    p_comp.add_argument("action", choices=("list", "notices", "add", "remove", "scan", "finalize", "chapter"))
+    p_comp.add_argument("slug")
+    p_comp.add_argument("items", nargs="*", help="add : lignes « MPN;Fabricant;Réf » ; remove : MPN ; "
+                                                  "finalize : fichier JSON")
+    p_comp.add_argument("--file", help="add : fichier « MPN ; Fabricant ; Réf » (collage tableur accepté)")
+    p_comp.add_argument("--type", choices=tuple(components.TYPES), help="notices : filtre par type")
+    p_comp.add_argument("--for", dest="for_slug", help="chapter : veille qui reçoit le chapitre")
+    p_comp.add_argument("--append", help="chapter : rapport Markdown du jour de cette veille")
 
     p_costs = sub.add_parser("costs", help="consommation de tokens et coût des exécutions")
     p_costs.add_argument("slug", nargs="?")
@@ -133,17 +207,25 @@ def main(argv: list[str] | None = None) -> int:
             return _show(args.slug)
         if args.cmd == "costs":
             return _costs(args.slug, args.days)
+        if args.cmd == "components":
+            return _components(args)
         if args.cmd == "create":
+            if args.kind == "composants" and not args.brief_file:
+                args.template = service.COMPONENTS_TEMPLATE
             v = service.create_veille(
                 name=args.name, slug=args.slug, subject=args.subject,
                 schedule_expr=args.schedule, recipients=store.parse_recipients(args.recipients),
-                brief=_brief_from(args), model=args.model, paused=args.paused)
+                brief=_brief_from(args), model=args.model, paused=args.paused, kind=args.kind,
+                components=_components_file(args.components_file),
+                include_components=args.include_components, batch_size=args.batch_size)
             print(f"✓ veille créée : {v.slug} (job {v.job_id}) — {schedule.describe(v.schedule)}")
         elif args.cmd == "edit":
             v = service.update_veille(
                 args.slug, name=args.name, subject=args.subject, schedule_expr=args.schedule,
                 recipients=store.parse_recipients(args.recipients) if args.recipients else None,
-                brief=_brief_from(args), model=args.model)
+                brief=_brief_from(args), model=args.model,
+                components=_components_file(args.components_file),
+                include_components=args.include_components, batch_size=args.batch_size)
             print(f"✓ veille modifiée : {v.slug}")
         elif args.cmd == "pause":
             service.pause(args.slug)
@@ -170,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "reconcile":
             for line in service.reconcile_all():
                 print(line)
-    except (store.StoreError, schedule.ScheduleError, service.ServiceError, hermes.HermesError) as exc:
+    except (store.StoreError, schedule.ScheduleError, service.ServiceError, hermes.HermesError, OSError) as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1
     return 0

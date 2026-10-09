@@ -14,15 +14,21 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
-from . import hermes, paths, pricing, render, schedule, store
+from . import components as comp
+from . import digikey, hermes, paths, pricing, render, schedule, store
 from .store import PdfOptions, StoreError, Veille
 
 LEGACY_JOB_NAME = "Veille technologique hebdomadaire"
 LEGACY_SLUG = "industrie-4-0"
 BOOTSTRAP_MARKER = ".bootstrapped"
 PLACEHOLDER_RECIPIENT = "destinataire@example.com"
+COMPONENTS_TEMPLATE = "composants"
+COMPONENTS_SCHEDULE = "0 23 * * 0"  # dimanche 23h : heures creuses DeepSeek toute l'année
+CHAPTER_MARK = "<!-- chapitre-composants -->"
 
 
 class ServiceError(RuntimeError):
@@ -119,7 +125,17 @@ def describe(v: Veille, jobs: list[dict] | None = None) -> dict:
         "last_report": reports[0] if reports else None,
         "report_count": len(reports),
         "running": running_pid(v.slug) is not None,
+        "components": _components_summary(v),
     }
+
+
+def _components_summary(v: Veille) -> dict | None:
+    if v.kind != "composants":
+        return None
+    try:
+        return comp.summary(comp.load_components(v.slug)["components"], comp.load_notices(v.slug))
+    except comp.ComponentsError as exc:
+        return {"error": str(exc)}
 
 
 def _safe_jobs() -> list[dict]:
@@ -202,23 +218,33 @@ def costs_overview(days: int = 30) -> dict:
 def create_veille(*, name: str, subject: str, schedule_expr: str, recipients: list[str],
                   brief: str, pdf: dict | None = None, slug: str | None = None,
                   model: str | None = None, provider: str | None = None,
-                  paused: bool = False, actor: str = "cli") -> Veille:
+                  paused: bool = False, kind: str = "veille", components: list[dict] | None = None,
+                  include_components: str | None = None, batch_size: int | None = None,
+                  actor: str = "cli") -> Veille:
     name = (name or "").strip()
     if not name:
         raise StoreError("le nom est obligatoire")
     slug = store.check_slug(slug or store.slugify(name))
+    if kind not in store.KINDS:
+        raise StoreError(f"type de veille inconnu : {kind!r}")
     if not recipients:
         raise StoreError("au moins un destinataire est requis")
     with _locked():
         if store.veille_dir(slug).exists():
             raise StoreError(f"une veille « {slug} » existe déjà")
-        v = Veille(slug=slug, name=name, subject=(subject or "").strip(),
+        v = Veille(slug=slug, name=name, subject=(subject or "").strip(), kind=kind,
                    model=model or None, provider=provider or None, pdf=_pdf(pdf))
         _apply_schedule(v, schedule_expr)
+        if batch_size is not None:
+            v.batch_size = _batch_size(batch_size)
         try:
             store.save(v)
             store.write_recipients(slug, recipients)
             store.write_brief(slug, brief)
+            if kind == "composants":
+                comp.save_components(slug, {"components": comp.replace_components([], components or []),
+                                            "batch": []})
+            _set_link(v, include_components)
             render.write(v)
             v.job_id = _create_job(v, paused=paused)
             store.save(v)
@@ -233,7 +259,8 @@ def update_veille(slug: str, *, name: str | None = None, subject: str | None = N
                   schedule_expr: str | None = None, recipients: list[str] | None = None,
                   brief: str | None = None, pdf: dict | None = None,
                   model: str | None = None, provider: str | None = None,
-                  actor: str = "cli") -> Veille:
+                  components: list[dict] | None = None, include_components: str | None = None,
+                  batch_size: int | None = None, actor: str = "cli") -> Veille:
     with _locked():
         v = store.load(slug)
         # Avant toute écriture : jobs.json illisible ≠ job absent (échouer plutôt que doublonner).
@@ -269,6 +296,21 @@ def update_veille(slug: str, *, name: str | None = None, subject: str | None = N
             if brief.replace("\r\n", "\n") != store.read_brief(slug):
                 changes.append("brief")
             store.write_brief(slug, brief)
+        if components is not None:
+            if v.kind != "composants":
+                raise StoreError("seule une veille composants a une liste de composants")
+            data = comp.load_components(slug)
+            new_list = comp.replace_components(data["components"], components)
+            if [comp.key_of(c["mpn"], c["manufacturer"]) for c in new_list] != [
+                    comp.key_of(c["mpn"], c["manufacturer"]) for c in data["components"]]:
+                changes.append("composants")
+            data["components"] = new_list
+            comp.save_components(slug, data)
+        if batch_size is not None and _batch_size(batch_size) != v.batch_size:
+            v.batch_size = _batch_size(batch_size)
+            changes.append("taille du lot")
+        if include_components is not None and _set_link(v, include_components):
+            changes.append("chapitre composants")
         store.save(v)
         render.write(v)
         job = hermes.get_job(v.job_id, jobs)
@@ -372,6 +414,10 @@ def archive(slug: str, actor: str = "cli") -> Path:
         dest = paths.archive_dir() / f"{slug}-{dt.datetime.now():%Y%m%d-%H%M%S}"
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(v.dir), str(dest))
+        for other in _linked_veilles(slug):  # plus de chapitre vers une veille archivée
+            other.components = None
+            store.save(other)
+            render.write(other)
     audit(actor, "archive", slug, str(dest))
     return dest
 
@@ -381,24 +427,296 @@ def brevo_script() -> str:
         "BREVO_SCRIPT", str(paths.hermes_home() / "skills/email/brevo-email/scripts/brevo_send.py"))
 
 
-def send_test_email(slug: str, actor: str = "cli") -> str:
-    v = store.load(slug)
-    recipients_file = v.dir / "recipients.txt"
-    cmd = [sys.executable, brevo_script(), "--bcc-file", str(recipients_file),
-           "--subject", f"[TEST] {v.name} — canal d'envoi",
-           "--text", (f"Ceci est un e-mail de test de la veille « {v.name} ».\n\n"
-                      f"Vous le recevez car vous figurez parmi ses destinataires "
-                      f"({schedule.describe(v.schedule)}).\n\n— Veille automatique."),
-           "--env-file", str(paths.hermes_home() / ".env")]
+def _brevo(args: list[str], timeout: int = 120) -> str:
+    """Envoi par le skill brevo-email ; renvoie sa sortie ou lève ServiceError."""
+    cmd = [sys.executable, brevo_script(), *args, "--env-file", str(paths.hermes_home() / ".env")]
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ServiceError(f"envoi impossible : {exc}") from exc
     out = ((p.stdout or "") + (p.stderr or "")).strip()
-    audit(actor, "test-email", slug, "ok" if p.returncode == 0 else "échec")
     if p.returncode != 0:
         raise ServiceError(out or "échec de l'envoi")
     return out
+
+
+def send_test_email(slug: str, actor: str = "cli") -> str:
+    v = store.load(slug)
+    try:
+        out = _brevo(["--bcc-file", str(v.dir / "recipients.txt"),
+                      "--subject", f"[TEST] {v.name} — canal d'envoi",
+                      "--text", (f"Ceci est un e-mail de test de la veille « {v.name} ».\n\n"
+                                 f"Vous le recevez car vous figurez parmi ses destinataires "
+                                 f"({schedule.describe(v.schedule)}).\n\n— Veille automatique.")],
+                     timeout=60)
+    except ServiceError:
+        audit(actor, "test-email", slug, "échec")
+        raise
+    audit(actor, "test-email", slug, "ok")
+    return out
+
+
+# --------------------------------------------------------------------------
+# Veille composants (PCN / fins de vie)
+# --------------------------------------------------------------------------
+def _batch_size(value) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise StoreError(f"taille de lot invalide : {value!r}") from None
+    if not 1 <= n <= 500:
+        raise StoreError("taille de lot hors limites (1–500)")
+    return n
+
+
+def _components_veille(slug: str) -> Veille:
+    v = store.load(slug)
+    if v.kind != "composants":
+        raise ServiceError(f"« {slug} » n'est pas une veille composants")
+    return v
+
+
+def _linked_veilles(slug: str) -> list[Veille]:
+    return [x for x in store.list_all() if x.components == slug]
+
+
+def _set_link(v: Veille, target: str | None) -> bool:
+    """Rattache (ou détache, cible vide) le chapitre composants d'une veille ; True si changé.
+
+    Au rattachement, les avis déjà connus sont marqués livrés à cette veille (jour « rattachement ») :
+    le premier chapitre ne contient que les nouveautés, le rappel des fins de vie couvre le reste.
+    """
+    target = (target or "").strip() or None
+    if target == v.components:
+        return False
+    if target:
+        if v.kind != "veille":
+            raise StoreError("seule une veille thématique peut inclure un chapitre composants")
+        if _components_veille(target).slug == v.slug:
+            raise StoreError("une veille ne peut pas s'inclure elle-même")
+        notices = comp.load_notices(target)
+        comp.mark_delivered(notices, {n["id"] for n in notices}, v.slug, f"rattachement {comp.today()}")
+        comp.save_notices(target, notices)
+    v.components = target
+    return True
+
+
+def components_scan(slug: str, actor: str = "job", client: digikey.Client | None = None,
+                    budget_s: float = 900) -> dict:
+    """Statut Digi-Key de tous les composants, puis lot de recherche web du jour (enregistré).
+
+    Les appels réseau (plusieurs minutes pour 300 composants) se font HORS verrou ; les résultats
+    sont ensuite appliqués par clé à la liste relue sous verrou (éditions concurrentes préservées).
+    """
+    _components_veille(slug)
+    day = comp.today()
+    creds = digikey.credentials()
+    info: dict = {"configured": bool(creds or client), "checked": 0, "errors": 0}
+    results: dict[str, dict] = {}
+    if creds or client:
+        client = client or digikey.Client(*creds)
+        start = time.monotonic()
+        todo = sorted(comp.load_components(slug)["components"],
+                      key=lambda c: (c.get("dk") or {}).get("checked_at") or "")
+        for c in todo:
+            if ((c.get("dk") or {}).get("checked_at") or "") == day:
+                continue  # déjà vérifié aujourd'hui (relance du même jour)
+            if client.calls >= digikey.MAX_CALLS or time.monotonic() - start > budget_s:
+                info["stopped"] = "budget de temps ou d'appels atteint : suite au prochain passage"
+                break
+            try:
+                results[comp.key_of(c["mpn"], c["manufacturer"])] = client.status(c["mpn"], c["manufacturer"])
+            except digikey.DigiKeyError as exc:
+                info["error"] = str(exc)
+                break
+    with _locked():
+        v = _components_veille(slug)
+        data, notices = comp.load_components(slug), comp.load_notices(slug)
+        new = []
+        for c in data["components"]:
+            key = comp.key_of(c["mpn"], c["manufacturer"])
+            r = results.get(key)
+            if r is None:
+                continue
+            prev = c.get("dk") or {}
+            dk = {**prev, "checked_at": day, "error": r.get("error")}
+            if "status" in r:
+                info["checked"] += 1
+                ntype = digikey.STATUS_TYPES.get(r["status"].lower())
+                if r["status"] != prev.get("status") and (prev.get("status") or ntype):
+                    dk["changed_at"] = day
+                dk.update(status=r["status"], product_url=r["product_url"])
+                if ntype:
+                    url = r["product_url"] or comp.normalize_url(
+                        "https://www.digikey.com/en/products/result?keywords=" + c["mpn"].replace(" ", "+"))
+                    new += comp.merge(notices, [{
+                        "key": key, "mpn": c["mpn"], "manufacturer": c["manufacturer"], "type": ntype,
+                        "title": f"Statut Digi-Key : {r['status']}", "number": "", "published": "",
+                        "ltb_date": "", "eol_date": "", "scope": "référence", "summary": "",
+                        "sources": [{"url": url, "label": "Digi-Key"}], "origin": "digikey"}], day)
+            else:
+                info["errors"] += 1
+            c["dk"] = dk
+        lot = comp.batch(data["components"], v.batch_size) if data["components"] else []
+        data["batch"] = [comp.key_of(c["mpn"], c["manufacturer"]) for c in lot]
+        comp.save_components(slug, data)
+        if new:
+            comp.save_notices(slug, notices)
+    known: dict[str, list[str]] = {}
+    for n in notices:
+        known.setdefault(n["key"], []).append(n.get("number") or n["title"])
+    audit(actor, "components-scan", slug,
+          f"Digi-Key {info['checked']} vérifié(s), {len(new)} avis ; lot web {len(lot)}")
+    return {"slug": slug, "date": day, "digikey": info, "new_digikey_notices": len(new),
+            "batch": [{"mpn": c["mpn"], "manufacturer": c["manufacturer"], "ref": c.get("ref", ""),
+                       "since": comp.search_since(c), "digikey_status": (c.get("dk") or {}).get("status"),
+                       "known": known.get(comp.key_of(c["mpn"], c["manufacturer"]), [])[:20]}
+                      for c in lot]}
+
+
+def add_components(slug: str, items: list[dict], actor: str = "cli") -> int:
+    """Ajoute des références (doublons ignorés) ; renvoie le nombre réellement ajouté."""
+    current = comp.load_components(_components_veille(slug).slug)["components"]
+    keys = {comp.key_of(c["mpn"], c["manufacturer"]) for c in current}
+    fresh = [i for i in items if comp.key_of(i["mpn"], i["manufacturer"]) not in keys]
+    if fresh:
+        update_veille(slug, components=current + fresh, actor=actor)
+    return len(fresh)
+
+
+def remove_components(slug: str, mpns: list[str], actor: str = "cli") -> int:
+    """Retire les références de ces MPN (tous fabricants) ; l'historique des avis est conservé."""
+    current = comp.load_components(_components_veille(slug).slug)["components"]
+    drop = {comp.norm_mpn(m) for m in mpns}
+    kept = [c for c in current if comp.norm_mpn(c["mpn"]) not in drop]
+    if len(kept) != len(current):
+        update_veille(slug, components=kept, actor=actor)
+    return len(current) - len(kept)
+
+
+def notices(slug: str, ntype: str | None = None, since: str | None = None) -> list[dict]:
+    _components_veille(slug)
+    if ntype and ntype not in comp.TYPES:
+        raise StoreError(f"type d'avis inconnu : {ntype} ({', '.join(comp.TYPES)})")
+    return comp.for_display(comp.load_notices(slug), ntype, since)
+
+
+def _mark(slug: str, ids: set[str], channel: str, day: str) -> None:
+    with _locked():
+        notices = comp.load_notices(slug)
+        comp.mark_delivered(notices, ids, channel, day)
+        comp.save_notices(slug, notices)
+
+
+def _build_pdf(v: Veille, md: Path, pdf: Path, subtitle: str, meta: str) -> None:
+    script = os.environ.get(
+        "BUILD_REPORT", str(paths.hermes_home() / "skills/productivity/styled-pdf-report/scripts/build_report.py"))
+    title = v.pdf.title or v.name
+    cmd = [sys.executable, script, "--md", str(md), "--out", str(pdf), "--title", title,
+           "--subtitle", subtitle, "--meta", meta, "--header", v.pdf.header or title,
+           "--footer", v.pdf.footer, "--accent", v.pdf.accent, "--toc-depth", "1"]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ServiceError(f"PDF non généré : {exc}") from exc
+    if p.returncode != 0 or not pdf.is_file():
+        raise ServiceError("PDF non généré : " + ((p.stdout or "") + (p.stderr or "")).strip()[-500:])
+
+
+def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
+    """Enregistre les avis trouvés par l'agent, produit le rapport PDF, envoie l'e-mail dédié.
+
+    Ordre sûr : les avis sont enregistrés AVANT le PDF et l'e-mail ; un canal n'est marqué livré
+    qu'après succès (un échec les ré-inclut à l'envoi suivant, rien n'est perdu).
+    """
+    v = _components_veille(slug)
+    try:
+        if candidates.stat().st_size > comp.MAX_CANDIDATES_BYTES:
+            raise comp.ComponentsError("fichier des avis trop volumineux")
+        raw = json.loads(candidates.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise comp.ComponentsError(f"fichier introuvable : {candidates}") from None
+    except (OSError, ValueError) as exc:
+        raise comp.ComponentsError(f"JSON invalide ({exc}) : corriger le fichier et relancer") from None
+    day = comp.today()
+    with _locked():
+        data, notices = comp.load_components(slug), comp.load_notices(slug)
+        valid, rejected = comp.validate_candidates(raw, data["components"])
+        new = comp.merge(notices, valid, day)
+        lot = set(data["batch"])
+        for c in data["components"]:
+            if comp.key_of(c["mpn"], c["manufacturer"]) in lot:
+                c["web_checked_at"] = day
+        data["batch"] = []
+        comp.save_components(slug, data)
+        comp.save_notices(slug, notices)
+        linked = [x.slug for x in _linked_veilles(slug)]
+    audit(actor, "components-finalize", slug, f"{len(new)} nouvel(s) avis, {len(rejected)} rejet(s)")
+
+    report = comp.pending(notices, "report", day)
+    view = comp.digest(data["components"], notices, report)
+    body = comp.to_markdown(view, heading="#")
+    searched = [c["mpn"] for c in data["components"] if comp.key_of(c["mpn"], c["manufacturer"]) in lot]
+    body += (f"\n*Recherche web de cette exécution ({len(searched)}) : "
+             f"{', '.join(comp.md_escape(m) for m in searched) or 'aucune'}.*\n")
+    if rejected:
+        body += f"\n*{len(rejected)} entrée(s) de la recherche web rejetée(s) (source ou référence invalide).*\n"
+    md, pdf = store.veille_dir(slug) / "rapports" / f"{day}-veille.md", store.veille_dir(slug) / "rapports" / f"{day}-veille.pdf"
+    store.atomic_write(md, body)
+    _build_pdf(v, md, pdf, subtitle=f"Avis PCN et fins de vie — {day}",
+               meta=f"Composants suivis : {view['components']} | Recherche web du jour : {len(lot)}")
+    _mark(slug, {n["id"] for n in report}, "report", day)
+    lines = [f"OK: veille composants — {len(new)} nouvel(s) avis "
+             f"(dont {sum(1 for n in new if n['type'] in comp.CRITICAL)} fin(s) de vie / dernière(s) commande(s)), "
+             f"{len(rejected)} rejet(s), PDF {pdf}"]
+    lines += [f"  rejet {r}" for r in rejected[:20]]
+    mail = comp.pending(notices, "mail", day, rerun=False)
+    if linked:
+        # Livrés par le chapitre de la veille : le canal e-mail reste à jour en cas de détachement.
+        _mark(slug, {n["id"] for n in mail}, "mail", f"via {linked[0]}")
+        lines.append(f"e-mail : inclus dans la veille {', '.join(linked)} (chapitre composants)")
+        return "\n".join(lines)
+    view = comp.digest(data["components"], notices, mail)
+    with tempfile.NamedTemporaryFile("w", suffix=".html", encoding="utf-8", delete=False) as fh:
+        fh.write(comp.to_html_email(view, f"{v.name} — {day}", "Détail et historique : interface web des veilles."))
+    try:
+        out = _brevo(["--bcc-file", str(v.dir / "recipients.txt"),
+                      "--subject", f"{comp.subject_prefix(view)}{v.name} — {day}",
+                      "--html-file", fh.name, "--text", comp.to_text_email(view),
+                      "--attach", str(pdf), "--verify"])
+    finally:
+        os.unlink(fh.name)
+    _mark(slug, {n["id"] for n in mail}, "mail", day)
+    audit(actor, "components-mail", slug, f"{len(mail)} avis")
+    return "\n".join([*lines, out])
+
+
+def components_chapter(slug: str, for_slug: str, report_md: Path, actor: str = "job") -> str | None:
+    """Ajoute le chapitre composants au rapport Markdown du jour d'une veille ; renvoie le préfixe
+    d'objet (« [EOL ×2] », vide sinon), ou None si la veille composants n'existe plus.
+
+    Idempotent : relancé sur le même fichier, le chapitre précédent (toujours en fin) est remplacé.
+    """
+    store.load(for_slug)
+    path = report_md.resolve()
+    if path.parent != (store.veille_dir(for_slug) / "rapports").resolve() \
+            or not store.REPORT_RE.match(path.name) or path.suffix != ".md" or not path.is_file():
+        raise StoreError(f"rapport Markdown invalide pour la veille {for_slug} : {report_md}")
+    try:
+        _components_veille(slug)
+    except StoreError:
+        return None
+    day = comp.today()
+    with _locked():
+        data, notices = comp.load_components(slug), comp.load_notices(slug)
+        new = comp.pending(notices, for_slug, day)
+        view = comp.digest(data["components"], notices, new)
+        text = path.read_text(encoding="utf-8").split(CHAPTER_MARK)[0].rstrip()
+        store.atomic_write(path, f"{text}\n\n{CHAPTER_MARK}\n\n{comp.to_markdown(view)}")
+        comp.mark_delivered(notices, {n["id"] for n in new}, for_slug, day)
+        comp.save_notices(slug, notices)
+    audit(actor, "components-chapter", slug, f"{for_slug} : {len(new)} avis")
+    return comp.subject_prefix(view).strip()
 
 
 # --------------------------------------------------------------------------
