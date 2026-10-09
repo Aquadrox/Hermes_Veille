@@ -515,6 +515,10 @@ def test_cli_components(watch, tools, tmp_path, capsys):
     assert cli.main(["components", "add", watch.slug, "--file", str(bom), "BC557;onsemi"]) == 0
     assert "2 composant(s) ajouté(s)" in capsys.readouterr().out
     assert cli.main(["components", "remove", watch.slug, "BC557"]) == 0
+    with pytest.raises(SystemExit):  # valeurs en trop : refusées hors « components »
+        cli.main(["list", "en-trop"])
+    with pytest.raises(SystemExit):  # option inconnue : refusée
+        cli.main(["components", "list", watch.slug, "--inconnue"])
     assert cli.main(["components", "scan", watch.slug]) == 0
     assert json.loads(capsys.readouterr().out.split("✓ 1 composant(s) retiré(s)\n")[-1])["batch"]
     p = watch.dir / "rapports" / "cand.json"

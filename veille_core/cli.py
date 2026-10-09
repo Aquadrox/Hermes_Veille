@@ -198,7 +198,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("reconcile")
     sub.add_parser("migrate")
     sub.add_parser("bootstrap")
-    args = ap.parse_args(argv)
+    # Python 3.11 ne rattache pas à `items` (nargs="*") les valeurs placées APRÈS une option
+    # (« components add slug --file f.csv "MPN;Fab" ») : on les y ajoute, sans rien accepter d'autre.
+    args, extra = ap.parse_known_args(argv)
+    if extra:
+        if args.cmd != "components" or any(e.startswith("-") for e in extra):
+            ap.error("arguments non reconnus : " + " ".join(extra))
+        args.items += extra
 
     try:
         if args.cmd == "list":
