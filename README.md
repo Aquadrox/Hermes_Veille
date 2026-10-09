@@ -241,8 +241,13 @@ make update          # git pull --ff-only, puis ./scripts/deploy.sh
 2. **sauvegarde** les données, conteneur arrêté pour une archive cohérente (environ 1 s pour
    40 Mo), à côté du dossier de données ;
 3. démarre la nouvelle version et attend la fin de **son** amorçage (réconciliation des jobs) ;
-4. **compare l'inventaire** (veilles et rapports PDF) avant et après : s'il manque quoi que ce
-   soit, le déploiement échoue et affiche la commande de restauration.
+4. vérifie que le conteneur monte bien ce dossier, puis **compare l'inventaire** (veilles et
+   rapports PDF) avant et après : s'il manque quoi que ce soit, le déploiement échoue et affiche
+   la commande de restauration.
+
+Le conteneur est arrêté pendant la sauvegarde : un rapport en cours de génération est
+interrompu (comme lors de tout redémarrage). Éviter de déployer pendant une exécution
+planifiée.
 
 Restauration manuelle d'une sauvegarde :
 

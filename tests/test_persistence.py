@@ -19,7 +19,8 @@ HOST_SCRIPTS = ("data-dir.sh", "backup.sh", "deploy.sh", "move-data.sh")
 FAKE_DOCKER = """#!/bin/sh
 echo "$*" >> "$DOCKER_LOG"
 case "$*" in
-    "logs "*) echo "[seed-veille] amorçage terminé" ;;
+    "logs "*) printf '%s\\n' "$FAKE_BOOT_LOG" "[seed-veille] amorçage terminé" ;;
+    "inspect "*) [ -n "$FAKE_MOUNT" ] && echo "$FAKE_MOUNT" || "$FAKE_REPO/scripts/data-dir.sh" ;;
     "compose up -d") [ -z "$FAKE_LOSE" ] || rm -f "$FAKE_LOSE" ;;
 esac
 exit 0
@@ -43,8 +44,11 @@ def repo(tmp_path):
 
 def run(repo, script, *args, **env):
     full_env = {k: v for k, v in os.environ.items() if k not in ("VEILLE_DATA_DIR", "BACKUP_DIR")}
+    # Par défaut, le faux conteneur monte le dossier que compose résoudrait.
     full_env.update(PATH=f"{repo.parent / 'bin'}:{os.environ['PATH']}",
-                    DOCKER_LOG=str(repo.parent / "docker.log"), **env)
+                    DOCKER_LOG=str(repo.parent / "docker.log"), FAKE_BOOT_LOG="", FAKE_MOUNT="",
+                    FAKE_REPO=str(repo))
+    full_env.update(env)
     return subprocess.run([str(repo / "scripts" / script), *args], capture_output=True,
                           text=True, env=full_env, timeout=60)
 
@@ -79,6 +83,7 @@ def make_data(root: Path) -> Path:
     ('VEILLE_DATA_DIR="/srv/avec guillemets"', "/srv/avec guillemets"),
     ("VEILLE_DATA_DIR='/srv/simples'", "/srv/simples"),
     ("VEILLE_DATA_DIR=/srv/x  # commentaire", "/srv/x"),
+    ("export VEILLE_DATA_DIR=/srv/exporte", "/srv/exporte"),
     ("VEILLE_DATA_DIR=./ailleurs", "{repo}/ailleurs"),
     ("VEILLE_DATA_DIR=rel/data", "{repo}/rel/data"),
 ])
@@ -144,6 +149,12 @@ def test_backup_next_to_data_without_secrets_and_rotated(repo, tmp_path):
     assert kept == sorted([archive.name, "veille-data-20260102-000000.tar.gz"])
 
 
+def test_backup_refuses_keep_zero(repo, tmp_path):
+    # KEEP=0 supprimerait l'archive qui vient d'être créée.
+    out = run(repo, "backup.sh", VEILLE_DATA_DIR=str(make_data(tmp_path / "d")), KEEP="0")
+    assert out.returncode == 2 and not (tmp_path / "backups").exists()
+
+
 def test_backup_refuses_missing_data_dir(repo, tmp_path):
     out = run(repo, "backup.sh", VEILLE_DATA_DIR=str(tmp_path / "absent"))
     assert out.returncode == 1 and "introuvable" in out.stderr
@@ -168,6 +179,30 @@ def test_deploy_init_creates_data_dir_for_a_fresh_install(repo, tmp_path):
     assert target.is_dir()
     calls = docker_calls(repo)
     assert "compose up -d" in calls and "compose stop" not in calls  # rien à sauvegarder
+
+
+def test_deploy_init_never_hides_data_left_in_the_repo(repo, tmp_path):
+    make_data(repo / "data")
+    target = tmp_path / "srv" / "data"
+    out = run(repo, "deploy.sh", "--init", "--no-build", VEILLE_DATA_DIR=str(target))
+    assert out.returncode == 1 and f"make move-data DEST={target}" in out.stderr
+    assert not target.exists()
+    assert not any(c.startswith("compose up") for c in docker_calls(repo))
+
+
+def test_deploy_fails_when_container_mounts_another_dir(repo, tmp_path):
+    data = make_data(tmp_path / "srv" / "data")
+    out = run(repo, "deploy.sh", "--no-build", VEILLE_DATA_DIR=str(data), FAKE_MOUNT=str(repo / "data"))
+    assert out.returncode == 1 and "au lieu de" in out.stderr
+
+
+def test_deploy_fails_when_reconcile_reports_an_error(repo, tmp_path):
+    data = make_data(tmp_path / "srv" / "data")
+    out = run(repo, "deploy.sh", "--no-build", VEILLE_DATA_DIR=str(data),
+              FAKE_BOOT_LOG="[seed-veille] reconcile: ERREUR jobs.json illisible")
+    assert out.returncode == 1
+    assert "réconciliation en erreur" in out.stderr and "AVEC DES ERREURS" in out.stderr
+    assert "données conservées" in out.stdout  # l'inventaire a tout de même été vérifié
 
 
 def test_deploy_backs_up_with_container_stopped_then_checks_nothing_lost(repo, tmp_path):
@@ -210,6 +245,24 @@ def test_move_data_out_of_the_repo(repo, tmp_path):
     assert run(repo, "data-dir.sh").stdout.strip() == str(dest)
     calls = docker_calls(repo)
     assert calls[0] == "compose down" and "compose up -d" in calls  # redéployé
+
+
+def test_move_data_when_env_already_points_to_destination(repo, tmp_path):
+    # .env réglé à la main AVANT de déplacer : deploy.sh renvoie vers move-data, qui doit agir.
+    make_data(repo / "data")
+    dest = tmp_path / "srv" / "data"
+    (repo / ".env").write_text(f"DEEPSEEK_API_KEY=k\nBREVO_API_KEY=k\nVEILLE_DATA_DIR={dest}\n")
+    out = run(repo, "move-data.sh", str(dest))
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert (dest / "cron" / "jobs.json").is_file() and not (repo / "data").exists()
+
+
+def test_move_data_refuses_leftover_partial_copy(repo, tmp_path):
+    make_data(repo / "data")
+    dest = tmp_path / "srv" / "data"
+    (tmp_path / "srv" / "data.partial").mkdir(parents=True)
+    out = run(repo, "move-data.sh", str(dest))
+    assert out.returncode == 1 and "data.partial" in out.stderr and docker_calls(repo) == []
 
 
 def test_move_data_replaces_existing_setting(repo, tmp_path):

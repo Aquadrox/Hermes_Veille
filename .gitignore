@@ -5,6 +5,8 @@
 
 # --- Données persistantes du conteneur (volume /opt/data) ---
 data/
+# copie de sécurité laissée par `make move-data` (secrets, destinataires, état Hermes)
+data.moved-*/
 
 # --- Artefacts produits ---
 *.pdf

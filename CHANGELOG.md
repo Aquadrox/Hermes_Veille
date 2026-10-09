@@ -25,7 +25,7 @@ Données persistantes à travers les mises à jour, garanties et vérifiées.
 - `scripts/backup.sh` (`make backup`) : archives rangées à côté des données, réservées au
   propriétaire (`umask 077`).
 - Interface : nombre de rapports sur le tableau de bord, avec un lien vers l'historique.
-- Tests : `tests/test_persistence.py` (25 tests : scripts de l'hôte exécutés avec un faux
+- Tests : `tests/test_persistence.py` (32 tests : scripts de l'hôte exécutés avec un faux
   `docker`), réconciliation sur un `jobs.json` corrompu, historique des rapports dans
   l'interface. Le test d'intégration simule une **mise à jour** (conteneur supprimé puis recréé :
   veilles, jobs, rapports et audit identiques) et vérifie le refus de démarrer sans dossier de
@@ -38,7 +38,10 @@ Données persistantes à travers les mises à jour, garanties et vérifiées.
     installation) ;
   - **sauvegarde automatique** conteneur arrêté ;
   - attente de l'amorçage de *ce* démarrage (et non plus du marqueur du premier) ;
-  - **inventaire avant et après** : le déploiement échoue s'il manque une veille ou un rapport.
+  - vérification que le conteneur monte bien le dossier attendu (`docker inspect`) ;
+  - **inventaire avant et après** : le déploiement échoue s'il manque une veille ou un rapport ;
+  - code de sortie non nul si l'amorçage échoue, si la réconciliation signale une erreur, si
+    `veillectl` ou l'interface ne répondent pas (auparavant : message, mais succès).
 - `docker-compose.yml` : volume en syntaxe longue avec `create_host_path: false`. Un dossier
   absent fait échouer le démarrage au lieu de repartir d'un état vide en silence.
 - Page d'une veille : l'historique des rapports passe **en tête**, avant le coût des exécutions,
@@ -49,7 +52,9 @@ Données persistantes à travers les mises à jour, garanties et vérifiées.
 - Réconciliation au démarrage et modification d'une veille : un `cron/jobs.json` **illisible**
   (droits, contenu corrompu) n'est plus pris pour une absence de jobs. Auparavant, chaque job
   était recréé : nouveaux identifiants, historique d'exécution et coûts orphelins, envois en
-  double. Désormais, rien n'est modifié et l'erreur est signalée.
+  double. Désormais, rien n'est modifié et l'erreur est signalée. Même correctif pour
+  l'archivage (le job n'était pas supprimé et continuait d'envoyer des e-mails) et la migration
+  de l'ancienne disposition.
 
 ## [0.2.6] — 2026-10-05
 

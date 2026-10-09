@@ -58,6 +58,11 @@ fi
 DATA="$("$REPO_DIR/scripts/data-dir.sh")"
 if [ ! -d "$DATA" ]; then
     if [ "$INIT" = 1 ]; then
+        # --init ne doit jamais masquer des données existantes restées dans le dépôt.
+        if [ "$DATA" != "$REPO_DIR/data" ] && [ -n "$(ls -A "$REPO_DIR/data" 2>/dev/null)" ]; then
+            fail "des données existent dans $REPO_DIR/data : make move-data DEST=$DATA (pas --init)"
+            exit 1
+        fi
         mkdir -p "$DATA" && chmod 0750 "$DATA"  # propriétaire réglé par le hook amont
         ok "dossier de données créé : $DATA"
     else
@@ -74,6 +79,7 @@ case "$DATA/" in
     "$REPO_DIR"/*) warn "données DANS le dépôt ($DATA) : un re-clone ou un « git clean -x » les effacerait — make move-data DEST=/srv/veille-hermes/data" ;;
 esac
 ok "pré-vol OK (.env renseigné, données : $DATA)"
+RC=0
 
 # --- 2. Image amont (optionnel) ---
 if [ "$PULL" = 1 ]; then
@@ -111,18 +117,33 @@ log "attente de l'amorçage (max 120 s)"
 for i in $(seq 1 24); do
     boot_log="$(docker logs --since "$START" "$CONTAINER" 2>&1 || true)"
     if grep -q 'seed-veille\] amorçage terminé' <<< "$boot_log"; then
-        ok "amorçage terminé (veilles réconciliées)"
+        if grep -q 'reconcile: .*ERREUR' <<< "$boot_log"; then
+            fail "réconciliation en erreur : $(grep 'reconcile: .*ERREUR' <<< "$boot_log" | head -3)"
+            RC=1
+        else
+            ok "amorçage terminé (veilles réconciliées)"
+        fi
         break
     fi
     sleep 5
-    [ "$i" = 24 ] && fail "amorçage non détecté après 120 s — voir : docker compose logs | grep seed-veille"
+    if [ "$i" = 24 ]; then
+        fail "amorçage non détecté après 120 s — voir : docker compose logs | grep seed-veille"
+        RC=1
+    fi
 done
+
+# Le conteneur monte-t-il bien CE dossier ? (sinon l'inventaire comparerait le mauvais)
+mounted="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/opt/data"}}{{.Source}}{{end}}{{end}}' "$CONTAINER")"
+if [ "$(realpath -m "$mounted")" != "$(realpath -m "$DATA")" ]; then
+    fail "le conteneur monte « $mounted » au lieu de « $DATA » : vérifier VEILLE_DATA_DIR (.env, environnement)"
+    exit 1
+fi
 
 # --- 7. Rien ne doit avoir disparu ---
 read -r v1 r1 <<< "$(inventory)"
 if [ "$v1" -lt "$v0" ] || [ "$r1" -lt "$r0" ]; then
     fail "données manquantes après déploiement : $v0 → $v1 veilles, $r0 → $r1 rapports PDF"
-    [ -n "$ARCHIVE" ] && echo "  restauration : docker compose stop && tar -xzf $ARCHIVE -C $DATA && docker compose start" >&2
+    [ -n "$ARCHIVE" ] && echo "  restauration : docker compose stop && tar -xzf '$ARCHIVE' -C '$DATA' && docker compose start" >&2
     exit 1
 fi
 ok "données conservées : $v1 veille(s), $r1 rapport(s) PDF"
@@ -134,18 +155,27 @@ if docker exec "$CONTAINER" veillectl list; then
     ok "veilles lisibles"
 else
     fail "veillectl en échec — voir : docker compose logs | grep seed-veille"
+    RC=1
 fi
 
 echo
 log "interface web (127.0.0.1:8088)"
 if grep -qE '^VEILLE_UI_PASSWORD_HASH=.+' .env; then
-    code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8088/login || true)
-    if [ "$code" = 200 ]; then ok "interface joignable (tunnel : make tunnel)"; else fail "interface injoignable (HTTP $code)"; fi
+    for _ in 1 2 3 4 5; do  # le service démarre juste après l'amorçage
+        code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8088/login || true)
+        [ "$code" = 200 ] && break
+        sleep 2
+    done
+    if [ "$code" = 200 ]; then ok "interface joignable (tunnel : make tunnel)"; else fail "interface injoignable (HTTP $code)"; RC=1; fi
 else
     echo "  interface désactivée : génère un mot de passe avec  make ui-password"
 fi
 
 echo
+if [ "$RC" != 0 ]; then
+    fail "déploiement terminé AVEC DES ERREURS (données vérifiées intactes) — voir ci-dessus"
+    exit "$RC"
+fi
 ok "déploiement terminé"
 cat <<'EOF'
 

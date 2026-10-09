@@ -12,7 +12,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dir="${VEILLE_DATA_DIR:-}"
 if [ -z "$dir" ] && [ -f "$REPO/.env" ]; then
-    dir="$(sed -n 's/^VEILLE_DATA_DIR=//p' "$REPO/.env" | tail -n 1)"
+    dir="$(sed -n 's/^\(export[[:space:]]\{1,\}\)\{0,1\}VEILLE_DATA_DIR=//p' "$REPO/.env" | tail -n 1)"
     dir="${dir%%[[:space:]]#*}"            # commentaire en fin de ligne
     dir="${dir#[\"\']}"; dir="${dir%[\"\']}"  # guillemets
 fi

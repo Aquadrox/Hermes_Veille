@@ -156,7 +156,11 @@ def test_unreadable_jobs_file_never_recreates_jobs(env):
     out = service.reconcile_all()
     assert len(out) == 1 and out[0].startswith("ERREUR") and "aucune veille modifiée" in out[0]
     with pytest.raises(hermes.HermesError):
-        service.update_veille(v.slug, subject="autre")
+        service.update_veille(v.slug, schedule_expr="0 9 * * 1")
+    assert store.load(v.slug).schedule == "0 7 * * *"  # rien d'écrit avant l'échec
+    with pytest.raises(hermes.HermesError):
+        service.archive(v.slug)  # un job non supprimé continuerait d'envoyer des e-mails
+    assert store.exists(v.slug)
     jobs_file.write_text(before)
     assert store.load(v.slug).job_id == v.job_id
     assert [j["id"] for j in hermes.load_jobs()] == [v.job_id]
