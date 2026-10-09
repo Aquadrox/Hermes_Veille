@@ -160,7 +160,8 @@ def _components(args) -> int:
             print("✓ chapitre composants ajouté")
             if prefix:
                 print(f"PREFIXE_SUJET={prefix}")
-            print(f"PIECE_JOINTE={xlsx}")
+            if xlsx:  # sinon (échec tracé dans l'audit) : e-mail envoyé sans la liste Excel
+                print(f"PIECE_JOINTE={xlsx}")
     return 0
 
 

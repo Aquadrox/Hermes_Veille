@@ -655,8 +655,7 @@ def to_html_email(view: dict, title: str, ui_hint: str = "") -> str:
         parts.append(f"<h3>Rappel : {len(rem)} composant(s) en fin de vie ou en dernière commande</h3>"
                      f"{table(rem_rows, '#7f1d1d')}")
     parts.append(f'<p style="color:#66727f;font-size:12px">{view["components"]} composants suivis. '
-                 f"Détail de chaque avis dans le PDF joint, liste complète dans le fichier Excel joint. "
-                 f"{esc(ui_hint)}</p></div>")
+                 f"Détail de chaque avis dans le PDF joint. {esc(ui_hint)}</p></div>")
     return "".join(parts)
 
 
@@ -673,12 +672,16 @@ def to_text_email(view: dict) -> str:
     return "\n".join(lines) or "Aucun nouvel avis depuis le précédent envoi."
 
 
-# Export Excel : toutes les lignes de `group(..., include_quiet=True)`, comme la liste de l'interface.
+# Export Excel : une ligne par composant, comme la liste de l'interface (`group(..., include_quiet=True)`).
 XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-_XLSX_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")  # = openpyxl ILLEGAL_CHARACTERS_RE
+# Caractères interdits en XML 1.0 (openpyxl ne refuse que les contrôles : U+FFFE / U+FFFF corrompraient le fichier).
+_XLSX_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
 _XLSX_COLUMNS = (("Composant", 24), ("Fabricant", 22), ("Réf. interne", 14), ("Critique", 9), ("Avis", 28),
                  ("Avis principal", 48), ("Échéance", 12), ("Détecté", 12), ("Statut Digi-Key", 20),
                  ("Vérifié Digi-Key", 15), ("Recherche web", 15), ("Lien", 48), ("Suivi", 9))
+_XLSX_DATES = frozenset(i for i, (name, _) in enumerate(_XLSX_COLUMNS, 1)
+                        if name in ("Échéance", "Détecté", "Vérifié Digi-Key", "Recherche web"))
+_XLSX_LINK = next(i for i, (name, _) in enumerate(_XLSX_COLUMNS, 1) if name == "Lien")
 
 
 def xlsx_name(slug: str, stamp: str) -> str:
@@ -686,15 +689,21 @@ def xlsx_name(slug: str, stamp: str) -> str:
     return f"{stamp}-{slug}.xlsx"
 
 
-def _xlsx_cell(value: str) -> str | dt.date:
-    """Valeur sûre pour une cellule : date ISO -> vraie date ; texte sans caractère de contrôle
-    (openpyxl les refuse : un titre d'avis venu du web ferait échouer l'envoi)."""
-    if DATE_RE.match(value) and _date(value):
+def xlsx_re(slug: str) -> re.Pattern:
+    """Noms possibles des exports de cette veille composants (inverse de `xlsx_name`)."""
+    return re.compile(rf"\d{{4}}-\d{{2}}-\d{{2}}(?:-\d{{2}}h\d{{2}})?-{re.escape(slug)}\.xlsx")
+
+
+def _xlsx_cell(value, is_date: bool) -> str | dt.date:
+    """Valeur sûre pour une cellule : date ISO valide -> vraie date (colonnes de dates seulement) ;
+    sinon texte sans caractère interdit (un titre d'avis venu du web ne casse pas le fichier)."""
+    value = "" if value is None else str(value)
+    if is_date and value and _date(value) == value:
         return dt.date.fromisoformat(value)
     return _XLSX_ILLEGAL.sub("", value)
 
 
-def to_xlsx(rows: list[dict]) -> bytes:
+def to_xlsx(components: list[dict], notices: list[dict]) -> bytes:
     """Classeur Excel d'une ligne par composant (critiques en tête, filtre automatique).
 
     Les textes viennent du web : chaque cellule texte est forcée en type CHAÎNE, une valeur
@@ -714,15 +723,16 @@ def to_xlsx(rows: list[dict]) -> bytes:
         ws.cell(1, i).fill = PatternFill("solid", fgColor="0F766E")
         ws.column_dimensions[ws.cell(1, i).column_letter].width = width
     crit_fill = PatternFill("solid", fgColor="FEF2F2")
-    for n, r in enumerate(rows, 2):  # numéro de ligne tenu ici : ws.max_row parcourt toute la feuille
+    # numéro de ligne tenu ici : ws.max_row parcourt toute la feuille (export quadratique sinon)
+    for n, r in enumerate(group(notices, components, include_quiet=True), 2):
         dk, link = r["dk"], r["link"]
         url = normalize_url(link["url"]) if link else None
         values = (r["mpn"], r["manufacturer"], r["ref"], "Oui" if r["critical"] else "",
                   ", ".join(TYPES[t][0] for t in r["types"]), r["worst"]["title"] if r["worst"] else "",
-                  r["deadline"], r["found"], dk.get("status") or dk.get("error") or "", dk.get("checked_at") or "",
-                  r["web_checked_at"] or "", url or "", "" if r["tracked"] else "retiré")
+                  r["deadline"], r["found"], dk.get("status") or dk.get("error"), dk.get("checked_at"),
+                  r["web_checked_at"], url, "" if r["tracked"] else "retiré")
         for col, value in enumerate(values, 1):
-            cell = ws.cell(n, col, _xlsx_cell(value))
+            cell = ws.cell(n, col, _xlsx_cell(value, col in _XLSX_DATES))
             if cell.data_type == "f":  # « =… » venu du web : texte, jamais formule
                 cell.data_type = "s"
             elif cell.is_date:
@@ -730,7 +740,7 @@ def to_xlsx(rows: list[dict]) -> bytes:
             if r["critical"]:
                 cell.fill = crit_fill
         if url:
-            ws.cell(n, len(_XLSX_COLUMNS) - 1).hyperlink = url
+            ws.cell(n, _XLSX_LINK).hyperlink = url
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
     # Impression : paysage, toutes les colonnes sur la largeur d'une page, en-tête répété.

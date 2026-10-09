@@ -138,7 +138,7 @@ lundi 6h30 — job de la veille thématique rattachée
   la veille composants n'envoie rien elle-même : ses nouveaux avis partent en chapitre de l'e-mail
   de cette veille. Sinon, elle envoie son propre e-mail (HTML lisible sur mobile + PDF).
   Dans les deux cas, la **liste complète des composants au format Excel** est jointe à l'e-mail
-  (instantané conservé à côté du rapport, dans `rapports/`).
+  (dernier export conservé à côté du rapport, dans `rapports/` ; s'il échoue, l'e-mail part sans lui).
 - **Export Excel** : bouton « Exporter (Excel) » de la liste des composants. Une ligne par
   référence (y compris sans avis, et celles retirées qui ont des avis), fins de vie et dernières
   commandes en tête et en rouge, filtre automatique : statut Digi-Key, avis, échéance, dates de

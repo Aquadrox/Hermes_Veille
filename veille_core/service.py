@@ -730,15 +730,25 @@ def _mark(slug: str, ids: set[str], channel: str, day: str) -> None:
 def components_xlsx(slug: str) -> bytes:
     """Liste complète des composants au format Excel (export à la demande)."""
     _components_veille(slug)
-    return comp.to_xlsx(comp.group(comp.load_notices(slug), comp.load_components(slug)["components"],
-                                   include_quiet=True))
+    return comp.to_xlsx(comp.load_components(slug)["components"], comp.load_notices(slug))
 
 
-def _write_xlsx(rdir: Path, slug: str, data: dict, notices: list[dict], stamp: str) -> Path:
-    """Instantané Excel de la veille composants `slug`, joint à l'e-mail : écrit à côté du rapport
-    (`rdir`), hors verrou (données déjà lues)."""
+def _write_xlsx(rdir: Path, slug: str, data: dict, notices: list[dict], stamp: str, actor: str) -> Path | None:
+    """Liste Excel de la veille composants `slug` à joindre à l'e-mail, écrite à côté du rapport (`rdir`) ;
+    seul le dernier export de cette veille y est gardé (volume des sauvegardes borné).
+
+    Pièce jointe de confort : un échec est tracé et renvoie None, l'e-mail part sans elle.
+    """
     path = rdir / comp.xlsx_name(slug, stamp)
-    store.atomic_write(path, comp.to_xlsx(comp.group(notices, data["components"], include_quiet=True)))
+    try:
+        store.atomic_write(path, comp.to_xlsx(data["components"], notices))
+        old = comp.xlsx_re(slug)
+        for p in rdir.iterdir():
+            if p != path and old.fullmatch(p.name):
+                p.unlink(missing_ok=True)
+    except Exception as exc:  # noqa: BLE001 - l'e-mail (avis, PDF) passe avant la pièce jointe
+        audit(actor, "components-xlsx", slug, f"échec : {type(exc).__name__}: {exc}"[:300])
+        return None
     return path
 
 
@@ -812,14 +822,16 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         lines.append(f"e-mail : inclus dans la veille {', '.join(linked)} (chapitre composants)")
         return "\n".join(lines)
     view = comp.digest(data["components"], notices, mail)
-    xlsx = _write_xlsx(pdf.parent, slug, data, notices, stamp)
+    xlsx = _write_xlsx(pdf.parent, slug, data, notices, stamp, actor)
+    hint = "Liste complète des composants dans le fichier Excel joint." if xlsx else ""
     with tempfile.NamedTemporaryFile("w", suffix=".html", encoding="utf-8", delete=False) as fh:
-        fh.write(comp.to_html_email(view, f"{v.name} — {day}", "Détail et historique : interface web des veilles."))
+        fh.write(comp.to_html_email(view, f"{v.name} — {day}",
+                                    f"{hint} Détail et historique : interface web des veilles.".strip()))
     try:
         out = _brevo(["--bcc-file", str(v.dir / "recipients.txt"),
                       "--subject", f"{comp.subject_prefix(view)}{v.name} — {day}",
-                      "--html-file", fh.name, "--text", comp.to_text_email(view),
-                      "--attach", str(pdf), "--attach", str(xlsx), "--verify"])
+                      "--html-file", fh.name, "--text", f"{comp.to_text_email(view)}\n\n{hint}".rstrip(),
+                      "--attach", str(pdf), *(["--attach", str(xlsx)] if xlsx else []), "--verify"])
     finally:
         os.unlink(fh.name)
     _mark(slug, {n["id"] for n in mail}, "mail", day)
@@ -827,10 +839,11 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
     return "\n".join([*lines, out])
 
 
-def components_chapter(slug: str, for_slug: str, report_md: Path, actor: str = "job") -> tuple[str, Path] | None:
+def components_chapter(slug: str, for_slug: str, report_md: Path,
+                       actor: str = "job") -> tuple[str, Path | None] | None:
     """Ajoute le chapitre composants au rapport Markdown du jour d'une veille et écrit à côté la liste
-    Excel à joindre à l'e-mail ; renvoie (préfixe d'objet « [EOL ×2] » ou vide, chemin de l'Excel),
-    ou None si la veille composants n'existe plus.
+    Excel à joindre à l'e-mail ; renvoie (préfixe d'objet « [EOL ×2] » ou vide, chemin de l'Excel ou
+    None s'il n'a pu être produit), ou None si la veille composants n'existe plus.
 
     Idempotent : relancé sur le même fichier, le chapitre précédent (toujours en fin) est remplacé.
     """
@@ -864,7 +877,7 @@ def components_chapter(slug: str, for_slug: str, report_md: Path, actor: str = "
         comp.mark_delivered(notices, {n["id"] for n in new}, channel, day)
         comp.save_notices(slug, notices)
     # Même horodatage que le rapport : l'Excel d'une relance remplace le précédent.
-    xlsx = _write_xlsx(rdir, slug, data, notices, path.name.removesuffix("-veille.md"))
+    xlsx = _write_xlsx(rdir, slug, data, notices, path.name.removesuffix("-veille.md"), actor)
     audit(actor, "components-chapter", slug, f"{for_slug} : {len(new)} avis")
     return comp.subject_prefix(view).strip(), xlsx
 

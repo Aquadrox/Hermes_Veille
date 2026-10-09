@@ -24,20 +24,27 @@ recharger la page.
     horodatage que le rapport et affiche `PIECE_JOINTE=<chemin>` ; l'étape « 6 bis » du prompt
     demande à l'agent de l'ajouter (`--attach`) à l'envoi. Le prompt des veilles rattachées est
     re-rendu au prochain démarrage (réconciliation), sans action manuelle.
-  - Instantané conservé dans `rapports/` (`<horodatage>-<slug>.xlsx`), hors de la liste des rapports.
+  - Fichier écrit dans `rapports/` (`<horodatage>-<slug>.xlsx`), hors de la liste des rapports ;
+    seul le dernier est gardé (volume des sauvegardes borné).
+  - Pièce jointe de confort : si l'export échoue, l'échec est tracé dans le journal d'audit et
+    l'e-mail (avis, PDF, chapitre) part quand même, sans l'Excel ni sa mention.
 
 ### Corrigé
 
 - **Fin d'une analyse sans rechargement** : le badge « en cours » à côté du titre passe tout seul à
   « actif » (ou « en échec ») et les boutons « Lancer l'analyse » / « Vérifier les statuts » se
   réactivent. Le suivi du journal (toutes les 5 s) renvoie l'en-tête à jour une seule fois, en
-  échange hors bande htmx : aucun minuteur ni JS supplémentaire (CSP inchangée).
+  échange hors bande htmx : aucun minuteur ni JS supplémentaire (CSP inchangée). Un lien
+  « recharger » signale qu'un nouveau rapport est disponible.
+- Suivi du journal d'une veille archivée pendant un lancement : arrêté proprement (réponse 286)
+  au lieu d'interroger le serveur indéfiniment.
 
 ### Sécurité
 
 - Excel : les textes venus du web (titres d'avis, statuts) sont forcés en texte — une valeur
-  « =… » n'est jamais une formule — et purgés des caractères de contrôle ; seuls les liens
-  http(s) validés sont cliquables.
+  « =… » n'est jamais une formule — et purgés des caractères interdits en XML (contrôles,
+  U+FFFE/U+FFFF, qui corrompraient le fichier envoyé) ; seuls les liens http(s) validés sont
+  cliquables.
 
 ## [0.3.3] — 2026-10-09
 

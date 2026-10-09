@@ -44,7 +44,7 @@
 {% if logs %}
 <section class="card">
   <h2>Lancements manuels</h2>
-  <div hx-get="/veilles/{{ v.slug }}/runs/{{ logs[0] }}" hx-trigger="load" hx-swap="outerHTML"></div>
+  <div hx-get="/veilles/{{ v.slug }}/runs/{{ logs[0] }}{% if row.running %}?poll=1{% endif %}" hx-trigger="load" hx-swap="outerHTML"></div>
   {% if logs|length > 1 %}
   <p class="small muted">Précédents : {% for l in logs[1:] %}<a href="/veilles/{{ v.slug }}/runs/{{ l }}" target="_blank" rel="noopener">{{ l }}</a>{{ " · " if not loop.last }}{% endfor %}</p>
   {% endif %}
