@@ -7,6 +7,33 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.3.3] — 2026-10-09
+
+Adresses d'alerte du chien de garde modifiables dans l'interface, sans toucher au `.env`.
+
+### Ajouté
+
+- **Interface — page « Paramètres »** : adresse(s) des alertes du chien de garde (une à dix, une
+  par ligne), avec l'adresse **effectivement utilisée** et son origine (interface, `ALERT_EMAIL`
+  du `.env` ou expéditeur Brevo) et un bouton « E-mail de test ». Stockage
+  `veilles/.settings.json` (écriture atomique, inclus dans les sauvegardes : pas un secret),
+  modifications tracées dans le journal d'audit. Modifiable depuis l'interface **uniquement** :
+  ni Telegram ni MCP ne peuvent détourner les alertes de panne.
+
+### Modifié
+
+- **Chien de garde** : destinataires lus sur le volume — interface, sinon `ALERT_EMAIL` du `.env`
+  (repli des installations existantes), sinon `BREVO_SENDER_EMAIL`. Chaque contrôle affiche le
+  destinataire retenu et son origine. Pris en compte au contrôle suivant, sans réinstallation.
+- `ALERT_EMAIL` devient facultatif dans le `.env`. L'expéditeur (`BREVO_SENDER_*`) et
+  `VEILLE_RECIPIENTS` (amorçage de la première veille) y restent ; les destinataires des rapports
+  se règlent toujours dans chaque veille.
+
+### Corrigé
+
+- `make watchdog-install` : l'e-mail de test du canal d'alerte lit désormais le dossier de données
+  réel (`VEILLE_DATA_DIR`) et non `./data` du dépôt.
+
 ## [0.3.2] — 2026-10-09
 
 Veille composants lisible avec beaucoup de références, sur PC comme sur mobile ; rapports horodatés.

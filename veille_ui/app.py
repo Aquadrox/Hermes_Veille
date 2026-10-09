@@ -29,6 +29,7 @@ from veille_core import (
     store,
     version,
 )
+from veille_core import settings as admin_settings  # `settings` : réglages d'auth dans create_app
 from veille_core.store import StoreError
 
 from . import auth
@@ -52,6 +53,9 @@ FLASH = {
     "creds-saved": "Clés enregistrées. Utilise « Tester la connexion » pour les vérifier.",
     "creds-unchanged": "Aucune modification : les champs laissés vides conservent leur valeur.",
     "creds-deleted": "Clés supprimées.",
+    "settings-saved": "Paramètres enregistrés. Utilise « E-mail de test » pour vérifier l'adresse.",
+    "settings-unchanged": "Aucune modification.",
+    "alert-mail": "E-mail de test envoyé aux adresses d'alerte.",
 }
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
        "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
@@ -532,6 +536,31 @@ def create_app() -> FastAPI:
                 return render(request, "sources.html", sources=service.sources_status(), result=result)
         except USER_ERRORS as exc:
             return render(request, "sources.html", 400, sources=service.sources_status(), error=str(exc))
+        return PlainTextResponse("action inconnue", status_code=404)
+
+    # -------------------------------------------------------------- paramètres (interface seule)
+    def settings_page(request: Request, status_code: int = 200, /, **ctx):
+        return render(request, "settings.html", status_code, alert=admin_settings.alert_status(), **ctx)
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_form(request: Request):
+        return settings_page(request)
+
+    @app.post("/settings/{op}")
+    async def settings_action(request: Request, op: str):
+        form = await request.form()
+        try:
+            if op == "save":
+                # Hors de la boucle d'événements : le verrou des veilles peut être tenu quelques secondes.
+                changed = await run_in_threadpool(service.save_alert_emails, str(form.get("alert_emails", "")),
+                                                  actor=ACTOR)
+                return RedirectResponse(f"/settings?ok={'settings-saved' if changed else 'settings-unchanged'}", 303)
+            if op == "test":
+                await run_in_threadpool(service.send_test_alert, actor=ACTOR)
+                return RedirectResponse("/settings?ok=alert-mail", 303)
+        except USER_ERRORS as exc:
+            typed = {"typed": str(form.get("alert_emails", ""))} if op == "save" else {}  # saisie conservée
+            return settings_page(request, 400, error=str(exc), **typed)
         return PlainTextResponse("action inconnue", status_code=404)
 
     # -------------------------------------------------------------- santé

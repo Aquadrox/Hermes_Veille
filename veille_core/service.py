@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from . import components as comp
-from . import credentials, digikey, hermes, paths, pricing, render, schedule, store
+from . import credentials, digikey, hermes, paths, pricing, render, schedule, settings, store
 from .store import PdfOptions, StoreError, Veille
 
 LEGACY_JOB_NAME = "Veille technologique hebdomadaire"
@@ -685,6 +685,34 @@ def check_credentials(provider: str, actor: str = "ui") -> str:
         raise ServiceError(str(exc)) from None
     audit(actor, "credentials-test", detail=f"{provider} : ok")
     return "Connexion à Digi-Key réussie."
+
+
+def save_alert_emails(text: str, actor: str = "ui") -> bool:
+    """Adresses des alertes du chien de garde (interface seule : jamais le MCP)."""
+    with _locked():
+        changed = settings.save_alert_emails(text)
+    if changed:
+        audit(actor, "settings-alert-emails", detail=f"{len(settings.alert_status()['saved'])} adresse(s)")
+    return changed
+
+
+def send_test_alert(actor: str = "ui") -> str:
+    """E-mail de test aux adresses d'alerte EFFECTIVES (celles qu'utilisera le chien de garde)."""
+    to = settings.alert_status()["effective"]
+    if not to:
+        raise ServiceError("aucune adresse d'alerte : en renseigner une ci-dessus")
+    try:
+        out = _brevo(["--to", ",".join(to), "--from-name", "Surveillance veille",
+                      "--subject", "[TEST] Surveillance des veilles — canal d'alerte",
+                      "--text", ("Ceci est un test du canal d'alerte des veilles, envoyé depuis l'interface.\n\n"
+                                 "Le chien de garde de l'hôte écrira à cette adresse en cas de panne.\n\n"
+                                 "— Surveillance automatique des veilles.")],
+                     timeout=60)
+    except ServiceError:
+        audit(actor, "test-alert", detail="échec")
+        raise
+    audit(actor, "test-alert", detail="ok")
+    return out
 
 
 def _mark(slug: str, ids: set[str], channel: str, day: str) -> None:
