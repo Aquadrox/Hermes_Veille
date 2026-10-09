@@ -23,7 +23,8 @@ par simple reconstruction.
 ```bash
 # 1. configurer les secrets
 cp .env.example .env && chmod 600 .env && $EDITOR .env
-#    DEEPSEEK_API_KEY, BREVO_API_KEY, BREVO_SENDER_*, ALERT_EMAIL, VEILLE_RECIPIENTS
+#    DEEPSEEK_API_KEY, BREVO_API_KEY, BREVO_SENDER_*, VEILLE_RECIPIENTS
+#    (adresse d'alerte du chien de garde : ensuite, dans l'interface, page « Paramètres »)
 #    VEILLE_DATA_DIR : dossier des données, HORS du dépôt (défaut proposé : /srv/veille-hermes/data)
 
 # 2. premier déploiement : crée le dossier de données, build, démarrage, vérifications
@@ -78,6 +79,7 @@ Fonctions :
   cliquable) et l'e-mail ; boutons « Lancer l'analyse »
   (complète) et « Vérifier les statuts Digi-Key » (immédiat, sans LLM ni e-mail) — voir plus bas ;
 - **sources** : clés d'API des distributeurs (Digi-Key), saisie masquée et test de connexion ;
+- **paramètres** : adresse(s) des alertes du chien de garde, avec e-mail de test.
 - **santé** : état des veilles, crédits Brevo et journal d'audit.
 
 Sécurité, en plus du tunnel : un mot de passe administrateur (hash argon2 dans `.env`), une
@@ -278,6 +280,7 @@ imports/            nomenclatures déposées pour import (Telegram / CLI), analy
                     l'interface (supprimées après 1 h) ; exclu des sauvegardes
 veilles/.archive/   veilles archivées
 veilles/.audit.log  journal d'audit (interface, CLI, amorçage)
+veilles/.settings.json  paramètres de l'interface (adresses d'alerte), lus aussi par le chien de garde
 cron/jobs.json      jobs Hermes (état, prochain et dernier run)
 state.db            historique des exécutions Hermes (tokens, coûts)
 ```
@@ -304,7 +307,10 @@ Contrôle quotidien (10h, heure de Paris) :
    de **sa** fréquence : plus grand écart entre deux tirs + 24 h (8 jours pour une veille
    hebdomadaire, 2 jours pour une quotidienne).
 
-Les alertes vont à `ALERT_EMAIL` : alerte immédiate à chaque nouveau problème, rappel tous les
+Les alertes vont aux adresses saisies dans l'interface, page **Paramètres** (stockées sur le
+volume, dans `veilles/.settings.json`, prises en compte au contrôle suivant) ; à défaut à
+`ALERT_EMAIL` du `.env`, puis à l'expéditeur Brevo. Un changement de destinataires est signalé à
+l'ancienne et à la nouvelle adresse. Alerte immédiate à chaque nouveau problème, rappel tous les
 3 jours tant qu'il persiste, puis **e-mail de rétablissement**. L'état est conservé dans
 `/var/lib/veille-watchdog/state.json`.
 
@@ -373,7 +379,8 @@ Rien à faire : au premier démarrage de la nouvelle image, `data/veille/` est d
 job** (édité, pas recréé). Un lien `data/veille → veilles/industrie-4-0` garde l'ancien chemin
 lisible. `destinataire.txt` devient `recipients.txt`. Ensuite, sur l'hôte :
 
-1. ajoute `ALERT_EMAIL` (et, pour l'interface, le résultat de `make ui-password`) dans `.env` ;
+1. ajoute le résultat de `make ui-password` dans `.env`, puis renseigne l'adresse d'alerte dans
+   l'interface, page **Paramètres** ;
 2. réinstalle la surveillance : `make watchdog-install`.
 
 `make update` sauvegarde les données avant toute mise à jour (voir plus haut).
@@ -403,10 +410,10 @@ veille-hermes/
 ## Secrets
 
 Aucun secret n'est versionné. Voir [`.env.example`](.env.example) : `DEEPSEEK_API_KEY`,
-`BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `ALERT_EMAIL`,
-`VEILLE_UI_PASSWORD_HASH`, `VEILLE_UI_SECRET`, et facultativement `DIGIKEY_CLIENT_ID`,
-`DIGIKEY_CLIENT_SECRET` (plus simple : page **Sources** de l'interface). Le `.env` est ignoré par git **et** par le build
-Docker.
+`BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `VEILLE_UI_PASSWORD_HASH`,
+`VEILLE_UI_SECRET`, et facultativement `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET` (plus simple :
+page **Sources** de l'interface) et `ALERT_EMAIL` (repli : l'adresse d'alerte se saisit page
+**Paramètres**). Le `.env` est ignoré par git **et** par le build Docker.
 
 ## Architecture
 

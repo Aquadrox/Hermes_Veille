@@ -20,7 +20,10 @@ Contrôles :
      - un rapport récent et plausible existe — « récent » selon SA fréquence
        (`max_age_hours`, calculé à l'enregistrement de la veille).
 
-Politique d'alerte (un seul e-mail récapitulatif à ALERT_EMAIL) :
+Destinataires : page « Paramètres » de l'interface (`veilles/.settings.json` du volume),
+sinon ALERT_EMAIL du `.env`, sinon l'expéditeur Brevo — même priorité que veille_core.settings.
+
+Politique d'alerte (un seul e-mail récapitulatif) :
   - nouveau problème : alerte immédiate ;
   - mêmes problèmes : rappel tous les REMIND_DAYS jours (pas de spam quotidien) ;
   - plus aucun problème : e-mail de rétablissement.
@@ -50,6 +53,7 @@ DEFAULT_BREVO = os.path.join(REPO, "skills", "email", "brevo-email", "scripts", 
 DEFAULT_CONTAINER = "veille-hermes"
 DEFAULT_STATE = "/var/lib/veille-watchdog/state.json"
 DEFAULT_MAX_AGE_HOURS = 192
+SETTINGS_FILE = os.path.join("veilles", ".settings.json")  # écrit par l'interface (veille_core.settings)
 # Rapport d'une veille composants : produit sans LLM, court quand rien n'a changé (≈ 19 Ko).
 COMPONENTS_MIN_SIZE = 8000
 ALERT_FROM_NAME = "Surveillance veille"
@@ -83,6 +87,26 @@ def load_env(path):
     except OSError:
         pass
     return env
+
+
+def alert_recipients(volume, env):
+    """(destinataires séparés par des virgules | None, origine) : interface > ALERT_EMAIL > expéditeur."""
+    try:
+        with open(os.path.join(volume, SETTINGS_FILE), encoding="utf-8") as fh:
+            saved = json.load(fh).get("alert_emails")
+    except FileNotFoundError:
+        saved = None
+    except (OSError, ValueError, AttributeError) as exc:  # illisible : le .env prend le relais
+        print(f"avertissement : paramètres illisibles ({type(exc).__name__}) — repli sur le .env", file=sys.stderr)
+        saved = None
+    saved = [a for a in saved if isinstance(a, str) and "@" in a] if isinstance(saved, list) else []
+    if saved:
+        return ",".join(saved), "interface"
+    for key, origin in (("ALERT_EMAIL", ".env"), ("BREVO_SENDER_EMAIL", "expéditeur Brevo")):
+        value = ",".join(a.strip() for a in (env.get(key) or "").split(",") if a.strip())
+        if value:
+            return value, origin
+    return None, None
 
 
 def report_date(path):
@@ -245,23 +269,25 @@ def check_logs(container, lines=25):
 # --------------------------------------------------------------------------
 # E-mail
 # --------------------------------------------------------------------------
-def send_mail(args, subject, body, dry_run):
+def send_mail(args, subject, body, dry_run, to=None):
+    to = to or args.to
     if dry_run:
         print("--- [dry-run] e-mail NON envoyé ---")
-        print(f"À      : {args.to}")
+        print(f"À      : {to}")
         print(f"Sujet  : {subject}")
         print(body)
         print("--- fin ---")
         return True
-    if not args.to:
-        print("✗ aucun destinataire d'alerte (ALERT_EMAIL dans .env, ou --to)", file=sys.stderr)
+    if not to:
+        print("✗ aucun destinataire d'alerte (interface : Paramètres ; ou ALERT_EMAIL dans .env, ou --to)",
+              file=sys.stderr)
         return False
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
         fh.write(body)
         body_path = fh.name
     try:
         code, out = run(
-            [sys.executable, args.brevo_script, "--to", args.to, "--subject", subject,
+            [sys.executable, args.brevo_script, "--to", to, "--subject", subject,
              "--body-file", body_path, "--from-name", ALERT_FROM_NAME, "--env-file", args.env_file],
             timeout=120,
         )
@@ -303,6 +329,27 @@ def alert_subject(problems):
     return subject
 
 
+def notify_recipients_change(args, state, origin):
+    """Destinataires modifiés depuis le contrôle précédent : l'ANCIEN et le nouveau sont prévenus.
+
+    Le fichier des paramètres vit sur le volume, accessible au conteneur : un changement (même
+    hors de l'interface) ne peut donc pas détourner les alertes en silence.
+    """
+    previous = state.get("alert_to")
+    if previous and previous != args.to:
+        both = ",".join(dict.fromkeys(previous.split(",") + args.to.split(",")))
+        body = (f"Les alertes de panne des veilles iront désormais à : {args.to} (origine : {origin}).\n"
+                f"Auparavant : {previous}.\n\n"
+                "Si ce changement n'est pas de votre fait, vérifiez la page Paramètres de l'interface et le\n"
+                "journal d'audit (page Santé).\n\n— Surveillance automatique des veilles.")
+        sent = send_mail(args, "[INFO] Surveillance des veilles — destinataires des alertes modifiés", body,
+                         args.dry_run, to=both)
+        print(f"changement de destinataires signalé : {sent}")
+        if not sent:
+            return  # ancien destinataire conservé : nouvel essai au prochain contrôle
+    state["alert_to"] = args.to
+
+
 # --------------------------------------------------------------------------
 # État (anti-spam)
 # --------------------------------------------------------------------------
@@ -340,12 +387,13 @@ def decide(state, problem_keys, now_ts, remind_days):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Chien de garde des veilles conteneurisées")
     ap.add_argument("--volume", default=DEFAULT_VOLUME, help=f"volume de données (défaut {DEFAULT_VOLUME})")
-    ap.add_argument("--env-file", default=DEFAULT_ENV, help="fichier .env (ALERT_EMAIL, BREVO_*)")
+    ap.add_argument("--env-file", default=DEFAULT_ENV, help="fichier .env (BREVO_*, ALERT_EMAIL en repli)")
     ap.add_argument("--container", default=DEFAULT_CONTAINER, help="nom du conteneur")
     ap.add_argument("--min-size", type=int, default=20000, help="taille minimale plausible d'un PDF (octets)")
     ap.add_argument("--remind-days", type=float, default=3, help="délai entre deux rappels (jours)")
     ap.add_argument("--state-file", default=DEFAULT_STATE)
-    ap.add_argument("--to", default=None, help="destinataire des alertes (défaut : ALERT_EMAIL du .env)")
+    ap.add_argument("--to", default=None,
+                    help="destinataire des alertes (défaut : Paramètres de l'interface, sinon ALERT_EMAIL du .env)")
     ap.add_argument("--brevo-script", default=DEFAULT_BREVO)
     ap.add_argument("--skip-container", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--dry-run", action="store_true", help="n'envoie rien et n'écrit pas l'état")
@@ -353,7 +401,10 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     env = load_env(args.env_file)
-    args.to = args.to or env.get("ALERT_EMAIL") or env.get("BREVO_SENDER_EMAIL")
+    origin = "--to" if args.to else None
+    if not args.to:
+        args.to, origin = alert_recipients(args.volume, env)
+    print(f"alertes → {args.to or 'AUCUN destinataire'} ({origin or 'à renseigner : Paramètres'})")
 
     if args.test_notify:
         ok = send_mail(
@@ -385,6 +436,8 @@ def main(argv=None):
         print(f"  - {d}")
 
     state = load_state(args.state_file)
+    if origin != "--to" and args.to:
+        notify_recipients_change(args, state, origin)
     action = decide(state, problems.keys(), now.timestamp(), args.remind_days)
 
     if action in ("alert", "remind"):

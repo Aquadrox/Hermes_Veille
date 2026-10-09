@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Paramètres — Veilles{% endblock %}
+{% block content %}
+<h1>Paramètres</h1>
+
+<section class="card" id="alertes">
+  <div class="head">
+    <h2>Alertes du chien de garde
+      {% if alert.origin == "ui" %}<span class="badge ok">configurées</span>
+      {% elif alert.origin %}<span class="badge paused">repli {{ ".env" if alert.origin == "env" else "expéditeur" }}</span>
+      {% else %}<span class="badge bad">aucune adresse</span>{% endif %}</h2>
+  </div>
+  <p class="small muted">Adresse(s) prévenue(s) par la surveillance de l'hôte quand une veille ne produit plus
+    son rapport (panne, clé expirée, conteneur arrêté). Pris en compte au prochain contrôle (quotidien).</p>
+  {% if alert.error %}<p class="err small">{{ alert.error }} — enregistrer de nouvelles adresses le remplace.</p>{% endif %}
+
+  <p class="small">Utilisée(s) actuellement :
+    {% if alert.effective %}<strong>{{ alert.effective|join(", ") }}</strong>
+      {% if alert.origin == "env" %}<span class="muted">— ALERT_EMAIL du .env du serveur (valeur au démarrage du conteneur) ; enregistrer ici le remplace.</span>
+      {% elif alert.origin == "sender" %}<span class="muted">— expéditeur Brevo, faute d'adresse d'alerte.</span>{% endif %}
+    {% else %}<span class="err">aucune : le chien de garde ne peut prévenir personne.</span>{% endif %}
+    {% if alert.env_ignored %}<br><span class="muted">ALERT_EMAIL du .env est ignoré : l'interface fait foi.</span>{% endif %}
+    {% if alert.updated_at %}<br><span class="muted">Modifiée le {{ alert.updated_at|dt }}.</span>{% endif %}</p>
+
+  <form method="post" action="/settings/save" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Adresses d'alerte <span class="muted small">— une par ligne ; vide : repli sur le .env</span>
+      <textarea name="alert_emails" rows="3" autocapitalize="off" spellcheck="false"
+                placeholder="admin@exemple.fr">{{ typed if typed is defined else alert.saved|join("\n") }}</textarea></label>
+    <p><button class="primary">Enregistrer</button></p>
+  </form>
+  {% if alert.effective %}
+  <div class="actions">
+    <form method="post" action="/settings/test" class="inline" data-confirm="Envoyer un e-mail de test à {{ alert.effective|join(', ') }} ?">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><button>E-mail de test</button></form>
+  </div>
+  {% endif %}
+</section>
+
+<p class="small muted">Les destinataires des rapports se règlent dans chaque veille (« Modifier »).
+  L'expéditeur (BREVO_SENDER_EMAIL), lié au compte Brevo, reste dans le .env du serveur.
+  Modifiable depuis cette interface uniquement (ni Telegram ni MCP) ; chaque changement est tracé dans le journal d'audit
+  et le chien de garde prévient l'ancienne et la nouvelle adresse.</p>
+{% endblock %}

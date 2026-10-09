@@ -156,3 +156,23 @@ def test_detail_network_failure_can_be_retried(data, page):
     row.locator(".comp-toggle").click()  # replier
     row.locator(".comp-toggle").click()  # rouvrir : nouvel essai
     pg.get_by_text("Nouveau site d'assemblage").wait_for()
+
+
+def test_settings_page_mobile(page, monkeypatch):
+    """Page Paramètres en PWA mobile : sans JS en ligne (CSP), confirmation, aucun défilement horizontal."""
+    for k in ("ALERT_EMAIL", "BREVO_SENDER_EMAIL"):  # indépendant de l'environnement du poste
+        monkeypatch.delenv(k, raising=False)
+    pg = page
+    pg.click("nav a[href='/settings']")
+    pg.get_by_text("aucune : le chien de garde ne peut prévenir personne").wait_for()
+    pg.fill("textarea[name=alert_emails]", "admin@example.org\nrssi@example.org")
+    pg.click("button.primary")
+    pg.get_by_text("Paramètres enregistrés").wait_for()
+    assert "admin@example.org, rssi@example.org" in pg.text_content("#alertes")
+    assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    dialogs = []
+    pg.once("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))  # data-confirm (app.js) : refusé
+    pg.click("#alertes .actions button")
+    pg.wait_for_timeout(300)  # laisse à une éventuelle soumission le temps de naviguer
+    assert dialogs == ["Envoyer un e-mail de test à admin@example.org, rssi@example.org ?"]
+    assert pg.url.endswith("/settings?ok=settings-saved") and "Paramètres enregistrés" in pg.content()

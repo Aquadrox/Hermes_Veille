@@ -107,6 +107,17 @@ def veille_dir(slug: str) -> Path:
     return paths.veilles_dir() / check_slug(slug)
 
 
+def read_json_dict(path: Path, error: type[Exception], label: str) -> dict:
+    """Objet JSON d'un fichier de réglages ; absent : {}. Illisible : lève `error` (sans le contenu)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        raise error(f"{label} illisible ({type(exc).__name__})") from None
+    return data if isinstance(data, dict) else {}
+
+
 def atomic_write(path: Path, text: str, mode: int = 0o644) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)

@@ -36,13 +36,7 @@ def path():
 
 
 def _stored() -> dict:
-    try:
-        data = json.loads(path().read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}
-    except (OSError, ValueError) as exc:
-        raise CredentialsError(f"fichier des clés illisible ({type(exc).__name__})") from None
-    return data if isinstance(data, dict) else {}
+    return store.read_json_dict(path(), CredentialsError, "fichier des clés")
 
 
 def _stored_or_empty() -> dict:

@@ -48,9 +48,7 @@ done
 sed -e "s|/root/veille-hermes|$REPO|g" -e "s|--volume $REPO/data |--volume $DATA |" \
     "$REPO/deploy/systemd/$SERVICE" > "$UNIT_DIR/$SERVICE"
 
-if ! grep -qE '^ALERT_EMAIL=.+' "$REPO/.env" 2>/dev/null; then
-    echo "⚠️  ALERT_EMAIL absent de $REPO/.env : les alertes iront à BREVO_SENDER_EMAIL"
-fi
+echo "ℹ️  adresse(s) d'alerte : page « Paramètres » de l'interface (repli : ALERT_EMAIL du .env, puis BREVO_SENDER_EMAIL)"
 install -m 0644 "$REPO/deploy/systemd/$TIMER" "$UNIT_DIR/$TIMER"
 chmod +x "$REPO/scripts/watchdog.py"
 
@@ -66,5 +64,6 @@ systemctl list-timers "$TIMER" --no-pager | head -3
 if [ "$DO_TEST" = 1 ]; then
     echo
     echo "▸ envoi d'un e-mail de test du canal d'alerte"
-    python3 "$REPO/scripts/watchdog.py" --env-file "$REPO/.env" --test-notify
+    # --volume : les adresses d'alerte saisies dans l'interface (page Paramètres) y sont stockées.
+    python3 "$REPO/scripts/watchdog.py" --volume "$DATA" --env-file "$REPO/.env" --test-notify
 fi
