@@ -31,6 +31,7 @@ FLASH = {
     "paused": "Veille mise en pause.",
     "resumed": "Veille reprise.",
     "run": "Lancement démarré : le journal s'affiche ci-dessous.",
+    "checking": "Vérification des statuts Digi-Key démarrée : le journal s'affiche ci-dessous.",
     "archived": "Veille archivée.",
     "mail": "E-mail de test envoyé.",
     "creds-saved": "Clés enregistrées. Utilise « Tester la connexion » pour les vérifier.",
@@ -435,7 +436,8 @@ def create_app() -> FastAPI:
     def action(request: Request, slug: str, action: str):
         ops = {"pause": (service.pause, "paused"), "resume": (service.resume, "resumed"),
                "run": (service.run_now, "run"), "test-email": (service.send_test_email, "mail"),
-               "archive": (service.archive, "archived")}
+               "archive": (service.archive, "archived"),
+               "check-status": (service.check_statuses_now, "checking")}
         if action not in ops:
             return PlainTextResponse("action inconnue", status_code=404)
         func, code = ops[action]

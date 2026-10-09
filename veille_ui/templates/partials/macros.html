@@ -1,0 +1,11 @@
+{# Texte de confirmation d'un lancement : ce qui sera réellement envoyé, selon le type de veille. #}
+{% macro run_confirm(row) -%}
+{%- set v = row.veille -%}
+{%- if v.kind == "composants" -%}
+Lancer l'analyse complète de « {{ v.name }} » maintenant (statut Digi-Key, recherche web, rapport ; plusieurs minutes) ?
+{%- if row.components and row.components.linked %} Aucun e-mail : les nouveaux avis partiront dans le prochain e-mail de {{ row.components.linked|join(", ") }}.
+{%- else %} Un e-mail récapitulatif sera envoyé aux destinataires.{% endif -%}
+{%- else -%}
+Lancer « {{ v.name }} » maintenant ? Un rapport sera envoyé aux destinataires.
+{%- endif -%}
+{%- endmacro %}

@@ -258,7 +258,7 @@ def test_create_components_veille(watch):
     assert f"veillectl components finalize {watch.slug} {watch.dir}/rapports/D-pcn.json" in prompt
     assert "au plus 2)" in prompt and "${" not in prompt
     row = service.describe(watch)
-    assert row["components"] == {"components": 3, "notices": 0, "critical": 0}
+    assert row["components"] == {"components": 3, "notices": 0, "critical": 0, "linked": []}
 
 
 def test_old_veille_json_without_kind_and_unchanged_prompt(env):
@@ -778,3 +778,115 @@ def test_ui_corrupted_components_file(ui, watch):
     for url in (f"/veilles/{watch.slug}", f"/veilles/{watch.slug}/edit"):
         r = client.get(url)
         assert r.status_code == 500 and "components.json illisible" in r.text
+
+
+# --------------------------------------------------------------------------
+# Lancement depuis l'interface et le MCP (analyse complète, statuts Digi-Key à la demande)
+# --------------------------------------------------------------------------
+@pytest.fixture
+def with_keys(monkeypatch):
+    monkeypatch.setenv("DIGIKEY_CLIENT_ID", "client-id-abcd")
+    monkeypatch.setenv("DIGIKEY_CLIENT_SECRET", "client-secret-abcd")
+
+
+@pytest.fixture
+def spawned(monkeypatch):
+    from veille_core import hermes
+    calls = []
+
+    def fake(cmd, log_path, env=None):
+        calls.append({"cmd": cmd, "log": log_path, "env": env})
+        return 999_999  # PID inexistant : le lancement est aussitôt considéré terminé
+    monkeypatch.setattr(hermes, "spawn_detached", fake)
+    return calls
+
+
+def test_check_statuses_now(watch, with_keys, spawned, monkeypatch):
+    log = service.check_statuses_now(watch.slug, actor="test")
+    (call,) = spawned
+    assert call["cmd"][1:] == ["-m", "veille_core", "components", "scan", watch.slug, "--status-only"]
+    assert str(REPO) in call["env"]["PYTHONPATH"] and call["log"].name == log
+    assert store.RUN_LOG_RE.match(log)
+    assert "components-check" in json.dumps(service.read_audit())
+    monkeypatch.setattr(service, "running_pid", lambda slug: 42)
+    with pytest.raises(service.ServiceError, match="déjà en cours"):
+        service.check_statuses_now(watch.slug)
+
+
+def test_check_statuses_now_requires_keys_and_components_kind(watch, spawned, monkeypatch):
+    monkeypatch.delenv("DIGIKEY_CLIENT_ID", raising=False)
+    with pytest.raises(service.ServiceError, match="page Sources"):
+        service.check_statuses_now(watch.slug)
+    v = service.create_veille(name="Veille", subject="", schedule_expr="0 8 * * 1",
+                              recipients=["a@example.org"], brief="# b\n")
+    with pytest.raises(service.ServiceError, match="pas une veille composants"):
+        service.check_statuses_now(v.slug)
+    assert spawned == []
+
+
+def test_status_only_scan_keeps_planned_batch(watch):
+    service.components_scan(watch.slug)  # étape 1 d'une exécution planifiée : lot enregistré
+    planned = comp.load_components(watch.slug)["batch"]
+    out = service.components_scan(watch.slug, client=FakeClient({"NE555P": {"status": "Obsolete",
+                                                                            "product_url": None}}),
+                                  plan_batch=False)
+    assert out["batch"] == [] and comp.load_components(watch.slug)["batch"] == planned
+    assert out["new_digikey_notices"] == 1
+
+
+def test_cli_status_only(watch, monkeypatch, capsys, with_keys):
+    from veille_core import digikey
+    monkeypatch.setattr(digikey, "Client", lambda *a, **k: FakeClient({"NE555P": {"error": "introuvable"}}))
+    assert cli.main(["components", "scan", watch.slug, "--status-only"]) == 0
+    assert "✓ Digi-Key : 2 statut(s) lu(s), 1 référence(s) non trouvée(s)" in capsys.readouterr().out
+    assert comp.load_components(watch.slug)["batch"] == []
+
+
+def test_detached_command_line_really_runs(watch, monkeypatch):
+    """La commande lancée par l'interface s'exécute telle quelle (module, PYTHONPATH, option)."""
+    import os
+    import subprocess
+    import sys
+    env = {k: v for k, v in os.environ.items() if not k.startswith("DIGIKEY_")}
+    env["PYTHONPATH"] = str(REPO)
+    out = subprocess.run([sys.executable, "-m", "veille_core", "components", "scan", watch.slug, "--status-only"],
+                         cwd="/", env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert "clés Digi-Key absentes" in out.stdout
+
+
+def test_ui_launch_buttons_and_confirmations(ui, watch, with_keys, spawned):
+    client, csrf = ui
+    t = client.get(f"/veilles/{watch.slug}").text
+    assert "Vérifier les statuts Digi-Key" in t and "Lancer l&#39;analyse" in t
+    assert "Un e-mail récapitulatif sera envoyé aux destinataires." in t
+    r = client.post(f"/veilles/{watch.slug}/check-status", data={"csrf": csrf}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/veilles/{watch.slug}?ok=checking"
+    assert len(spawned) == 1
+    service.create_veille(name="Veille Indus", subject="s", schedule_expr="30 6 * * 1",
+                          recipients=["a@example.org"], brief="# b\n", include_components=watch.slug)
+    t = client.get(f"/veilles/{watch.slug}").text
+    assert "Aucun e-mail : les nouveaux avis partiront dans le prochain e-mail de veille-indus." in t
+    dash = client.get("/").text
+    assert "Aucun e-mail : les nouveaux avis partiront" in dash and "Lancer « Veille Indus » maintenant ?" in dash
+    assert "Vérifier les statuts Digi-Key" not in client.get("/veilles/veille-indus").text
+
+
+def test_ui_check_status_without_keys_shows_error(ui, watch, monkeypatch):
+    client, csrf = ui
+    monkeypatch.delenv("DIGIKEY_CLIENT_ID", raising=False)
+    r = client.post(f"/veilles/{watch.slug}/check-status", data={"csrf": csrf})
+    assert r.status_code == 400 and "page Sources" in r.text
+
+
+def test_mcp_check_component_statuses(watch, with_keys, spawned):
+    pytest.importorskip("mcp")
+    from test_mcp import call, data, tools
+
+    from veille_mcp.server import build_server
+    srv = build_server()
+    t = tools(srv)["check_component_statuses"]
+    assert t.annotations.read_only_hint is False and t.annotations.open_world_hint is False
+    out = data(call(srv, "check_component_statuses", {"slug": watch.slug}))
+    assert out["started"] is True and spawned[0]["cmd"][-1] == "--status-only"
+    assert "AUCUN" in tools(srv)["run_veille_now"].description

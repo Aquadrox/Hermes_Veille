@@ -1,4 +1,4 @@
-{% set v = row.veille %}{% set st = row.status %}
+{% from "partials/macros.html" import run_confirm %}{% set v = row.veille %}{% set st = row.status %}
 <tr id="row-{{ v.slug }}">
   <td data-label="Veille">
     <a href="/veilles/{{ v.slug }}"><strong>{{ v.name }}</strong></a>
@@ -32,7 +32,7 @@
       {% else %}
       <button hx-post="/veilles/{{ v.slug }}/pause" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML">Pause</button>
       <button hx-post="/veilles/{{ v.slug }}/run" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML"
-              hx-confirm="Lancer « {{ v.name }} » maintenant ? Un rapport sera envoyé aux destinataires."
+              hx-confirm="{{ run_confirm(row) }}"
               {% if row.running %}disabled{% endif %}>Lancer</button>
       {% endif %}
     {% endif %}

@@ -38,6 +38,7 @@ Gestion des veilles technologiques automatisées (rapports PDF envoyés par e-ma
 - Chaque veille a un identifiant `slug` : commence par `list_veilles` pour le trouver.
 - Une veille = un sujet, un brief de mission (le prompt éditable du rapport), une fréquence,
   des destinataires (envoi en copie cachée) et des rapports datés.
+- `check_component_statuses` (veille composants) vérifie le statut Digi-Key sans LLM ni e-mail.
 - `run_veille_now` et `send_test_email` envoient de VRAIS e-mails aux destinataires :
   confirme avec l'utilisateur avant de les appeler.
 - Pour modifier une partie du brief, préfère `edit_brief` (remplacement ciblé) à
@@ -445,10 +446,23 @@ def resume_veille(slug: str) -> dict:
 
 def run_veille_now(slug: str) -> dict:
     """Lance la veille immédiatement, en arrière-plan : recherche, rapport PDF et ENVOI aux
-    destinataires (quelques minutes). Suivre l'avancement avec `get_run_log`."""
+    destinataires (quelques minutes). Veille composants : analyse complète (statut Digi-Key,
+    recherche web, rapport) ; si elle est rattachée à une veille (`include_components`), AUCUN
+    e-mail : ses nouveaux avis partiront dans le prochain e-mail de cette veille. Suivre
+    l'avancement avec `get_run_log`."""
     log = _guard(service.run_now, slug, actor=_actor())
     return {"slug": slug, "started": True, "log": log,
             "hint": "appeler get_run_log dans quelques minutes pour suivre l'exécution"}
+
+
+def check_component_statuses(slug: str) -> dict:
+    """Veille composants : vérifie TOUT DE SUITE le statut de cycle de vie Digi-Key de toutes les
+    références (Active, Last Time Buy, NRND, Obsolete…), en arrière-plan, sans LLM, sans coût en
+    tokens et sans e-mail. Utile après un ajout de composants. Les fins de vie détectées
+    apparaissent ensuite dans `list_notices` ; suivre l'avancement avec `get_run_log`."""
+    log = _guard(service.check_statuses_now, slug, actor=_actor())
+    return {"slug": slug, "started": True, "log": log,
+            "hint": "quelques minutes pour 300 références ; puis list_notices"}
 
 
 def send_test_email(slug: str) -> dict:
@@ -472,7 +486,8 @@ WRITE_TOOLS = [(create_veille, WRITE), (update_veille, WRITE), (set_recipients, 
                (add_recipients, WRITE), (remove_recipients, WRITE), (update_brief, WRITE),
                (edit_brief, WRITE), (add_components, WRITE), (remove_components, WRITE),
                (pause_veille, WRITE), (resume_veille, WRITE),
-               (run_veille_now, SEND), (send_test_email, SEND), (archive_veille, DESTROY)]
+               (check_component_statuses, WRITE), (run_veille_now, SEND), (send_test_email, SEND),
+               (archive_veille, DESTROY)]
 
 
 def build_server(readonly: bool = False) -> MCPServer:

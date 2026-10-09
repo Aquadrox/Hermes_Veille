@@ -178,8 +178,8 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h "$REF" -lc '
     $H config set mcp_servers.veilles.command veille-mcp >/dev/null
     $H config set mcp_servers.veilles.trust untrusted >/dev/null
     out=$(timeout 120 $H mcp test veilles 2>&1)
-    echo "$out" | grep -q "Tools discovered: 27" || { echo "$out"; exit 1; }
-    echo "  Hermes : connexion OK, 27 outils découverts"
+    echo "$out" | grep -q "Tools discovered: 28" || { echo "$out"; exit 1; }
+    echo "  Hermes : connexion OK, 28 outils découverts"
 ' || { fail "serveur MCP en échec"; exit 1; }
 ok "serveur MCP fonctionnel"
 

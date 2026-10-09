@@ -16,6 +16,7 @@ Veille composants (PCN / fins de vie) :
   veillectl components add <slug> (--file bom.csv | "MPN;Fabricant;Réf" …)
   veillectl components remove <slug> MPN …
   veillectl components scan <slug>                                  (étape 1 du job)
+  veillectl components scan <slug> --status-only                    (statut Digi-Key seul, à la demande)
   veillectl components finalize <slug> <avis.json>                  (étape 5 du job)
   veillectl components chapter <slug> --for <veille> --append <rapport.md>
 """
@@ -85,6 +86,14 @@ def _components(args) -> int:
         print(f"✓ {service.add_components(slug, items)} composant(s) ajouté(s)")
     elif args.action == "remove":
         print(f"✓ {service.remove_components(slug, args.items)} composant(s) retiré(s)")
+    elif args.action == "scan" and args.status_only:
+        dk = service.components_scan(slug, actor="cli", plan_batch=False)["digikey"]
+        print(f"✓ Digi-Key : {dk['checked']} statut(s) lu(s), {dk['errors']} référence(s) non trouvée(s)")
+        for key in ("stopped", "error"):
+            if dk.get(key):
+                print(f"  {dk[key]}")
+        if not dk["configured"]:
+            print("  clés Digi-Key absentes : les saisir dans l'interface, page Sources")
     elif args.action == "scan":
         print(json.dumps(service.components_scan(slug), ensure_ascii=False, indent=1))
     elif args.action == "finalize":
@@ -190,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
     p_comp.add_argument("--type", choices=tuple(components.TYPES), help="notices : filtre par type")
     p_comp.add_argument("--for", dest="for_slug", help="chapter : veille qui reçoit le chapitre")
     p_comp.add_argument("--append", help="chapter : rapport Markdown du jour de cette veille")
+    p_comp.add_argument("--status-only", action="store_true",
+                        help="scan : statut Digi-Key seulement (le lot de la prochaine exécution est conservé)")
 
     p_costs = sub.add_parser("costs", help="consommation de tokens et coût des exécutions")
     p_costs.add_argument("slug", nargs="?")

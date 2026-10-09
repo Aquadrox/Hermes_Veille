@@ -52,7 +52,7 @@ def demo(env):
 
 def test_annotations_split_read_and_write(srv):
     t = tools(srv)
-    assert len(t) == 27
+    assert len(t) == 28
     reads = {n for n, x in t.items() if x.annotations.read_only_hint}
     assert reads == {"list_veilles", "get_veille", "get_brief", "list_brief_templates", "list_reports",
                      "read_report", "get_run_log", "run_history", "preview_schedule", "get_costs", "health",

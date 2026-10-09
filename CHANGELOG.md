@@ -37,10 +37,16 @@ Veille composants : détection des avis PCN et des fins de vie (EOL) d'une nomen
   détail avec bandeau **Fins de vie et dernières commandes**, avis filtrables par type (sans
   JavaScript), liens sources, état de chaque référence ; badge et compteur EOL sur le tableau de
   bord.
-- MCP : `list_components`, `list_notices` (lecture), `add_components`, `remove_components`
-  (modification) ; `create_veille(kind=…, components_list=…, include_components=…)`,
-  `update_veille(include_components=…, batch_size=…)`. 27 outils (13 en lecture).
-- CLI : `veillectl components list|notices|add|remove|scan|finalize|chapter`,
+- MCP : `list_components`, `list_notices` (lecture), `add_components`, `remove_components`,
+  `check_component_statuses` (modification) ; `create_veille(kind=…, components_list=…,
+  include_components=…)`, `update_veille(include_components=…, batch_size=…)`. 28 outils (13 en
+  lecture).
+- **Lancement à la demande** : « Lancer l'analyse » d'une veille composants (interface,
+  `run_veille_now`) et **« Vérifier les statuts Digi-Key »** (interface, `check_component_statuses`,
+  `veillectl components scan --status-only`) : statut de toutes les références en arrière-plan, sans
+  LLM ni e-mail, sans toucher au lot de la prochaine exécution planifiée. Les confirmations disent
+  ce qui sera réellement envoyé (aucun e-mail pour une veille composants rattachée).
+- CLI : `veillectl components list|notices|add|remove|scan [--status-only]|finalize|chapter`,
   `create --kind composants --components-file`, `edit --include-components / --batch-size`.
 - **Page « Sources »** de l'interface : saisie des clés d'API Digi-Key avec un test de connexion.
   Les valeurs ne sont jamais réaffichées (aperçu masqué). Stockage dans `veilles/.credentials.json`

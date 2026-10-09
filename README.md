@@ -71,7 +71,8 @@ Fonctions :
   lancement en cours (rafraîchi en direct), coût des exécutions,
   historique d'exécution Hermes, e-mail de test, **archivage** (rien n'est effacé) ;
 - **veille composants** : liste des références, bandeau des fins de vie, avis filtrables par type
-  avec leurs liens sources, état Digi-Key de chaque référence (voir plus bas) ;
+  avec leurs liens sources, état Digi-Key de chaque référence ; boutons « Lancer l'analyse »
+  (complète) et « Vérifier les statuts Digi-Key » (immédiat, sans LLM ni e-mail) — voir plus bas ;
 - **sources** : clés d'API des distributeurs (Digi-Key), saisie masquée et test de connexion ;
 - **santé** : état des veilles, crédits Brevo et journal d'audit.
 
@@ -110,6 +111,11 @@ lundi 6h30 — job de la veille thématique rattachée
   référence, 900 au plus) ; la recherche web, coûteuse en tokens, tourne par **lots**
   (`batch_size`). Avec 300 références et des lots de 40, chacune est recherchée sur le web toutes les
   8 semaines environ, et **en priorité** dès que son statut Digi-Key change.
+- **À la demande** (interface ou Telegram) : « Lancer l'analyse » / `run_veille_now` exécute tout de
+  suite l'analyse complète ; « Vérifier les statuts Digi-Key » / `check_component_statuses` (ou
+  `veillectl components scan <slug> --status-only`) relit en arrière-plan le statut de toutes les
+  références, sans LLM, sans coût en tokens et sans e-mail — utile juste après un import de
+  nomenclature. Le lot de la prochaine exécution planifiée n'est pas modifié.
 - **Livraison** : rattachée à une veille thématique (« Chapitre composants » dans son formulaire),
   la veille composants n'envoie rien elle-même : ses nouveaux avis partent en chapitre de l'e-mail
   de cette veille. Sinon, elle envoie son propre e-mail (HTML lisible sur mobile + PDF).
@@ -147,7 +153,7 @@ industriel, chaque lundi à 8h, pour moi@exemple.fr », « Quelles fins de vie o
 ce mois-ci ? »…
 
 - **Transport stdio via `docker exec -i`** : aucun port réseau n'est ouvert.
-- **`trust: untrusted`** : les 13 outils de lecture s'exécutent directement ; les 14 outils de
+- **`trust: untrusted`** : les 13 outils de lecture s'exécutent directement ; les 15 outils de
   modification demandent ton **approbation dans Telegram**. `run_veille_now` et
   `send_test_email` envoient de vrais e-mails ; `archive_veille` exige en plus de répéter le slug.
 - Chaque action est tracée dans le journal d'audit avec l'origine « telegram ».
@@ -158,7 +164,8 @@ Outils : `list_veilles`, `get_veille`, `get_brief`, `list_brief_templates`, `lis
 `read_report`, `get_run_log`, `run_history`, `preview_schedule`, `get_costs`, `health`,
 `list_components`, `list_notices` (lecture) ;
 `create_veille`, `update_veille`, `set_recipients`, `add_recipients`, `remove_recipients`,
-`update_brief`, `edit_brief`, `add_components`, `remove_components`, `pause_veille`, `resume_veille`, `run_veille_now`,
+`update_brief`, `edit_brief`, `add_components`, `remove_components`, `check_component_statuses`,
+`pause_veille`, `resume_veille`, `run_veille_now`,
 `send_test_email`, `archive_veille` (modification).
 
 ## Consommation et coût

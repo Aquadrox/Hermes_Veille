@@ -133,10 +133,12 @@ def describe(v: Veille, jobs: list[dict] | None = None) -> dict:
 def _components_summary(v: Veille) -> dict | None:
     if v.kind != "composants":
         return None
+    linked = [x.slug for x in _linked_veilles(v.slug)]
     try:
-        return comp.summary(comp.load_components(v.slug)["components"], comp.load_notices(v.slug))
+        return {**comp.summary(comp.load_components(v.slug)["components"], comp.load_notices(v.slug)),
+                "linked": linked}
     except comp.ComponentsError as exc:
-        return {"error": str(exc)}
+        return {"error": str(exc), "linked": linked}
 
 
 def _safe_jobs() -> list[dict]:
@@ -387,15 +389,37 @@ def _check_runnable(v: Veille) -> str:
     return job_id
 
 
+def _start(slug: str, launch, actor: str, action: str) -> str:
+    """Démarre un traitement en arrière-plan (journal dans runs/, PID suivi) ; renvoie le journal."""
+    log_name = dt.datetime.now().strftime("%Y%m%d-%H%M%S") + ".log"
+    store.runs_dir(slug).mkdir(parents=True, exist_ok=True)
+    pid = launch(store.runs_dir(slug) / log_name)
+    _pid_file(slug).write_text(str(pid))
+    audit(actor, action, slug, log_name)
+    return log_name
+
+
 def run_now(slug: str, actor: str = "cli") -> str:
     """Lance la veille en arrière-plan ; renvoie le nom du journal."""
-    v = store.load(slug)
-    job_id = _check_runnable(v)
-    log_name = dt.datetime.now().strftime("%Y%m%d-%H%M%S") + ".log"
-    pid = hermes.run_detached(job_id, store.runs_dir(slug) / log_name)
-    _pid_file(slug).write_text(str(pid))
-    audit(actor, "run", slug, log_name)
-    return log_name
+    job_id = _check_runnable(store.load(slug))
+    return _start(slug, lambda log: hermes.run_detached(job_id, log), actor, "run")
+
+
+def check_statuses_now(slug: str, actor: str = "cli") -> str:
+    """Vérifie tout de suite le statut Digi-Key des composants, en arrière-plan.
+
+    Déterministe : ni LLM (aucun coût en tokens), ni e-mail, ni recherche web ; le lot de la
+    prochaine exécution planifiée n'est pas modifié. Renvoie le nom du journal.
+    """
+    _components_veille(slug)
+    if not digikey.credentials():
+        raise ServiceError("clés Digi-Key absentes : les saisir dans l'interface, page Sources")
+    if running_pid(slug):
+        raise ServiceError("un lancement est déjà en cours")
+    app_dir = str(Path(__file__).resolve().parent.parent)
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (app_dir, os.environ.get("PYTHONPATH"))))}
+    cmd = [sys.executable, "-m", "veille_core", "components", "scan", slug, "--status-only"]
+    return _start(slug, lambda log: hermes.spawn_detached(cmd, log, env), actor, "components-check")
 
 
 def run_wait(slug: str, actor: str = "cli") -> str:
@@ -503,8 +527,11 @@ def _set_link(v: Veille, target: str | None) -> bool:
 
 
 def components_scan(slug: str, actor: str = "job", client: digikey.Client | None = None,
-                    budget_s: float = 900) -> dict:
+                    budget_s: float = 900, plan_batch: bool = True) -> dict:
     """Statut Digi-Key de tous les composants, puis lot de recherche web du jour (enregistré).
+
+    `plan_batch=False` (vérification à la demande) : le lot web en cours n'est pas touché, pour ne
+    pas fausser une exécution planifiée qui serait entre ses étapes « scan » et « finalize ».
 
     Les appels réseau (plusieurs minutes pour 300 composants) se font HORS verrou ; les résultats
     sont ensuite appliqués par clé à la liste relue sous verrou (éditions concurrentes préservées).
@@ -558,8 +585,9 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
             else:
                 info["errors"] += 1
             c["dk"] = dk
-        lot = comp.batch(data["components"], v.batch_size) if data["components"] else []
-        data["batch"] = [comp.key_of(c["mpn"], c["manufacturer"]) for c in lot]
+        lot = comp.batch(data["components"], v.batch_size) if data["components"] and plan_batch else []
+        if plan_batch:
+            data["batch"] = [comp.key_of(c["mpn"], c["manufacturer"]) for c in lot]
         comp.save_components(slug, data)
         if new:
             comp.save_notices(slug, notices)
