@@ -490,15 +490,36 @@ def create_app() -> FastAPI:
                       import_result=msg)
 
     @app.get("/veilles/{slug}/runs/{name}", response_class=HTMLResponse)
-    def run_log(request: Request, slug: str, name: str):
+    def run_log(request: Request, slug: str, name: str, poll: bool = False):
+        """Journal d'un lancement. `poll` (suivi depuis la page de la veille) : à la fin, l'en-tête (état,
+        boutons) part avec le journal ; journal disparu (veille archivée) : 286, htmx arrête le suivi."""
         try:
             path = store.run_log_path(slug, name)
-        except StoreError:
-            return PlainTextResponse("journal introuvable", status_code=404)
-        text = path.read_text(encoding="utf-8", errors="replace")[-20000:]
+            text = path.read_text(encoding="utf-8", errors="replace")[-20000:]
+        except (StoreError, OSError):
+            return PlainTextResponse("journal introuvable", status_code=286 if poll else 404)
         latest = (store.list_run_logs(slug, 1) or [None])[0]
         running = latest == name and service.running_pid(slug) is not None
-        return render(request, "partials/run_log.html", slug=slug, name=name, text=text, running=running)
+        head = {}
+        if poll and not running:
+            try:
+                v = store.load(slug)
+                head = {"v": v, "row": service.describe(v)}
+            except StoreError:  # veille archivée entre-temps : le journal seul
+                pass
+        return render(request, "partials/run_log.html", slug=slug, name=name, text=text, running=running, **head)
+
+    @app.get("/veilles/{slug}/components.xlsx")
+    def components_export(slug: str):
+        try:
+            data = service.components_xlsx(slug)
+        except components.ComponentsError as exc:  # fichier corrompu : le dire, pas « introuvable »
+            return PlainTextResponse(str(exc), status_code=500)
+        except USER_ERRORS:
+            return PlainTextResponse("veille composants introuvable", status_code=404)
+        name = components.xlsx_name(slug, components.today())
+        return Response(data, media_type=components.XLSX_TYPE,
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     # -------------------------------------------------------------- fichiers
     @app.get("/veilles/{slug}/reports/{name}")

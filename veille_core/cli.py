@@ -152,13 +152,16 @@ def _components(args) -> int:
     elif args.action == "chapter":
         if not (args.for_slug and args.append):
             raise store.StoreError("--for <veille> et --append <rapport.md> sont requis")
-        prefix = service.components_chapter(slug, args.for_slug, Path(args.append))
-        if prefix is None:
+        result = service.components_chapter(slug, args.for_slug, Path(args.append))
+        if result is None:
             print(f"avertissement : veille composants « {slug} » introuvable — chapitre ignoré")
         else:
+            prefix, xlsx = result
             print("✓ chapitre composants ajouté")
             if prefix:
                 print(f"PREFIXE_SUJET={prefix}")
+            if xlsx:  # sinon (échec tracé dans l'audit) : e-mail envoyé sans la liste Excel
+                print(f"PIECE_JOINTE={xlsx}")
     return 0
 
 

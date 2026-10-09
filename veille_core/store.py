@@ -118,12 +118,13 @@ def read_json_dict(path: Path, error: type[Exception], label: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def atomic_write(path: Path, text: str, mode: int = 0o644) -> None:
+def atomic_write(path: Path, data: str | bytes, mode: int = 0o644) -> None:
+    """Écrit `data` (texte UTF-8 ou octets) d'un bloc : un lecteur voit l'ancien ou le nouveau fichier."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data.encode("utf-8") if isinstance(data, str) else data)
         os.chmod(tmp, mode)  # mkstemp crée en 0600
         os.replace(tmp, path)
     except BaseException:

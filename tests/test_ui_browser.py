@@ -176,3 +176,35 @@ def test_settings_page_mobile(page, monkeypatch):
     pg.wait_for_timeout(300)  # laisse à une éventuelle soumission le temps de naviguer
     assert dialogs == ["Envoyer un e-mail de test à admin@example.org, rssi@example.org ?"]
     assert pg.url.endswith("/settings?ok=settings-saved") and "Paramètres enregistrés" in pg.content()
+
+
+def test_run_end_updates_head_without_reload(data, watch, page, monkeypatch):  # noqa: F811
+    """Fin d'une analyse (PWA mobile) : « en cours » devient « actif » et les boutons se réactivent,
+    sans recharger la page (échange hors bande de l'en-tête, aucun JS en ligne)."""
+    from veille_core import store
+    pg = page
+    state = {"pid": 4242}
+    monkeypatch.setattr(service, "running_pid", lambda slug: state["pid"])
+    store.runs_dir(watch.slug).mkdir(parents=True, exist_ok=True)
+    (store.runs_dir(watch.slug) / "20261009-120000.log").write_text("analyse en cours…\n")
+    pg.reload()
+    badge = "#detail-head h1 .badge"
+    assert pg.text_content(badge) == "en cours" and pg.is_disabled("#detail-head button.primary")
+    pg.evaluate("window.notReloaded = true")  # disparaîtrait avec un rechargement
+    state["pid"] = None
+    pg.locator(f"{badge}:text-is('actif')").wait_for(timeout=10_000)  # suivi du journal : toutes les 5 s
+    assert pg.evaluate("window.notReloaded") is True and not pg.is_disabled("#detail-head button.primary")
+    assert pg.text_content("#run-log .badge") == "terminé" and pg.locator("#detail-head").count() == 1
+    # le formulaire remplacé garde sa confirmation (écouteur délégué de app.js)
+    dialogs = []
+    pg.once("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
+    pg.click("#detail-head button.primary")
+    assert dialogs and "Lancer l'analyse" in dialogs[0]
+
+
+def test_export_button_downloads_xlsx(data, watch, page):  # noqa: F811
+    pg = page
+    with pg.expect_download() as dl:
+        pg.click("#composants a.button[download]")
+    assert dl.value.suggested_filename.endswith(f"-{watch.slug}.xlsx")
+    assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")  # pas de défilement horizontal

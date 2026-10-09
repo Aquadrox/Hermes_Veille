@@ -101,9 +101,11 @@ dimanche 23h — job de la veille composants
   1. veillectl components scan <slug>      statut Digi-Key de TOUTES les références (déterministe)
                                            + lot du jour pour la recherche web (40 par défaut)
   2. agent : recherche web (pages PCN des fabricants, Mouser, Digi-Key, Farnell…) -> D-pcn.json
-  3. veillectl components finalize …       validation, dédoublonnage, enregistrement, rapport PDF
+  3. veillectl components finalize …       validation, dédoublonnage, enregistrement, rapport PDF,
+                                           liste Excel
 lundi 6h30 — job de la veille thématique rattachée
-  6 bis. veillectl components chapter …    chapitre « Composants — PCN & fins de vie » dans son e-mail
+  6 bis. veillectl components chapter …    chapitre « Composants — PCN & fins de vie » dans son e-mail,
+                                           liste Excel jointe
 ```
 
 - **Liste** : `MPN ; Fabricant ; Réf. interne`, une par ligne, collage depuis un tableur accepté
@@ -135,6 +137,13 @@ lundi 6h30 — job de la veille thématique rattachée
 - **Livraison** : rattachée à une veille thématique (« Chapitre composants » dans son formulaire),
   la veille composants n'envoie rien elle-même : ses nouveaux avis partent en chapitre de l'e-mail
   de cette veille. Sinon, elle envoie son propre e-mail (HTML lisible sur mobile + PDF).
+  Dans les deux cas, la **liste complète des composants au format Excel** est jointe à l'e-mail
+  (dernier export conservé à côté du rapport, dans `rapports/` ; s'il échoue, l'e-mail part sans lui).
+- **Export Excel** : bouton « Exporter (Excel) » de la liste des composants. Une ligne par
+  référence (y compris sans avis, et celles retirées qui ont des avis), fins de vie et dernières
+  commandes en tête et en rouge, filtre automatique : statut Digi-Key, avis, échéance, dates de
+  vérification et lien de l'avis le plus critique. Les textes venus du web restent du texte (jamais
+  une formule Excel).
 - **Digi-Key** (facultatif mais recommandé) : créer une application « Production » sur
   [developer.digikey.com](https://developer.digikey.com) avec l'API *Product Information v4*, puis
   saisir son Client ID et son Client Secret dans l'interface, page **Sources** (bouton « Tester la
