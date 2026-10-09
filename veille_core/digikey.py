@@ -1,7 +1,7 @@
 """Statut de cycle de vie des références chez Digi-Key (API Product Information v4).
 
 OAuth « 2-legged » (identifiants client, sans intervention humaine) : DIGIKEY_CLIENT_ID et
-DIGIKEY_CLIENT_SECRET, lus par `envfile`. Le jeton reste en mémoire le temps d'un passage.
+DIGIKEY_CLIENT_SECRET, saisis dans l'interface (page Sources) ou définis dans le `.env`. Le jeton reste en mémoire le temps d'un passage.
 Les avis PCN de Digi-Key exigent l'OAuth « 3-legged » (connexion interactive) : non utilisés.
 
 Bibliothèque standard uniquement ; débit limité (l'offre gratuite plafonne à 120 requêtes
@@ -15,7 +15,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import components, envfile
+from . import components
+from . import credentials as creds
 
 API = "https://api.digikey.com"
 TOKEN_PATH = "/v1/oauth2/token"
@@ -37,7 +38,7 @@ class DigiKeyError(RuntimeError):
 
 
 def credentials() -> tuple[str, str] | None:
-    cid, secret = envfile.get("DIGIKEY_CLIENT_ID"), envfile.get("DIGIKEY_CLIENT_SECRET")
+    cid, secret = creds.get("DIGIKEY_CLIENT_ID"), creds.get("DIGIKEY_CLIENT_SECRET")
     return (cid, secret) if cid and secret else None
 
 
@@ -74,6 +75,10 @@ class Client:
         if not token:
             raise DigiKeyError("authentification Digi-Key : jeton absent de la réponse")
         return token
+
+    def check(self) -> None:
+        """Vérifie les identifiants (obtention d'un jeton) ; lève DigiKeyError sinon."""
+        self._token = self._auth()
 
     def _details(self, mpn: str) -> dict | None:
         """Fiche produit, ou None si la référence est inconnue ou ambiguë chez Digi-Key."""

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# backup.sh — archive horodatée du dossier de données (sans .env ni logs).
+# backup.sh — archive horodatée du dossier de données (sans .env, clés d'API ni logs).
 #
 #   ./scripts/backup.sh                       # dans <parent du dossier de données>/backups
 #   BACKUP_DIR=/ailleurs KEEP=20 ./scripts/backup.sh
@@ -19,7 +19,8 @@ KEEP="${KEEP:-10}"
 umask 077
 mkdir -p "$BACKUP_DIR"
 ARCHIVE="$BACKUP_DIR/veille-data-$(date +%Y%m%d-%H%M%S).tar.gz"
-tar --exclude='./.env' --exclude='./logs' -czf "$ARCHIVE" -C "$DATA" .
+# Secrets exclus : .env et clés saisies dans l'interface (à ressaisir après restauration).
+tar --exclude='./.env' --exclude='./veilles/.credentials.json' --exclude='./logs' -czf "$ARCHIVE" -C "$DATA" .
 find "$BACKUP_DIR" -maxdepth 1 -name 'veille-data-*.tar.gz' -printf '%T@ %p\n' \
     | sort -rn | tail -n +"$((KEEP + 1))" | cut -d' ' -f2- | xargs -r -d '\n' rm -f --
 echo "$ARCHIVE"

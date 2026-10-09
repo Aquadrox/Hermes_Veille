@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Sources — Veilles{% endblock %}
+{% block content %}
+<h1>Sources de données</h1>
+<p class="muted">Clés d'API des distributeurs utilisés par les veilles composants. Une clé enregistrée
+  n'est <strong>jamais réaffichée</strong> : seuls ses 4 derniers caractères le sont. Laisser un champ vide
+  conserve sa valeur actuelle.</p>
+{% if result %}<p class="flash ok">{{ result }}</p>{% endif %}
+
+{% for s in sources %}
+<section class="card" id="source-{{ s.id }}">
+  <div class="head">
+    <h2>{{ s.name }}
+      {% if s.configured %}<span class="badge ok">configurée{{ " (.env)" if s.env }}</span>
+      {% else %}<span class="badge paused">non configurée</span>{% endif %}</h2>
+  </div>
+  {% if s.error %}<p class="err small">{{ s.error }} — enregistrer de nouvelles clés le remplace.</p>{% endif %}
+  <p class="small muted">{{ s.help }} <a href="{{ s.portal }}" target="_blank" rel="noopener noreferrer">Portail développeur</a>.
+    {% if s.updated_at %}Modifiée le {{ s.updated_at|dt }}.{% endif %}</p>
+
+  <form method="post" action="/sources/{{ s.id }}/save" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="grid2">
+      {% for key, f in s.fields.items() %}
+      <label>{{ f.label }}
+        {% if f.origin == "env" %}<span class="muted small">— défini dans le .env du serveur ({{ f.masked }}) : à modifier là-bas</span>
+        {% elif f.masked %}<span class="muted small">— actuel : {{ f.masked }}</span>{% endif %}
+        <input name="{{ key }}" type="{{ 'password' if f.secret else 'text' }}" value=""
+               autocomplete="{{ 'new-password' if f.secret else 'off' }}" autocapitalize="off" spellcheck="false"
+               minlength="8" maxlength="256" pattern="[A-Za-z0-9._~+\/=\-]{8,256}"
+               placeholder="{{ 'inchangé' if f.masked else '' }}"{% if f.origin == "env" %} disabled{% endif %}>
+      </label>
+      {% endfor %}
+    </div>
+    {% if not s.env %}<p><button class="primary">Enregistrer</button></p>{% endif %}
+  </form>
+  <div class="actions">
+    {% if s.configured %}
+    <form method="post" action="/sources/{{ s.id }}/test" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button>Tester la connexion</button></form>
+    {% endif %}
+    {% if s.configured and not s.env %}
+    <form method="post" action="/sources/{{ s.id }}/delete" class="inline" data-confirm="Supprimer les clés {{ s.name }} ? Les veilles composants n'utiliseront plus cette source.">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger">Supprimer les clés</button></form>
+    {% endif %}
+  </div>
+</section>
+{% endfor %}
+
+<p class="small muted">Stockage : fichier réservé au service sur le serveur (droits 0600), exclu des sauvegardes
+  <code>make backup</code> (à ressaisir après une restauration). Les clés ne transitent ni par Telegram ni par le MCP.
+  Chaque modification est tracée dans le journal d'audit, sans les valeurs.</p>
+{% endblock %}

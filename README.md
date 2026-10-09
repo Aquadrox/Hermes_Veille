@@ -72,6 +72,7 @@ Fonctions :
   historique d'exécution Hermes, e-mail de test, **archivage** (rien n'est effacé) ;
 - **veille composants** : liste des références, bandeau des fins de vie, avis filtrables par type
   avec leurs liens sources, état Digi-Key de chaque référence (voir plus bas) ;
+- **sources** : clés d'API des distributeurs (Digi-Key), saisie masquée et test de connexion ;
 - **santé** : état des veilles, crédits Brevo et journal d'audit.
 
 Sécurité, en plus du tunnel : un mot de passe administrateur (hash argon2 dans `.env`), une
@@ -114,8 +115,15 @@ lundi 6h30 — job de la veille thématique rattachée
   de cette veille. Sinon, elle envoie son propre e-mail (HTML lisible sur mobile + PDF).
 - **Digi-Key** (facultatif mais recommandé) : créer une application « Production » sur
   [developer.digikey.com](https://developer.digikey.com) avec l'API *Product Information v4*, puis
-  renseigner `DIGIKEY_CLIENT_ID` et `DIGIKEY_CLIENT_SECRET` dans `.env`. Sans ces clés, seule la
-  recherche web est utilisée (le rapport le signale).
+  saisir son Client ID et son Client Secret dans l'interface, page **Sources** (bouton « Tester la
+  connexion »). Sans ces clés, seule la recherche web est utilisée (le rapport le signale).
+  - Les clés saisies ne sont **jamais réaffichées** (aperçu masqué `••••1234`). Elles sont stockées
+    dans `veilles/.credentials.json` (droits 0600), **exclues des sauvegardes** (à ressaisir après
+    une restauration), et chaque modification est tracée dans le journal d'audit, sans les valeurs.
+  - Variante « infrastructure » : `DIGIKEY_CLIENT_ID` / `DIGIKEY_CLIENT_SECRET` dans `.env`. Elles
+    sont alors prioritaires et affichées en lecture seule dans l'interface.
+  - Volontairement, aucune clé ne passe par Telegram ou le MCP, qui ne fait qu'indiquer si une source
+    est configurée.
 
 Limites : la recherche web reste probabiliste (un avis peut être manqué : le statut Digi-Key sert
 de filet) ; les avis PCN de Digi-Key eux-mêmes ne sont pas lus (leur API exige une connexion
@@ -206,7 +214,7 @@ docker exec veille-hermes veillectl components list|notices composants-carte-x [
 | `make tunnel` | rappelle la commande de tunnel SSH |
 | `make mcp-install` / `make mcp-check` | branche le serveur MCP sur le Hermes de l'hôte / liste ses outils |
 | `make ui-password` | génère le hash du mot de passe et le secret de l'interface |
-| `make backup` | archive horodatée des données (sans `.env`, 10 dernières conservées), rangée à côté du dossier de données |
+| `make backup` | archive horodatée des données (sans `.env` ni clés d'API saisies dans l'interface, 10 dernières conservées), rangée à côté du dossier de données |
 | `make move-data DEST=…` | sort les données du dépôt git (`VEILLE_DATA_DIR`), sans rien perdre |
 | `make test` / `make lint` | tests unitaires avec couverture / ruff + shellcheck (+ hadolint) |
 | `make smoke` | teste l'image (dépendances, chaîne PDF, contrat CLI Hermes, veillectl, interface) |
@@ -371,7 +379,7 @@ veille-hermes/
 Aucun secret n'est versionné. Voir [`.env.example`](.env.example) : `DEEPSEEK_API_KEY`,
 `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `ALERT_EMAIL`,
 `VEILLE_UI_PASSWORD_HASH`, `VEILLE_UI_SECRET`, et facultativement `DIGIKEY_CLIENT_ID`,
-`DIGIKEY_CLIENT_SECRET`. Le `.env` est ignoré par git **et** par le build
+`DIGIKEY_CLIENT_SECRET` (plus simple : page **Sources** de l'interface). Le `.env` est ignoré par git **et** par le build
 Docker.
 
 ## Architecture

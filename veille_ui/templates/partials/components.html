@@ -61,6 +61,11 @@
   {% else %}<p class="muted">{{ "Aucun avis de ce type." if ntype else "Aucun avis détecté pour l'instant." }}</p>{% endif %}
 </section>
 
+{% if not digikey_configured %}
+<p class="flash">Statut Digi-Key non vérifié : <a href="/sources">configurer les clés Digi-Key</a>
+  pour contrôler chaque semaine le cycle de vie de toutes les références (recommandé).</p>
+{% endif %}
+
 <section class="card" id="composants">
   <details>
     <summary><h2 class="inline">Composants suivis <span class="muted small">({{ comps|length }})</span></h2></summary>

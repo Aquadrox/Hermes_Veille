@@ -14,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from veille_core import components, deepseek, envfile, hermes, pricing, schedule, service, store, version
+from veille_core import components, credentials, deepseek, envfile, hermes, pricing, schedule, service, store, version
 from veille_core.store import StoreError
 
 from . import auth
@@ -33,6 +33,9 @@ FLASH = {
     "run": "Lancement démarré : le journal s'affiche ci-dessous.",
     "archived": "Veille archivée.",
     "mail": "E-mail de test envoyé.",
+    "creds-saved": "Clés enregistrées. Utilise « Tester la connexion » pour les vérifier.",
+    "creds-unchanged": "Aucune modification : les champs laissés vides conservent leur valeur.",
+    "creds-deleted": "Clés supprimées.",
 }
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
        "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
@@ -309,7 +312,8 @@ def create_app() -> FastAPI:
         worst = components.worst_by_key(notices)
         ntype = ntype if ntype in components.TYPES else ""
         shown = components.for_display(notices, ntype or None)
-        return {"comps": [{**c, "worst": worst.get(components.key_of(c["mpn"], c["manufacturer"]))} for c in comps],
+        return {"digikey_configured": credentials.status("digikey")["configured"],
+                "comps": [{**c, "worst": worst.get(components.key_of(c["mpn"], c["manufacturer"]))} for c in comps],
                 "notices": shown[:NOTICES_SHOWN], "notices_hidden": max(0, len(shown) - NOTICES_SHOWN),
                 "notice_total": len(notices), "ntype": ntype,
                 "critical": components.digest(comps, notices, [])["reminder"],
@@ -393,6 +397,30 @@ def create_app() -> FastAPI:
                                 content_disposition_type="inline")
         return FileResponse(path, media_type="text/plain; charset=utf-8", filename=name,
                             content_disposition_type="inline")
+
+    # -------------------------------------------------------------- sources (clés d'API)
+    @app.get("/sources", response_class=HTMLResponse)
+    def sources(request: Request):
+        return render(request, "sources.html", sources=service.sources_status())
+
+    @app.post("/sources/{provider}/{op}")
+    async def source_action(request: Request, provider: str, op: str):
+        form = await request.form()
+        try:
+            if op == "save":
+                changed = service.save_credentials(
+                    provider, {k: str(form.get(k, "")) for k in credentials.PROVIDERS.get(provider, {}).get("fields", {})},
+                    actor=ACTOR)
+                return RedirectResponse(f"/sources?ok={'creds-saved' if changed else 'creds-unchanged'}", 303)
+            if op == "delete":
+                service.delete_credentials(provider, actor=ACTOR)
+                return RedirectResponse("/sources?ok=creds-deleted", 303)
+            if op == "test":
+                result = service.check_credentials(provider, actor=ACTOR)
+                return render(request, "sources.html", sources=service.sources_status(), result=result)
+        except USER_ERRORS as exc:
+            return render(request, "sources.html", 400, sources=service.sources_status(), error=str(exc))
+        return PlainTextResponse("action inconnue", status_code=404)
 
     # -------------------------------------------------------------- santé
     @app.get("/health", response_class=HTMLResponse)

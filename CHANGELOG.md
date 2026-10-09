@@ -42,8 +42,13 @@ Veille composants : détection des avis PCN et des fins de vie (EOL) d'une nomen
   `update_veille(include_components=…, batch_size=…)`. 27 outils (13 en lecture).
 - CLI : `veillectl components list|notices|add|remove|scan|finalize|chapter`,
   `create --kind composants --components-file`, `edit --include-components / --batch-size`.
+- **Page « Sources »** de l'interface : saisie des clés d'API Digi-Key avec un test de connexion.
+  Les valeurs ne sont jamais réaffichées (aperçu masqué). Stockage dans `veilles/.credentials.json`
+  (0600, écriture atomique, exclu de `make backup`), audit sans les valeurs. Les clés du `.env`
+  restent prioritaires (lecture seule dans l'interface). Aucune saisie possible par
+  Telegram / MCP : `health` indique seulement si une source est configurée.
 - Skill `brevo-email` : `--html-file` (corps HTML sans limite de taille de ligne de commande).
-- Tests : `tests/test_components.py` et `tests/test_digikey.py` ; smoke test de la veille
+- Tests : `tests/test_components.py`, `tests/test_digikey.py` et `tests/test_credentials.py` ; smoke test de la veille
   composants sur l'image (PDF réel, chapitre).
 
 ### Modifié
@@ -57,6 +62,7 @@ Veille composants : détection des avis PCN et des fins de vie (EOL) d'une nomen
   uniquement (ni `javascript:`, ni identifiants dans l'URL), tailles bornées, échappement
   systématique dans le Markdown du PDF (pas de HTML brut transmis à pandoc / WeasyPrint), dans
   l'e-mail HTML et dans l'interface. Les secrets Digi-Key ne figurent jamais dans les journaux.
+- Sauvegardes : les clés saisies dans l'interface en sont exclues, comme le `.env`.
 
 ## [0.2.7] — 2026-10-09
 

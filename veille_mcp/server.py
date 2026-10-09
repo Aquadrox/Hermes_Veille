@@ -50,6 +50,8 @@ Gestion des veilles technologiques automatisées (rapports PDF envoyés par e-ma
   sources) ; `list_components` l'état de chaque référence. Les FINS DE VIE sont l'information la
   plus critique : présente-les toujours en premier. `include_components` (sur une veille
   thématique) ajoute ces avis en chapitre de son e-mail.
+- Clés d'API des distributeurs (Digi-Key) : JAMAIS par la conversation. Elles se saisissent dans
+  l'interface web, page « Sources » ; `health` indique seulement si elles sont configurées.
 - Coûts : `get_costs` donne les tokens et le coût en USD de chaque exécution. DeepSeek facture
   le double en heures pleines (lun–ven 01h–04h et 06h–10h UTC) ; `preview_schedule` le signale.
 """
@@ -300,6 +302,8 @@ def health() -> dict:
     return {"version": version(), "veilles": len(rows),
             "actives": sum(1 for r in rows if r["status"]["exists"] and not r["status"]["paused"]),
             "problems": problems, "deepseek_balance": deepseek.balance(),
+            "sources": [{"name": s["name"], "configured": s["configured"], "from_env": s["env"]}
+                        for s in service.sources_status()],
             "cost_month_usd": service.costs_overview()["total_month_usd"],
             "audit": service.read_audit(15)}
 

@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from . import components as comp
-from . import digikey, hermes, paths, pricing, render, schedule, store
+from . import credentials, digikey, hermes, paths, pricing, render, schedule, store
 from .store import PdfOptions, StoreError, Veille
 
 LEGACY_JOB_NAME = "Veille technologique hebdomadaire"
@@ -609,6 +609,42 @@ def notices(slug: str, ntype: str | None = None, since: str | None = None) -> li
     if ntype and ntype not in comp.TYPES:
         raise StoreError(f"type d'avis inconnu : {ntype} ({', '.join(comp.TYPES)})")
     return comp.for_display(comp.load_notices(slug), ntype, since)
+
+
+def sources_status() -> list[dict]:
+    """État des sources de données (jamais les valeurs des clés)."""
+    return [credentials.status(p) for p in credentials.PROVIDERS]
+
+
+def save_credentials(provider: str, values: dict[str, str], actor: str = "ui") -> list[str]:
+    with _locked():
+        changed = credentials.save(provider, values)
+    if changed:  # noms des champs seulement, jamais les valeurs
+        audit(actor, "credentials-save", detail=f"{provider} : {', '.join(changed)}")
+    return changed
+
+
+def delete_credentials(provider: str, actor: str = "ui") -> bool:
+    with _locked():
+        removed = credentials.delete(provider)
+    if removed:
+        audit(actor, "credentials-delete", detail=provider)
+    return removed
+
+
+def check_credentials(provider: str, actor: str = "ui") -> str:
+    """Teste la connexion à une source avec les clés configurées ; renvoie un message, ou lève."""
+    credentials.status(provider)  # source connue
+    pair = digikey.credentials()
+    if not pair:
+        raise ServiceError("identifiants Digi-Key incomplets : renseigner le Client ID et le Client Secret")
+    try:
+        digikey.Client(*pair).check()
+    except digikey.DigiKeyError as exc:
+        audit(actor, "credentials-test", detail=f"{provider} : échec")
+        raise ServiceError(str(exc)) from None
+    audit(actor, "credentials-test", detail=f"{provider} : ok")
+    return "Connexion à Digi-Key réussie."
 
 
 def _mark(slug: str, ids: set[str], channel: str, day: str) -> None:
