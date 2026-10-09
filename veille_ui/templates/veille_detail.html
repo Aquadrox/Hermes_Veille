@@ -31,6 +31,27 @@
   {% if st.last_error %}<p class="err small">Dernière erreur : {{ st.last_error }}</p>{% endif %}
 </section>
 
+<section class="card" id="rapports">
+  <h2>Rapports{% if reports %} <span class="muted small">({{ reports|length }})</span>{% endif %}</h2>
+  {% if reports %}
+  <div class="table-wrap">
+  <table class="list">
+    <thead><tr><th>Date</th><th>PDF</th><th>Source Markdown</th></tr></thead>
+    <tbody>
+    {% for r in reports[:30] %}
+      <tr>
+        <td data-label="Date">{{ r.date }}</td>
+        <td data-label="PDF">{% if r.pdf %}<a href="/veilles/{{ v.slug }}/reports/{{ r.pdf }}" target="_blank" rel="noopener">{{ r.pdf }}</a> <span class="muted small">{{ r.size|size }}</span>{% else %}—{% endif %}</td>
+        <td data-label="Markdown">{% if r.md %}<a href="/veilles/{{ v.slug }}/reports/{{ r.md }}" target="_blank" rel="noopener">{{ r.md }}</a>{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if reports|length > 30 %}<p class="small muted">30 plus récents affichés sur {{ reports|length }}.</p>{% endif %}
+  {% else %}<p class="muted">Aucun rapport pour l'instant.</p>{% endif %}
+</section>
+
 {% if logs %}
 <section class="card">
   <h2>Lancements manuels</h2>
@@ -74,23 +95,6 @@
   {% endif %}
 </section>
 
-<section class="card">
-  <h2>Rapports</h2>
-  {% if reports %}
-  <table class="list">
-    <thead><tr><th>Date</th><th>PDF</th><th>Source Markdown</th></tr></thead>
-    <tbody>
-    {% for r in reports[:30] %}
-      <tr>
-        <td>{{ r.date }}</td>
-        <td>{% if r.pdf %}<a href="/veilles/{{ v.slug }}/reports/{{ r.pdf }}" target="_blank" rel="noopener">{{ r.pdf }}</a> <span class="muted small">{{ r.size|size }}</span>{% else %}—{% endif %}</td>
-        <td>{% if r.md %}<a href="/veilles/{{ v.slug }}/reports/{{ r.md }}" target="_blank" rel="noopener">{{ r.md }}</a>{% else %}—{% endif %}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% else %}<p class="muted">Aucun rapport pour l'instant.</p>{% endif %}
-</section>
 
 {% if runs %}
 <section class="card">

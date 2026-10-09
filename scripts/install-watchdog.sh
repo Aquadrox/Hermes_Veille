@@ -37,8 +37,16 @@ command -v systemctl >/dev/null || { echo "✗ systemd requis" >&2; exit 1; }
 install -d -m 0755 "$UNIT_DIR"
 
 # Le service est généré pour pointer sur CE dépôt (le fichier versionné utilise
-# le chemin par défaut /root/veille-hermes) : script, volume ET .env.
-sed "s|/root/veille-hermes|$REPO|g" "$REPO/deploy/systemd/$SERVICE" > "$UNIT_DIR/$SERVICE"
+# le chemin par défaut /root/veille-hermes) : script et .env ; et sur le dossier de
+# données réel (VEILLE_DATA_DIR, éventuellement hors du dépôt).
+DATA="$("$REPO/scripts/data-dir.sh")"
+# Écrits tels quels dans ExecStart (et dans sed) : caractères sûrs uniquement.
+for p in "$REPO" "$DATA"; do
+    [[ "$p" =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo "✗ chemin non pris en charge par l'unité systemd : $p" >&2; exit 1; }
+done
+# Dépôt d'abord, PUIS le volume : le chemin des données n'est jamais réécrit après coup.
+sed -e "s|/root/veille-hermes|$REPO|g" -e "s|--volume $REPO/data |--volume $DATA |" \
+    "$REPO/deploy/systemd/$SERVICE" > "$UNIT_DIR/$SERVICE"
 
 if ! grep -qE '^ALERT_EMAIL=.+' "$REPO/.env" 2>/dev/null; then
     echo "⚠️  ALERT_EMAIL absent de $REPO/.env : les alertes iront à BREVO_SENDER_EMAIL"

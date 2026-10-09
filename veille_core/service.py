@@ -117,6 +117,7 @@ def describe(v: Veille, jobs: list[dict] | None = None) -> dict:
         "schedule_human": schedule.describe(v.schedule),
         "recipients": store.read_recipients(v.slug),
         "last_report": reports[0] if reports else None,
+        "report_count": len(reports),
         "running": running_pid(v.slug) is not None,
     }
 
@@ -235,6 +236,8 @@ def update_veille(slug: str, *, name: str | None = None, subject: str | None = N
                   actor: str = "cli") -> Veille:
     with _locked():
         v = store.load(slug)
+        # Avant toute écriture : jobs.json illisible ≠ job absent (échouer plutôt que doublonner).
+        jobs = hermes.load_jobs()
         changes = []
         if name is not None and name.strip() and name.strip() != v.name:
             v.name = name.strip()
@@ -268,7 +271,7 @@ def update_veille(slug: str, *, name: str | None = None, subject: str | None = N
             store.write_brief(slug, brief)
         store.save(v)
         render.write(v)
-        job = hermes.get_job(v.job_id, _safe_jobs())
+        job = hermes.get_job(v.job_id, jobs)
         if job is None:
             v.job_id = _create_job(v)
             store.save(v)
@@ -363,7 +366,8 @@ def run_wait(slug: str, actor: str = "cli") -> str:
 def archive(slug: str, actor: str = "cli") -> Path:
     with _locked():
         v = store.load(slug)
-        if v.job_id and hermes.get_job(v.job_id, _safe_jobs()) is not None:
+        # load_jobs (et non _safe_jobs) : un job non supprimé continuerait d'envoyer des e-mails.
+        if v.job_id and hermes.get_job(v.job_id, hermes.load_jobs()) is not None:
             hermes.remove(v.job_id)
         dest = paths.archive_dir() / f"{slug}-{dt.datetime.now():%Y%m%d-%H%M%S}"
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -412,7 +416,7 @@ def migrate_legacy(actor: str = "seed") -> str | None:
     if legacy.is_symlink() or not (legacy / "config.md").is_file() or target.exists():
         return None
     with _locked():
-        job = hermes.find_by_name(LEGACY_JOB_NAME, _safe_jobs())
+        job = hermes.find_by_name(LEGACY_JOB_NAME, hermes.load_jobs())  # illisible : réessayé au boot suivant
         expr = schedule.job_expr(job) if job else None
         v = Veille(
             slug=LEGACY_SLUG, name="Veille Industrie 4.0",
@@ -495,7 +499,12 @@ def reconcile_all(actor: str = "seed") -> list[str]:
     """Réaligne chaque veille avec son job (boot, ou après une édition manuelle)."""
     report = []
     with _locked():
-        jobs = _safe_jobs()
+        try:
+            jobs = hermes.load_jobs()
+        except hermes.HermesError as exc:
+            # Illisible n'est pas vide : recréer les jobs détacherait l'historique d'exécution
+            # et les coûts (indexés par job) et doublerait les envois. On ne touche à rien.
+            return [f"ERREUR {exc} — réconciliation annulée, aucune veille modifiée"]
         for v in store.list_all():
             try:
                 report.append(_reconcile(v, jobs))

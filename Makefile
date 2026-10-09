@@ -6,13 +6,13 @@ IMAGE_TAG  ?= latest
 COMPOSE    ?= docker compose
 CONTAINER  ?= veille-hermes
 VEILLE     ?=
-BACKUP_DIR ?= backups
+BACKUP_DIR ?=
 PYTHON     ?= python3
 
 .DEFAULT_GOAL := help
 
 .PHONY: help env build up down restart logs ps veilles run-now shell verify smoke integration test lint \
-        bump version mcp-install mcp-check release update backup ui-password tunnel watchdog-install watchdog-check
+        bump version mcp-install mcp-check release update backup move-data ui-password tunnel watchdog-install watchdog-check
 
 help: ## Affiche cette aide
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -27,7 +27,7 @@ up: env ## Démarre le conteneur (crée .env au besoin)
 	$(COMPOSE) up -d
 	@echo "→ logs : make logs"
 
-down: ## Arrête et supprime le conteneur (le volume ./data est conservé)
+down: ## Arrête et supprime le conteneur (les données sont conservées)
 	$(COMPOSE) down
 
 restart: ## Redémarre le conteneur (données conservées)
@@ -75,17 +75,16 @@ version: ## Affiche la version courante
 bump: ## Nouvelle version de correctif + branche release/vX.Y.Z (PART=minor|major possible)
 	./scripts/bump-version.sh $(or $(PART),patch) --branch
 
-update: ## Récupère les sources (git pull) puis reconstruit et redéploie
+update: ## git pull, puis déploiement sûr (sauvegarde, build, démarrage, données vérifiées)
 	git pull --ff-only
-	$(COMPOSE) build
-	$(COMPOSE) up -d
-	@echo "→ nouvelle version déployée (données du volume conservées)"
+	./scripts/deploy.sh
 
-backup: ## Archive horodatée de ./data (sans .env) dans $(BACKUP_DIR)/
-	@mkdir -p $(BACKUP_DIR)
-	tar --exclude='./.env' --exclude='./logs' -czf $(BACKUP_DIR)/veille-data-$$(date +%Y%m%d-%H%M%S).tar.gz -C data .
-	@ls -1t $(BACKUP_DIR)/veille-data-*.tar.gz | tail -n +11 | xargs -r rm -f
-	@echo "→ sauvegarde créée (10 dernières conservées) :"; ls -1t $(BACKUP_DIR) | head -3
+backup: ## Archive horodatée des données (sans .env), à côté du dossier de données
+	@archive="$$(BACKUP_DIR="$(BACKUP_DIR)" ./scripts/backup.sh)" && echo "→ sauvegarde créée (10 dernières conservées) : $$archive"
+
+move-data: ## Sort les données du dépôt : make move-data DEST=/srv/veille-hermes/data
+	@test -n "$(DEST)" || { echo "✗ précise la destination : make move-data DEST=/srv/veille-hermes/data"; exit 1; }
+	./scripts/move-data.sh "$(DEST)"
 
 ui-password: ## Génère le hash du mot de passe et le secret de l'interface (à coller dans .env)
 	@docker run --rm -it --entrypoint /opt/veille-app/.venv/bin/python -w /opt/veille-app $(IMAGE):$(IMAGE_TAG) -m veille_ui.passwd
@@ -101,7 +100,7 @@ tunnel: ## Rappelle la commande de tunnel SSH vers l'interface
 	@echo "puis ouvrir        :  http://localhost:8088"
 
 watchdog-check: ## Exécute le contrôle de surveillance maintenant (aucun e-mail envoyé)
-	python3 scripts/watchdog.py --volume "$(CURDIR)/data" --env-file "$(CURDIR)/.env" --dry-run
+	python3 scripts/watchdog.py --volume "$$(./scripts/data-dir.sh)" --env-file "$(CURDIR)/.env" --dry-run
 
 watchdog-install: ## Installe la surveillance (timer systemd quotidien) et teste le canal
 	./scripts/install-watchdog.sh --test

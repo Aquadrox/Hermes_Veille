@@ -18,6 +18,7 @@
     {% if row.last_report and row.last_report.pdf %}
     <a href="/veilles/{{ v.slug }}/reports/{{ row.last_report.pdf }}" target="_blank" rel="noopener">{{ row.last_report.date }}</a>
     {% else %}—{% endif %}
+    {% if row.report_count %}<div class="small"><a href="/veilles/{{ v.slug }}#rapports">{{ row.report_count }} rapport{{ 's' if row.report_count > 1 }}</a></div>{% endif %}
   </td>
   <td class="actions">
     {% if st.exists %}

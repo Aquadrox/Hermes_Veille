@@ -6,7 +6,9 @@
 #
 # Vérifie : migration (même job, historique conservé, lien de compatibilité),
 # réconciliation idempotente au redémarrage, interface (session, CSRF, Host, pause /
-# reprise effectives côté Hermes), watchdog (aucune alerte sur un volume sain).
+# reprise effectives côté Hermes), mise à jour simulée (conteneur RECRÉÉ : veilles,
+# rapports, jobs et historique conservés), garde-fou du dossier de données absent,
+# watchdog (aucune alerte sur un volume sain).
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,6 +27,7 @@ ok()   { printf '\033[32m✓ %s\033[0m\n' "$*"; }
 fail() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; docker logs --tail 60 "$NAME" >&2 2>/dev/null || true; exit 1; }
 as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
 hx() { docker exec "$NAME" "$@"; }
+hxu() { docker exec -u hermes "$NAME" "$@"; }  # écritures : fichiers à l'utilisateur hermes
 # Jamais « cmd | grep -q » avec pipefail : grep -q ferme le tube tôt et le SIGPIPE
 # de l'écrivain fait échouer le pipeline au hasard. On capture, puis on cherche.
 contains() { grep -qE -- "$2" <<< "$1"; }
@@ -122,6 +125,41 @@ contains "$(docker logs "$NAME" 2>&1)" 'reconcile: industrie-4-0: ok' || fail "r
 N_JOBS="$(as_root python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(len(d['jobs'] if isinstance(d,dict) else d))" "$DATA/cron/jobs.json")"
 [ "$N_JOBS" = 1 ] || fail "$N_JOBS jobs après redémarrage (doublon ?)"
 ok "aucun doublon, veille réconciliée « ok »"
+
+# --- 6b. Mise à jour simulée : conteneur RECRÉÉ sur le même dossier (= `up -d` d'une image neuve) ---
+log "mise à jour simulée (conteneur supprimé puis recréé)"
+contains "$(hxu veillectl create --name 'Veille Persistance' --schedule '0 7 * * 2' \
+    --recipients ops@example.org --template vierge)" 'veille créée' || fail "création de veille impossible"
+for day in 2026-09-21 2026-09-28 2026-10-05; do
+    hxu sh -c "head -c 20000 /dev/urandom > /opt/data/veilles/veille-persistance/rapports/$day-veille.pdf"
+done
+snapshot() {  # tout ce qui doit survivre : veilles + jobs, rapports, journal d'audit
+    as_root sh -c "cd '$DATA' && cat veilles/*/veille.json cron/jobs.json | grep -E '\"(slug|job_id|id|name|schedule)\"' | grep -v updated; ls veilles/*/rapports/ | sort; wc -l < veilles/.audit.log"
+}
+BEFORE="$(snapshot)"
+docker rm -f "$NAME" >/dev/null
+start
+[ "$(snapshot)" = "$BEFORE" ] || fail "état modifié par la recréation du conteneur : $(diff <(echo "$BEFORE") <(snapshot))"
+contains "$(docker logs "$NAME" 2>&1)" 'reconcile: veille-persistance: ok' || fail "veille non réconciliée « ok » après recréation"
+contains "$(curl -s -b "$JAR" "$BASE/veilles/veille-persistance")" '2026-09-21-veille\.pdf' || fail "rapports anciens absents de l'interface"
+contains "$(curl -s -b "$JAR" "$BASE/")" 'veille-persistance#rapports">3 rapports' || fail "nombre de rapports absent du tableau de bord"
+hxu veillectl archive veille-persistance >/dev/null
+ok "veilles, jobs, rapports et audit identiques après recréation ; historique visible"
+
+# --- 6c. Dossier de données absent : refus de démarrer (jamais d'état vide silencieux) ---
+log "dossier de données absent : docker compose doit refuser de démarrer"
+compose_dir="$WORK/compose"
+mkdir -p "$compose_dir"
+cp "$REPO_DIR/docker-compose.yml" "$compose_dir/"
+printf 'VEILLE_DATA_DIR=%s\nIMAGE=%s\nIMAGE_TAG=%s\nVEILLE_UI_PORT=%s\n' \
+    "$WORK/absent" "$IMAGE" "$IMAGE_TAG" "$((PORT + 1))" > "$compose_dir/.env"
+if out="$(docker compose --project-directory "$compose_dir" -p "veille-it-guard-$$" up -d --no-build 2>&1)"; then
+    docker compose --project-directory "$compose_dir" -p "veille-it-guard-$$" down >/dev/null 2>&1 || true
+    fail "démarrage accepté sur un dossier de données absent : $out"
+fi
+contains "$out" "$WORK/absent" || fail "refus pour une autre raison que le dossier absent : $out"
+[ ! -e "$WORK/absent" ] || fail "dossier de données créé en silence"
+ok "démarrage refusé, aucun dossier vide créé"
 
 # --- 7. MCP depuis l'hôte (comme le Hermes de Telegram : stdio via docker exec -i) ---
 log "MCP via docker exec -i (lecture, modification, audit)"
