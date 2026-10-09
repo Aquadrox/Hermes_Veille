@@ -24,9 +24,10 @@ nav a { text-decoration: none; color: var(--text); }
 nav a:hover { color: var(--accent); }
 
 /* Pleine largeur (PC compris) : les tableaux et grilles profitent de toute la fenêtre ; seul le texte
-   courant est plafonné, une ligne trop longue se lisant mal. Les encadrés (.flash) suivent leur bloc. */
+   courant (paragraphes, listes) est plafonné, une ligne trop longue se lisant mal. Les encadrés (.flash)
+   suivent leur bloc. */
 main { padding: 1.25rem var(--gutter) 3rem; }
-main p:not(.flash) { max-width: 110ch; }
+main :is(p, li):not(.flash) { max-width: 110ch; }
 h1 { font-size: 1.5rem; margin: .25rem 0 1rem; }
 h2 { font-size: 1.05rem; margin: 0 0 .75rem; }
 .head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }

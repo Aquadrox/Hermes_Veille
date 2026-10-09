@@ -16,9 +16,9 @@ Interface pleine largeur sur grand écran.
 - **Pleine largeur sur PC** : le contenu n'est plus limité à une colonne de 1 200 px centrée ;
   cartes, tableaux et grilles occupent toute la fenêtre (96 % de la largeur à 1 920 et 2 560 px,
   contre 61 % et 46 %). Marge latérale proportionnelle (2 % de la largeur, 16 px au minimum),
-  partagée par l'en-tête, le contenu et le pied de page pour rester alignés.
-- Le texte courant (paragraphes d'aide, rapport Markdown) reste plafonné à ~110 caractères par
-  ligne pour rester lisible ; les encadrés (`.flash`) suivent la largeur de leur bloc.
+  partagée par l'en-tête, le contenu et le pied de page, alignés sur grand écran.
+- Le texte courant (paragraphes d'aide, aperçu du brief, avis d'un composant) reste plafonné à
+  ~110 caractères par ligne pour rester lisible ; les encadrés (`.flash`) suivent leur bloc.
 - Mobile (PWA) inchangé : mêmes marges de 16 px, aucun défilement horizontal.
 
 ## [0.3.4] — 2026-10-09

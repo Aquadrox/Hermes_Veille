@@ -216,9 +216,10 @@ def test_layout_full_width_on_desktop(data, page):
     pg = page
     metrics = """() => {
       const card = document.querySelector('#composants').getBoundingClientRect();
-      const prose = document.querySelector('.card.danger p');
+      const prose = document.querySelector('.card.danger p');  // texte courant
       const flash = document.querySelector('#composants p.flash');
-      return {vw: window.innerWidth, card: card.width, left: card.left,
+      return {vw: document.documentElement.clientWidth, card: card.width, left: card.left,
+              header: getComputedStyle(document.querySelector('header.top')).paddingLeft,
               prose: prose.getBoundingClientRect().width, proseMax: getComputedStyle(prose).maxWidth,
               flash: flash.getBoundingClientRect().width,
               overflow: document.documentElement.scrollWidth > window.innerWidth};
@@ -232,4 +233,4 @@ def test_layout_full_width_on_desktop(data, page):
             assert m["proseMax"] != "none" and m["prose"] < m["flash"] < m["card"], m
     pg.set_viewport_size({"width": 390, "height": 844})
     m = pg.evaluate(metrics)
-    assert m["left"] == 16 and m["card"] == 390 - 32 and not m["overflow"], m
+    assert m["left"] == 16 and m["card"] == m["vw"] - 32 and m["header"] == "20px" and not m["overflow"], m
