@@ -15,6 +15,7 @@ import base64
 import csv
 import hashlib
 import io
+import itertools
 import json
 import re
 import secrets
@@ -34,6 +35,7 @@ MAX_UNZIPPED = 100_000_000
 MAX_ZIP_ENTRIES = 2_000
 HEADER_SCAN = 20
 MAX_EMPTY_RUN = 1_000  # lignes vides consécutives : fin des données (feuilles « étirées »)
+MAX_TOTAL_ROWS = 2 * MAX_ROWS  # lignes parcourues, vides comprises : borne CPU et mémoire
 PREVIEW_ROWS = 10
 FIELDS = ("mpn", "manufacturer", "ref")
 LABELS = {"mpn": "MPN (référence fabricant)", "manufacturer": "Fabricant", "ref": "Réf. interne"}
@@ -95,10 +97,14 @@ def _cell(value) -> str:
     return " ".join(str(value).split())[:MAX_CELL]
 
 
-def _bounded(rows) -> list[list[str]]:
-    out, filled, empty_run = [], 0, 0
-    for row in rows:
-        cells = [_cell(v) for v in list(row)[:MAX_COLS]]
+def _bounded(numbered) -> tuple[list[list[str]], list[int]]:
+    """(numéro de ligne du fichier, cellules) -> (lignes, numéros), bornés en lignes ET en volume
+    parcouru : des lignes vides intercalées ne permettent pas de contourner la limite."""
+    out, lines, filled, empty_run = [], [], 0, 0
+    for total, (line, row) in enumerate(numbered, 1):
+        if total > MAX_TOTAL_ROWS:
+            raise BomImportError(f"fichier trop long : {MAX_ROWS} lignes au plus")
+        cells = [_cell(v) for v in itertools.islice(row, MAX_COLS)]
         while cells and not cells[-1]:
             cells.pop()
         if cells:
@@ -110,9 +116,11 @@ def _bounded(rows) -> list[list[str]]:
             if empty_run > MAX_EMPTY_RUN:
                 break
         out.append(cells)
+        lines.append(line)
     while out and not out[-1]:
         out.pop()
-    return out
+        lines.pop()
+    return out, lines
 
 
 def _decode(data: bytes) -> str:
@@ -124,14 +132,24 @@ def _decode(data: bytes) -> str:
     raise BomImportError("encodage du fichier non reconnu (UTF-8 ou Windows-1252 attendu)")
 
 
-def _read_csv(data: bytes) -> list[list[str]]:
+def _read_csv(data: bytes) -> tuple[list[list[str]], list[int]]:
     text = _decode(data)
-    sample = "\n".join(text.splitlines()[:50])
+    sample = "\n".join(line[:2000] for line in text.splitlines()[:50])
     try:
         delimiter = csv.Sniffer().sniff(sample, delimiters=";,\t|").delimiter
     except csv.Error:  # une seule colonne, ou forme ambiguë
         delimiter = ";" if sample.count(";") >= sample.count(",") else ","
-    return _bounded(csv.reader(io.StringIO(text), delimiter=delimiter))
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+    start = [1]
+
+    def numbered():  # numéro de la PREMIÈRE ligne physique (champ entre guillemets sur plusieurs lignes)
+        for row in reader:
+            yield start[0], row
+            start[0] = reader.line_num + 1
+    try:
+        return _bounded(numbered())
+    except csv.Error as exc:
+        raise BomImportError(f"fichier CSV invalide (ligne {reader.line_num}) : {exc}") from None
 
 
 def _check_zip(data: bytes) -> None:
@@ -144,7 +162,7 @@ def _check_zip(data: bytes) -> None:
         raise BomImportError("fichier Excel refusé : contenu décompressé trop volumineux")
 
 
-def _read_xlsx(data: bytes, sheet: str | None) -> tuple[list[str], str, list[list[str]]]:
+def _read_xlsx(data: bytes, sheet: str | None) -> tuple[list[str], str, list[list[str]], list[int]]:
     _check_zip(data)
     from openpyxl import load_workbook
 
@@ -157,10 +175,10 @@ def _read_xlsx(data: bytes, sheet: str | None) -> tuple[list[str], str, list[lis
         if sheet is not None and sheet not in names:
             raise BomImportError(f"feuille inconnue : {sheet} ({', '.join(names)})")
         for name in [sheet] if sheet else names:
-            rows = _bounded(wb[name].iter_rows(values_only=True))
+            rows, lines = _bounded(enumerate(wb[name].iter_rows(values_only=True, max_col=MAX_COLS), 1))
             if rows or sheet:
-                return names, name, rows
-        return names, names[0] if names else "", []
+                return names, name, rows, lines
+        return names, names[0] if names else "", [], []
     except BomImportError:
         raise
     except Exception as exc:  # noqa: BLE001 - XML malveillant (defusedxml) ou fichier corrompu
@@ -170,21 +188,22 @@ def _read_xlsx(data: bytes, sheet: str | None) -> tuple[list[str], str, list[lis
 
 
 def read_table(data: bytes, filename: str, sheet: str | None = None) -> dict:
-    """Contenu brut d'un fichier : {"sheets", "sheet", "rows"} (cellules en texte)."""
+    """Contenu brut d'un fichier : {"sheets", "sheet", "rows", "lines"} (cellules en texte ; `lines` :
+    numéro de ligne du fichier de chaque rangée, pour des messages exacts)."""
     if len(data) > MAX_BYTES:
         raise BomImportError(f"fichier trop volumineux : {MAX_BYTES // 1_000_000} Mo au plus")
     ext = (filename or "").lower().rsplit(".", 1)[-1] if "." in (filename or "") else ""
     if ext in ("xlsx", "xlsm"):
-        sheets, name, rows = _read_xlsx(data, sheet or None)
+        sheets, name, rows, lines = _read_xlsx(data, sheet or None)
     elif ext in ("csv", "txt", "tsv", ""):
-        sheets, name, rows = [], "", _read_csv(data)
+        (rows, lines), sheets, name = _read_csv(data), [], ""
     elif ext in ("xls", "ods", "numbers"):
         raise BomImportError(f"format .{ext} non pris en charge : enregistrer le fichier en .xlsx ou en .csv")
     else:
         raise BomImportError("format attendu : .csv, .txt, .xlsx ou .xlsm")
     if not any(rows):
         raise BomImportError("aucune donnée trouvée dans le fichier" + (f" (feuille « {name} »)" if name else ""))
-    return {"sheets": sheets, "sheet": name, "rows": rows}
+    return {"sheets": sheets, "sheet": name, "rows": rows, "lines": lines}
 
 
 def read_path(path: Path, sheet: str | None = None) -> dict:
@@ -200,7 +219,7 @@ def read_path(path: Path, sheet: str | None = None) -> dict:
 def import_path(name: str) -> Path:
     """Fichier du dossier d'import désigné par son NOM (MCP) : aucun autre chemin n'est accessible."""
     root = paths.imports_dir()
-    if not isinstance(name, str) or not IMPORT_NAME_RE.match(name):
+    if not isinstance(name, str) or not IMPORT_NAME_RE.fullmatch(name):
         raise BomImportError("nom de fichier invalide : un nom simple en .csv, .txt, .xlsx ou .xlsm, "
                              f"déposé dans {root}")
     path = (root / name).resolve()
@@ -308,7 +327,7 @@ def guess_mapping(rows: list[list[str]], header_row: int | None) -> dict:
                 break
         else:
             out[field] = {"col": None, "confidence": None}
-    if header_row is None:  # fichier sans en-tête : MPN ; Fabricant ; Réf (format historique)
+    if all(out[f]["col"] is None for f in FIELDS):  # aucun libellé reconnu : MPN ; Fabricant ; Réf
         for i, field in enumerate(FIELDS):
             if i < len(cols):
                 out[field] = {"col": i, "confidence": "probable"}
@@ -324,13 +343,14 @@ def guess_mapping(rows: list[list[str]], header_row: int | None) -> dict:
 # Application et proposition
 # --------------------------------------------------------------------------
 def resolve_column(value, cols: list[str]) -> int | None:
-    """Colonne désignée par son libellé, sa lettre (A, B…) ou son numéro (1, 2…) ; vide ou 0 = aucune."""
-    if value is None or str(value).strip().lower() in ("", "-", "0", "aucune", "none"):
+    """Colonne désignée par `#n` (n-ième, sans ambiguïté : forme envoyée par l'interface), son
+    libellé, sa lettre (A, B…) ou son numéro (1, 2…) ; vide ou 0 = aucune."""
+    v = str(value if value is not None else "").strip()
+    if v.lower() in ("", "-", "0", "#0", "aucune", "none"):
         return None
-    if isinstance(value, int):
-        idx = value
+    if re.fullmatch(r"#\d{1,4}", v):
+        idx = int(v[1:]) - 1
     else:
-        v = str(value).strip()
         named = [i for i, h in enumerate(cols) if norm(h) == norm(v)]
         if named:
             return named[0]
@@ -346,7 +366,7 @@ def resolve_column(value, cols: list[str]) -> int | None:
 
 
 def apply(rows: list[list[str]], header_row: int | None, mapping: dict[str, int | None],
-          default_manufacturer: str = "") -> tuple[list[dict], list[dict]]:
+          default_manufacturer: str = "", lines: list[int] | None = None) -> tuple[list[dict], list[dict]]:
     """Lignes -> (composants valides et dédoublonnés, rejets [{"line", "reason"}])."""
     if mapping.get("mpn") is None:
         raise BomImportError("choisir la colonne du MPN (référence fabricant)")
@@ -359,7 +379,8 @@ def apply(rows: list[list[str]], header_row: int | None, mapping: dict[str, int 
         i = mapping.get(field)
         return row[i] if i is not None and i < len(row) else ""
 
-    for n, row in enumerate(rows[start:], start + 1):
+    for i, row in enumerate(rows[start:], start):
+        n = lines[i] if lines and i < len(lines) else i + 1
         if not any(row):
             continue
         entry, reason = comp.validate_entry(cell(row, "mpn"),
@@ -383,6 +404,8 @@ def propose_options(table: dict, header=None, columns: dict | None = None, defau
             n = int(header)
         except (TypeError, ValueError):
             raise BomImportError(f"ligne d'en-tête invalide : {header!r}") from None
+        if n < 0:
+            raise BomImportError(f"ligne d'en-tête invalide : {header!r}")
         header_row = n - 1 if n > 0 else None
     return propose(table, header_row, columns or None, (default_manufacturer or "").strip())
 
@@ -397,6 +420,10 @@ def propose(table: dict, header_row: int | None = -1, mapping: dict | None = Non
     rows = table["rows"]
     if header_row == -1:
         header_row = detect_header(rows)
+        # Rien de reconnu, mais une 1re ligne qui n'a pas la forme d'un MPN (aucun chiffre) : c'est un
+        # en-tête aux libellés inconnus, pas une donnée (sinon « Composant;Fournisseur » serait importé).
+        if header_row is None and len(rows) > 1 and rows[0] and not any(ch.isdigit() for ch in rows[0][0]):
+            header_row = 0
     if header_row is not None and not 0 <= header_row < len(rows):
         raise BomImportError(f"ligne d'en-tête hors du tableau : {header_row + 1}")
     cols = headers(rows, header_row)
@@ -408,7 +435,7 @@ def propose(table: dict, header_row: int | None = -1, mapping: dict | None = Non
             guessed[field] = {"col": col, "confidence": "choisie" if col is not None else None}
         chosen[field] = guessed[field]["col"]
     try:
-        items, rejected = apply(rows, header_row, chosen, default_manufacturer)
+        items, rejected = apply(rows, header_row, chosen, default_manufacturer, table.get("lines"))
         error = None
     except comp.ComponentsError as exc:
         items, rejected, error = [], [], str(exc)

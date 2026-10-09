@@ -325,7 +325,8 @@ def test_ui_upload_proposal_and_csp(ui):
     assert r.status_code == 200 and token
     t = r.text
     assert "3 composants valides" in t and "l. 8 : fabricant manquant" in t
-    assert re.search(r'name="import_mpn">.*?<option value="5" selected>E — Mfr\. P/N', t, re.S)
+    assert re.search(r'name="import_mpn".*?<option value="#5" selected>E — Mfr\. P/N', t, re.S)
+    assert 'hx-vals=\'{"import_changed": "header"}\'' in t
     assert re.search(r'<option value="3" selected>Ligne 3', t) and "style=" not in t
     assert "Repère | Qté" in t  # choix de la ligne d'en-tête lisible
 
@@ -346,13 +347,18 @@ def test_ui_preview_remap_and_sheet_change(ui):
     client, _, h = ui
     data = xlsx(("BOM", BOM_ROWS), ("Autre", [["MPN", "Marque"], ["NE555P", "TI"]]))
     _, token = upload(client, h, data)
-    base = {"import_token": token, "import_sheet": "BOM", "import_header": "3", "import_mpn": "5",
-            "import_manufacturer": "4", "import_ref": "7"}
+    base = {"import_token": token, "import_sheet": "BOM", "import_header": "3", "import_mpn": "#5",
+            "import_manufacturer": "#4", "import_ref": "#7"}
     r = client.post("/fragments/import/preview", data={**base, "import_default_mfr": "Murata"}, headers=h)
     assert "4 composants valides" in r.text and "badge ok\">choisie" in r.text
-    r = client.post("/fragments/import/preview", data={**base, "import_sheet": "Autre"},
-                    headers={**h, "HX-Trigger-Name": "import_sheet"})
-    assert "1 composant valide" in r.text and 'selected>Autre' in r.text  # détection relancée
+    # Changement de feuille : l'ancienne ligne d'en-tête (3) et les anciennes colonnes sont oubliées
+    r = client.post("/fragments/import/preview", data={**base, "import_sheet": "Autre", "import_changed": "sheet"},
+                    headers=h)
+    assert r.status_code == 200 and "1 composant valide" in r.text and 'selected>Autre' in r.text
+    # Changement de ligne d'en-tête : colonnes redétectées
+    r = client.post("/fragments/import/preview", data={**base, "import_header": "1", "import_changed": "header"},
+                    headers=h)
+    assert r.status_code == 200 and re.search(r'<option value="1" selected>Ligne 1', r.text)
     r = client.post("/fragments/import/preview", data={**base, "import_mpn": ""}, headers=h)
     assert "choisir la colonne du MPN" in r.text
 
@@ -360,8 +366,8 @@ def test_ui_preview_remap_and_sheet_change(ui):
 def test_ui_apply_add_replace_then_create(ui):
     client, csrf, h = ui
     _, token = upload(client, h)
-    base = {"import_token": token, "import_sheet": "BOM", "import_header": "3", "import_mpn": "5",
-            "import_manufacturer": "4", "import_ref": "7", "import_default_mfr": "Murata"}
+    base = {"import_token": token, "import_sheet": "BOM", "import_header": "3", "import_mpn": "#5",
+            "import_manufacturer": "#4", "import_ref": "#7", "import_default_mfr": "Murata"}
     r = client.post("/fragments/import/apply", data={**base, "import_mode": "add",
                                                      "components": "LM317T ; Texas Instruments ; OLD\nBC547;onsemi"},
                     headers=h)
@@ -407,3 +413,84 @@ def test_mcp_preview_and_import(watch, monkeypatch, tmp_path):
     r = call(srv, "preview_component_import", {"filename": "../veilles/.audit.log"})
     assert r.is_error and "nom de fichier invalide" in r.content[0].text
 
+
+
+# --------------------------------------------------------------------------
+# Correctifs issus de la revue
+# --------------------------------------------------------------------------
+def test_interleaved_empty_rows_cannot_bypass_limits():
+    """Des lignes vides intercalées ne contournent pas la limite : refus rapide, mémoire bornée."""
+    import time
+    t = time.perf_counter()
+    with pytest.raises(bom_import.BomImportError, match="trop long"):
+        bom_import.read_table((b"LM317T;TI\n" + b"\n" * 1000) * 4900, "b.csv")
+    wb = Workbook()
+    ws = wb.active
+    for i in range(30):  # cellules espacées de 1 001 lignes, feuille déclarée très large
+        ws.cell(row=1 + i * 1001, column=100, value=f"X{i}")
+    buf = io.BytesIO()
+    wb.save(buf)
+    with pytest.raises(bom_import.BomImportError, match="trop long"):
+        bom_import.read_table(buf.getvalue(), "b.xlsx")
+    assert time.perf_counter() - t < 10
+
+
+def test_csv_errors_are_clean():
+    with pytest.raises(bom_import.BomImportError, match="CSV invalide"):
+        bom_import.read_table(b"MPN;Fabricant\n" + b"A" * 200_000 + b";TI\n", "b.csv")
+
+
+def test_csv_line_numbers_follow_physical_lines():
+    data = b'MPN;Fabricant;Note\nLM317T;TI;"sur\ndeux lignes"\nNE555P;;x\n'
+    p = propose(data, "b.csv")
+    assert p["rejected"] == [{"line": 4, "reason": "fabricant manquant ou invalide"}]
+
+
+def test_unrecognized_header_row_is_not_imported():
+    p = propose(b"Composant;Fournisseur\nLM317T;TI\nNE555P;TI\n", "b.csv")
+    assert p["header_row"] == 0 and [c["mpn"] for c in p["components"]] == ["LM317T", "NE555P"]
+    assert p["mapping"]["mpn"] == {"col": 0, "confidence": "probable"}
+
+
+def test_hash_column_reference_is_unambiguous():
+    data = b"MPN;Fabricant;1\nLM317T;TI;x\n"
+    p = propose(data, "b.csv", columns={"mpn": "#1", "manufacturer": "#2", "ref": "#0"})
+    assert p["components"] == [{"mpn": "LM317T", "manufacturer": "TI", "ref": ""}]
+    p = propose(data, "b.csv", columns={"ref": "1"})  # un libellé « 1 » existe : il est désigné
+    assert p["mapping"]["ref"]["col"] == 2
+    with pytest.raises(bom_import.BomImportError, match="hors du tableau"):
+        propose(data, "b.csv", columns={"mpn": "#9"})
+
+
+def test_negative_header_and_trailing_newline_name_rejected(env):
+    with pytest.raises(bom_import.BomImportError, match="ligne d'en-tête invalide"):
+        propose(b"MPN;Fabricant\nLM317T;TI\n", "b.csv", header=-3)
+    paths.imports_dir().mkdir()
+    (paths.imports_dir() / "bom.csv").write_text("x")
+    with pytest.raises(bom_import.BomImportError, match="nom de fichier invalide"):
+        bom_import.import_path("bom.csv\n")
+
+
+def test_ui_rejects_oversized_upload_before_parsing(ui, monkeypatch):
+    client, _, h = ui
+    monkeypatch.setattr(bom_import, "MAX_BYTES", 1000)
+    r = client.post("/fragments/import", files={"import_file": ("bom.csv", b"x" * 200_000)}, headers=h)
+    assert r.status_code == 400 and "trop volumineux" in r.text
+    assert not paths.imports_dir().exists() or not list(paths.imports_dir().glob(".ui-*"))
+
+
+def test_htmx_swaps_400_fragments(ui):
+    """HTMX 2 n'affiche pas les réponses 4xx par défaut : la configuration doit permettre les 400."""
+    client, _, _ = ui
+    page = client.get("/veilles/new?kind=composants").text
+    config = json.loads(re.search(r'name="htmx-config" content=\'([^\']+)\'', page).group(1))
+    assert {"code": "400", "swap": True, "error": False} in config["responseHandling"]
+    assert config["allowEval"] is False
+
+
+def test_mcp_import_is_annotated_destructive(env):
+    pytest.importorskip("mcp")
+    from test_mcp import tools
+
+    from veille_mcp.server import build_server
+    assert tools(build_server())["import_components"].annotations.destructive_hint is True

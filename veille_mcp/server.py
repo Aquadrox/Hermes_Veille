@@ -541,7 +541,8 @@ READ_TOOLS = [list_veilles, get_veille, get_brief, list_brief_templates, list_re
               preview_component_import]
 WRITE_TOOLS = [(create_veille, WRITE), (update_veille, WRITE), (set_recipients, WRITE),
                (add_recipients, WRITE), (remove_recipients, WRITE), (update_brief, WRITE),
-               (edit_brief, WRITE), (add_components, WRITE), (remove_components, WRITE), (import_components, WRITE),
+               (edit_brief, WRITE), (add_components, WRITE), (remove_components, WRITE),
+               (import_components, DESTROY),  # mode replace : la liste existante est remplacée
                (pause_veille, WRITE), (resume_veille, WRITE),
                (check_component_statuses, WRITE), (run_veille_now, SEND), (send_test_email, SEND),
                (archive_veille, DESTROY)]

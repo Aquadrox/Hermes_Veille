@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from veille_core import (
@@ -394,64 +395,73 @@ def create_app() -> FastAPI:
     def session_secret(request: Request) -> str:
         return (request.state.session or {}).get("csrf", "")
 
-    def import_view(request: Request, token: str, form, status_code: int = 200):
-        """Réanalyse le fichier conservé avec les choix du formulaire ; rend la proposition."""
+    def proposal(secret: str, token: str, form) -> tuple[str, dict, dict]:
+        """Réanalyse le fichier conservé avec les choix du formulaire : (nom, table, proposition).
+        Synchrone (analyse d'un fichier) : appelé via run_in_threadpool."""
+        form = dict(form)
+        # Autre feuille ou autre ligne d'en-tête : les colonnes changent, la détection repart de zéro.
+        changed = form.get("import_changed")
+        if changed in ("sheet", "header"):
+            for f in bom_import.FIELDS:
+                form.pop(f"import_{f}", None)
+            if changed == "sheet":
+                form.pop("import_header", None)
+        filename, data = bom_import.unstash(token, secret)
+        table = bom_import.read_table(data, filename, form.get("import_sheet") or None)
+        mapping = None
+        if any(f"import_{f}" in form for f in bom_import.FIELDS):
+            mapping = {f: form.get(f"import_{f}", "") for f in bom_import.FIELDS}
+        p = bom_import.propose_options(table, form.get("import_header"), mapping,
+                                       str(form.get("import_default_mfr", "")))
+        return filename, table, p
+
+    async def import_panel(request: Request, token: str, form):
         try:
-            filename, data = bom_import.unstash(token, session_secret(request))
-            table = bom_import.read_table(data, filename, form.get("import_sheet") or None)
-            mapping = None
-            if any(f"import_{f}" in form for f in bom_import.FIELDS):
-                mapping = {f: form.get(f"import_{f}", "") for f in bom_import.FIELDS}
-            p = bom_import.propose_options(table, form.get("import_header"), mapping,
-                                           str(form.get("import_default_mfr", "")))
+            filename, table, p = await run_in_threadpool(proposal, session_secret(request), token, form)
         except components.ComponentsError as exc:
-            return render(request, "partials/import.html", 400, error=str(exc)), None
+            return render(request, "partials/import.html", 400, error=str(exc))
         choices = [" | ".join(c for c in row if c)[:70] or "(vide)" for row in table["rows"][:bom_import.HEADER_SCAN]]
-        return render(request, "partials/import.html", status_code, p=p, token=token, filename=filename,
-                      header_choices=choices, mode=form.get("import_mode", "add")), p
+        return render(request, "partials/import.html", p=p, token=token, filename=filename,
+                      header_choices=choices, mode=form.get("import_mode", "add"))
 
     @app.post("/fragments/import", response_class=HTMLResponse)
     async def import_upload(request: Request):
+        # Refus AVANT de recevoir le fichier (Starlette l'écrirait d'abord en entier sur disque).
+        if int(request.headers.get("content-length") or 0) > bom_import.MAX_BYTES + 65_536:
+            return render(request, "partials/import.html", 400,
+                          error=f"fichier trop volumineux : {bom_import.MAX_BYTES // 1_000_000} Mo au plus")
         form = await request.form(max_files=1, max_fields=20)
         upload = form.get("import_file")
         if not hasattr(upload, "read") or not upload.filename:
             return render(request, "partials/import.html", 400, error="Choisir un fichier CSV ou Excel.")
         data = await upload.read(bom_import.MAX_BYTES + 1)
         try:
-            bom_import.read_table(data, upload.filename)  # refus immédiat d'un fichier illisible
+            await run_in_threadpool(bom_import.read_table, data, upload.filename)  # refus immédiat si illisible
             token = bom_import.stash(data, upload.filename, session_secret(request))
         except components.ComponentsError as exc:
             return render(request, "partials/import.html", 400, error=str(exc))
         service.audit(ACTOR, "components-import-upload", detail=f"{len(data)} octets")
-        return import_view(request, token, {})[0]
+        return await import_panel(request, token, {})
 
     @app.post("/fragments/import/preview", response_class=HTMLResponse)
     async def import_preview(request: Request):
-        form = dict(await request.form())
-        # Autre feuille ou autre ligne d'en-tête : les colonnes changent, la détection repart de zéro.
-        trigger = request.headers.get("HX-Trigger-Name", "")
-        if trigger in ("import_sheet", "import_header"):
-            for f in bom_import.FIELDS:
-                form.pop(f"import_{f}", None)
-            if trigger == "import_sheet":
-                form.pop("import_header", None)
-        return import_view(request, str(form.get("import_token", "")), form)[0]
+        form = await request.form()
+        return await import_panel(request, str(form.get("import_token", "")), form)
 
     @app.post("/fragments/import/apply", response_class=HTMLResponse)
     async def import_apply(request: Request):
         form = await request.form()
         current_text = str(form.get("components", ""))
-        _, p = import_view(request, str(form.get("import_token", "")), form)
-        ctx = {"components_text": current_text}
         try:
-            if p is None:
-                raise components.ComponentsError("analyse expirée ou introuvable : renvoyer le fichier")
+            _, _, p = await run_in_threadpool(proposal, session_secret(request), str(form.get("import_token", "")),
+                                              form)
             if p["error"]:
                 raise components.ComponentsError(p["error"])
             current = components.parse_components(current_text)
             merged, st = components.combine(current, p["components"], form.get("import_mode", "add"))
         except components.ComponentsError as exc:
-            return render(request, "partials/components_field.html", 400, import_error=str(exc), **ctx)
+            return render(request, "partials/components_field.html", 400, import_error=str(exc),
+                          components_text=current_text)
         msg = (f"Import appliqué : {st['added']} ajouté(s), {st['existing']} déjà présent(s)"
                + (f", {st['removed']} retiré(s)" if st["removed"] else "")
                + ". Vérifie la liste puis enregistre la veille.")
