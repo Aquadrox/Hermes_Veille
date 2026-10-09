@@ -2,9 +2,15 @@
 # deploy.sh — construit, démarre et vérifie le conteneur de veille.
 #
 # Usage :
-#   ./scripts/deploy.sh              # build + démarrage + vérifications
+#   ./scripts/deploy.sh              # build + sauvegarde + démarrage + vérifications
+#   ./scripts/deploy.sh --init       # première installation : crée le dossier de données
 #   ./scripts/deploy.sh --pull       # tire d'abord l'image amont (Hermes)
 #   ./scripts/deploy.sh --no-build   # redémarre sans reconstruire
+#
+# Les données (veilles, rapports, jobs, historique) vivent dans VEILLE_DATA_DIR, hors de
+# l'image : avant de démarrer la nouvelle version, elles sont sauvegardées (conteneur
+# arrêté : archive cohérente) et inventoriées ; le déploiement échoue si une veille ou un
+# rapport manque ensuite.
 #
 # Prérequis : docker + docker compose, et un fichier .env rempli.
 set -euo pipefail
@@ -15,11 +21,13 @@ cd "$REPO_DIR"
 CONTAINER="veille-hermes"
 PULL=0
 BUILD=1
+INIT=0
 for arg in "$@"; do
     case "$arg" in
+        --init)     INIT=1 ;;
         --pull)     PULL=1 ;;
         --no-build) BUILD=0 ;;
-        -h|--help)  sed -n '2,12p' "$0"; exit 0 ;;
+        -h|--help)  sed -n '2,17p' "$0"; exit 0 ;;
         *) echo "Argument inconnu : $arg" >&2; exit 2 ;;
     esac
 done
@@ -27,6 +35,12 @@ done
 log()  { printf '\033[36m▸ %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m✓ %s\033[0m\n' "$*"; }
 fail() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; }
+warn() { printf '\033[33m! %s\033[0m\n' "$*" >&2; }
+
+# Veilles (archivées comprises) et rapports PDF : l'application n'efface jamais rien,
+# donc aucun des deux nombres ne doit baisser au fil d'un déploiement.
+count() { { find "$DATA/veilles" "$@" -type f 2>/dev/null || true; } | wc -l; }
+inventory() { echo "$(count -name veille.json) $(count -path '*/rapports/*' -name '*.pdf')"; }
 
 # --- 1. Pré-vol ---
 command -v docker >/dev/null || { fail "docker introuvable"; exit 1; }
@@ -40,7 +54,26 @@ if grep -qE '^(DEEPSEEK_API_KEY|BREVO_API_KEY)=$' .env; then
     fail "des secrets sont vides dans .env (DEEPSEEK_API_KEY / BREVO_API_KEY)"
     exit 1
 fi
-ok "pré-vol OK (.env présent et renseigné)"
+
+DATA="$("$REPO_DIR/scripts/data-dir.sh")"
+if [ ! -d "$DATA" ]; then
+    if [ "$INIT" = 1 ]; then
+        mkdir -p "$DATA" && chmod 0750 "$DATA"  # propriétaire réglé par le hook amont
+        ok "dossier de données créé : $DATA"
+    else
+        # Ne jamais repartir d'un dossier vide sans le vouloir (re-clone, mauvais dossier…).
+        fail "dossier de données introuvable : $DATA"
+        if [ "$DATA" != "$REPO_DIR/data" ] && [ -n "$(ls -A "$REPO_DIR/data" 2>/dev/null)" ]; then
+            echo "  des données existent dans $REPO_DIR/data : make move-data DEST=$DATA" >&2
+        fi
+        echo "  première installation : ./scripts/deploy.sh --init" >&2
+        exit 1
+    fi
+fi
+case "$DATA/" in
+    "$REPO_DIR"/*) warn "données DANS le dépôt ($DATA) : un re-clone ou un « git clean -x » les effacerait — make move-data DEST=/srv/veille-hermes/data" ;;
+esac
+ok "pré-vol OK (.env renseigné, données : $DATA)"
 
 # --- 2. Image amont (optionnel) ---
 if [ "$PULL" = 1 ]; then
@@ -54,22 +87,47 @@ if [ "$BUILD" = 1 ]; then
     docker compose build
 fi
 
-# --- 4. Démarrage ---
+# --- 4. Sauvegarde (conteneur arrêté : archive cohérente) ---
+read -r v0 r0 <<< "$(inventory)"
+ARCHIVE=""
+if [ -n "$(ls -A "$DATA")" ]; then
+    log "sauvegarde des données ($v0 veille(s), $r0 rapport(s) PDF)"
+    docker compose stop
+    if ! ARCHIVE="$("$REPO_DIR/scripts/backup.sh" | tail -n 1)"; then
+        fail "sauvegarde impossible : déploiement annulé, ancienne version relancée"
+        docker compose start
+        exit 1
+    fi
+    ok "sauvegarde : $ARCHIVE"
+fi
+
+# --- 5. Démarrage ---
 log "démarrage du conteneur"
+START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 docker compose up -d
 
-# --- 5. Attente de l'amorçage ---
+# --- 6. Attente de l'amorçage de CE démarrage (le marqueur .bootstrapped date du premier) ---
 log "attente de l'amorçage (max 120 s)"
 for i in $(seq 1 24); do
-    if docker exec "$CONTAINER" test -f /opt/data/veilles/.bootstrapped 2>/dev/null; then
-        ok "amorçage détecté (veilles réconciliées)"
+    boot_log="$(docker logs --since "$START" "$CONTAINER" 2>&1 || true)"
+    if grep -q 'seed-veille\] amorçage terminé' <<< "$boot_log"; then
+        ok "amorçage terminé (veilles réconciliées)"
         break
     fi
     sleep 5
     [ "$i" = 24 ] && fail "amorçage non détecté après 120 s — voir : docker compose logs | grep seed-veille"
 done
 
-# --- 6. Vérifications ---
+# --- 7. Rien ne doit avoir disparu ---
+read -r v1 r1 <<< "$(inventory)"
+if [ "$v1" -lt "$v0" ] || [ "$r1" -lt "$r0" ]; then
+    fail "données manquantes après déploiement : $v0 → $v1 veilles, $r0 → $r1 rapports PDF"
+    [ -n "$ARCHIVE" ] && echo "  restauration : docker compose stop && tar -xzf $ARCHIVE -C $DATA && docker compose start" >&2
+    exit 1
+fi
+ok "données conservées : $v1 veille(s), $r1 rapport(s) PDF"
+
+# --- 8. Vérifications ---
 echo
 log "veilles et jobs"
 if docker exec "$CONTAINER" veillectl list; then

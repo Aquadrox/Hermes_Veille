@@ -17,12 +17,20 @@ services:
       - .env
     environment:
       - TZ=Europe/Paris
-      # UID/GID de l'hôte propriétaire du volume ./data (évite « Permission denied »)
+      # UID/GID de l'hôte propriétaire du dossier de données (évite « Permission denied »)
       - HERMES_UID=${HERMES_UID:-10000}
       - HERMES_GID=${HERMES_GID:-10000}
     volumes:
-      # Source de vérité de tout l'état : config, secrets, skills, cron, veilles.
-      - ./data:/opt/data
+      # Source de vérité de tout l'état : config, skills, cron, historique, veilles, rapports.
+      # Dossier de l'HÔTE, de préférence hors du dépôt (VEILLE_DATA_DIR, voir .env.example) :
+      # une mise à jour (git pull, nouvelle image) ne le touche jamais. S'il est absent, le
+      # démarrage ÉCHOUE au lieu de repartir d'un dossier vide (première installation :
+      # ./scripts/deploy.sh --init).
+      - type: bind
+        source: ${VEILLE_DATA_DIR:-./data}
+        target: /opt/data
+        bind:
+          create_host_path: false
     ports:
       # ⚠️ TOUJOURS préfixé par 127.0.0.1 (vérifié par la CI) : accès par tunnel SSH
       #   ssh -N -L 8088:127.0.0.1:8088 <utilisateur>@<serveur>

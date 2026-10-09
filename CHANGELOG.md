@@ -7,6 +7,50 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.2.7] — 2026-10-09
+
+Données persistantes à travers les mises à jour, garanties et vérifiées.
+
+### Ajouté
+
+- **`VEILLE_DATA_DIR`** : dossier des données sur l'hôte, monté sur `/opt/data`. Il est
+  recommandé hors du dépôt git (`/srv/veille-hermes/data`), pour qu'aucune mise à jour (re-clone,
+  `git clean -x`) ne puisse l'atteindre. Le défaut `./data` est conservé, donc rien ne change
+  pour une installation existante.
+- **`make move-data DEST=…`** (`scripts/move-data.sh`) sort les données du dépôt sans rien
+  perdre : renommage, ou copie puis original renommé (jamais supprimé), réglage dans `.env`,
+  redéploiement vérifié, réinstallation du chien de garde.
+- `scripts/data-dir.sh` : résolution unique du dossier de données côté hôte, partagée par le
+  déploiement, la sauvegarde, le chien de garde et le serveur MCP.
+- `scripts/backup.sh` (`make backup`) : archives rangées à côté des données, réservées au
+  propriétaire (`umask 077`).
+- Interface : nombre de rapports sur le tableau de bord, avec un lien vers l'historique.
+- Tests : `tests/test_persistence.py` (25 tests : scripts de l'hôte exécutés avec un faux
+  `docker`), réconciliation sur un `jobs.json` corrompu, historique des rapports dans
+  l'interface. Le test d'intégration simule une **mise à jour** (conteneur supprimé puis recréé :
+  veilles, jobs, rapports et audit identiques) et vérifie le refus de démarrer sans dossier de
+  données.
+
+### Modifié
+
+- **`deploy.sh` / `make update`**, déploiement sûr :
+  - refus de démarrer si le dossier de données est absent (`--init` pour une première
+    installation) ;
+  - **sauvegarde automatique** conteneur arrêté ;
+  - attente de l'amorçage de *ce* démarrage (et non plus du marqueur du premier) ;
+  - **inventaire avant et après** : le déploiement échoue s'il manque une veille ou un rapport.
+- `docker-compose.yml` : volume en syntaxe longue avec `create_host_path: false`. Un dossier
+  absent fait échouer le démarrage au lieu de repartir d'un état vide en silence.
+- Page d'une veille : l'historique des rapports passe **en tête**, avant le coût des exécutions,
+  avec le nombre de rapports et une présentation en cartes sur mobile.
+
+### Corrigé
+
+- Réconciliation au démarrage et modification d'une veille : un `cron/jobs.json` **illisible**
+  (droits, contenu corrompu) n'est plus pris pour une absence de jobs. Auparavant, chaque job
+  était recréé : nouveaux identifiants, historique d'exécution et coûts orphelins, envois en
+  double. Désormais, rien n'est modifié et l'erreur est signalée.
+
 ## [0.2.6] — 2026-10-05
 
 Consommation de tokens et coût réel de chaque rapport.

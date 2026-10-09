@@ -117,6 +117,7 @@ def describe(v: Veille, jobs: list[dict] | None = None) -> dict:
         "schedule_human": schedule.describe(v.schedule),
         "recipients": store.read_recipients(v.slug),
         "last_report": reports[0] if reports else None,
+        "report_count": len(reports),
         "running": running_pid(v.slug) is not None,
     }
 
@@ -268,7 +269,8 @@ def update_veille(slug: str, *, name: str | None = None, subject: str | None = N
             store.write_brief(slug, brief)
         store.save(v)
         render.write(v)
-        job = hermes.get_job(v.job_id, _safe_jobs())
+        # jobs.json illisible ≠ job absent : on échoue plutôt que de créer un doublon.
+        job = hermes.get_job(v.job_id, hermes.load_jobs())
         if job is None:
             v.job_id = _create_job(v)
             store.save(v)
@@ -495,7 +497,12 @@ def reconcile_all(actor: str = "seed") -> list[str]:
     """Réaligne chaque veille avec son job (boot, ou après une édition manuelle)."""
     report = []
     with _locked():
-        jobs = _safe_jobs()
+        try:
+            jobs = hermes.load_jobs()
+        except hermes.HermesError as exc:
+            # Illisible n'est pas vide : recréer les jobs détacherait l'historique d'exécution
+            # et les coûts (indexés par job) et doublerait les envois. On ne touche à rien.
+            return [f"ERREUR {exc} — réconciliation annulée, aucune veille modifiée"]
         for v in store.list_all():
             try:
                 report.append(_reconcile(v, jobs))

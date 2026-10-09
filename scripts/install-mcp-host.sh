@@ -37,7 +37,7 @@ fail() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
 # Arguments de `docker exec` : utilisateur hermes (fichiers du volume), origine des actions
 # pour le journal d'audit, et chemin hôte des données (pièces jointes PDF envoyables).
-ARGS=(exec -i -u hermes -e "VEILLE_MCP_ACTOR=$ACTOR" -e "VEILLE_HOST_DATA=$REPO/data" "$CONTAINER" veille-mcp)
+ARGS=(exec -i -u hermes -e "VEILLE_MCP_ACTOR=$ACTOR" -e "VEILLE_HOST_DATA=$("$REPO/scripts/data-dir.sh")" "$CONTAINER" veille-mcp)
 [ "$READONLY" = 1 ] && ARGS+=(--readonly)
 ARGS_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${ARGS[@]}")"
 

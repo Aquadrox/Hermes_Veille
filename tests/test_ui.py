@@ -204,3 +204,22 @@ def test_health_shows_deepseek_balance_and_costs(client, monkeypatch):
     client.post("/veilles/new", data=create_form(csrf))
     page = client.get("/health").text
     assert "DeepSeek" in page and "12.50 USD" in page and "Total" in page
+
+
+def test_report_history_listed_first_and_counted(client, env):
+    """Les rapports passés restent visibles après une mise à jour : liste complète, en tête."""
+    csrf = login(client)
+    client.post("/veilles/new", data=create_form(csrf))
+    rdir = store.veille_dir("veille-cyber") / "rapports"
+    days = ["2026-09-21", "2026-09-28", "2026-10-05"]
+    for day in days:
+        (rdir / f"{day}-veille.pdf").write_bytes(b"%PDF" + b"x" * 2048)
+        (rdir / f"{day}-veille.md").write_text("# r\n")
+    page = client.get("/veilles/veille-cyber").text
+    assert 'id="rapports"' in page and "Rapports <span class=\"muted small\">(3)</span>" in page
+    assert page.index('id="rapports"') < page.index("Coût des exécutions")
+    positions = [page.index(f"{day}-veille.pdf") for day in reversed(days)]
+    assert positions == sorted(positions)  # du plus récent au plus ancien
+    assert 'data-label="PDF"' in page  # présentation en cartes sur mobile
+    dashboard = client.get("/").text
+    assert 'href="/veilles/veille-cyber#rapports">3 rapports</a>' in dashboard

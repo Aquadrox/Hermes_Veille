@@ -24,9 +24,10 @@ par simple reconstruction.
 # 1. configurer les secrets
 cp .env.example .env && chmod 600 .env && $EDITOR .env
 #    DEEPSEEK_API_KEY, BREVO_API_KEY, BREVO_SENDER_*, ALERT_EMAIL, VEILLE_RECIPIENTS
+#    VEILLE_DATA_DIR : dossier des données, HORS du dépôt (défaut proposé : /srv/veille-hermes/data)
 
-# 2. déployer (build + démarrage + vérifications)
-./scripts/deploy.sh
+# 2. premier déploiement : crée le dossier de données, build, démarrage, vérifications
+./scripts/deploy.sh --init
 
 # 3. activer l'interface web : générer le mot de passe, coller les 2 lignes dans .env
 make ui-password && docker compose up -d
@@ -60,12 +61,14 @@ Host veille
 Fonctions :
 
 - **tableau de bord** : état de chaque veille (active, en pause, en échec), prochain et dernier
-  run, dernier rapport. Pause, reprise et lancement immédiat en un clic ;
+  run, dernier rapport et nombre de rapports (lien vers l'historique). Pause, reprise et
+  lancement immédiat en un clic ;
 - **créer / modifier une veille** : nom, sujet, fréquence (quotidienne, jours ouvrés,
   hebdomadaire, mensuelle ou expression cron, avec aperçu des prochaines exécutions),
   destinataires, brief de mission (à partir d'un modèle, avec aperçu), mise en forme du PDF,
   modèle LLM ;
-- **détail** : rapports (PDF et Markdown), journal du lancement en cours (rafraîchi en direct),
+- **détail** : historique complet des rapports (PDF et Markdown, en tête de page), journal du
+  lancement en cours (rafraîchi en direct), coût des exécutions,
   historique d'exécution Hermes, e-mail de test, **archivage** (rien n'est effacé) ;
 - **santé** : état des veilles, crédits Brevo et journal d'audit.
 
@@ -153,29 +156,44 @@ docker exec veille-hermes veillectl reconcile
 | `make tunnel` | rappelle la commande de tunnel SSH |
 | `make mcp-install` / `make mcp-check` | branche le serveur MCP sur le Hermes de l'hôte / liste ses outils |
 | `make ui-password` | génère le hash du mot de passe et le secret de l'interface |
-| `make backup` | archive horodatée de `./data` (sans `.env`, 10 dernières conservées) |
+| `make backup` | archive horodatée des données (sans `.env`, 10 dernières conservées), rangée à côté du dossier de données |
+| `make move-data DEST=…` | sort les données du dépôt git (`VEILLE_DATA_DIR`), sans rien perdre |
 | `make test` / `make lint` | tests unitaires avec couverture / ruff + shellcheck (+ hadolint) |
 | `make smoke` | teste l'image (dépendances, chaîne PDF, contrat CLI Hermes, veillectl, interface) |
 | `make integration` | test de bout en bout du conteneur complet (migration, interface, watchdog) |
 | `make version` / `make bump` | version courante / nouvelle version + branche `release/vX.Y.Z` |
 | `make shell` | ouvre un shell dans le conteneur |
-| `make down` | arrête le conteneur (volume conservé) |
-| `make update` | `git pull`, puis reconstruit et redéploie |
+| `make down` | arrête le conteneur (données conservées) |
+| `make update` | `git pull`, puis déploiement sûr : sauvegarde, build, démarrage, données vérifiées |
 | `make watchdog-check` | exécute le contrôle de surveillance (sans envoyer d'e-mail) |
 | `make watchdog-install` | installe la surveillance sur l'hôte et teste le canal d'alerte |
 
-### Disposition du volume (`./data` = `/opt/data`)
+### Disposition des données (`VEILLE_DATA_DIR` = `/opt/data`)
+
+Tout l'état vit dans **un dossier de l'hôte**, `VEILLE_DATA_DIR` (`.env`), monté sur `/opt/data` :
+veilles, rapports, jobs (`cron/jobs.json`), historique d'exécution et consommation (`state.db`),
+journal d'audit. L'image ne contient aucune donnée : la remplacer ne perd rien.
+
+- **Hors du dépôt git** (recommandé : `/srv/veille-hermes/data`) : ni un `git pull`, ni un
+  re-clone, ni un `git clean -x` ne peuvent l'atteindre. Sans `VEILLE_DATA_DIR`, le défaut
+  historique `./data` (dans le dépôt) reste utilisé, et `deploy.sh` le signale.
+- **Jamais recréé vide en silence** : si le dossier est absent, `docker compose up` échoue
+  (`bind source path does not exist`) au lieu de démarrer sur un état vierge.
+- Le chien de garde, le serveur MCP (chemins des PDF) et `make backup` lisent le même
+  chemin (`scripts/data-dir.sh`).
 
 ```
-data/veilles/<slug>/
+veilles/<slug>/
     veille.json       métadonnées : nom, sujet, fréquence, PDF, lien vers le job Hermes
     config.md         brief de mission (éditable dans l'interface)
     recipients.txt    destinataires, un par ligne
     job-prompt.md     prompt RENDU depuis le gabarit de l'image (ne pas éditer)
     rapports/         AAAA-MM-JJ-veille.{md,pdf}, -charts.json
     runs/             journaux des lancements manuels
-data/veilles/.archive/   veilles archivées
-data/veilles/.audit.log  journal d'audit (interface, CLI, amorçage)
+veilles/.archive/   veilles archivées
+veilles/.audit.log  journal d'audit (interface, CLI, amorçage)
+cron/jobs.json      jobs Hermes (état, prochain et dernier run)
+state.db            historique des exécutions Hermes (tokens, coûts)
 ```
 
 Le **job Hermes fait foi** pour l'état (actif / en pause, prochain et dernier run). Le job ne
@@ -213,8 +231,39 @@ make watchdog-install    # (ré)installer la surveillance et tester le canal d'a
 ## Mise à jour
 
 ```bash
-make update          # git pull + build + up -d : données du volume conservées
+make update          # git pull --ff-only, puis ./scripts/deploy.sh
 ```
+
+`deploy.sh` ne touche jamais aux données, et le vérifie :
+
+1. **refuse de démarrer** si le dossier de données est absent (`--init` uniquement pour une
+   première installation) ;
+2. **sauvegarde** les données, conteneur arrêté pour une archive cohérente (environ 1 s pour
+   40 Mo), à côté du dossier de données ;
+3. démarre la nouvelle version et attend la fin de **son** amorçage (réconciliation des jobs) ;
+4. **compare l'inventaire** (veilles et rapports PDF) avant et après : s'il manque quoi que ce
+   soit, le déploiement échoue et affiche la commande de restauration.
+
+Restauration manuelle d'une sauvegarde :
+
+```bash
+docker compose stop
+tar -xzf /srv/veille-hermes/backups/veille-data-AAAAMMJJ-HHMMSS.tar.gz -C /srv/veille-hermes/data
+docker compose start
+```
+
+### Sortir les données du dépôt (installation existante)
+
+Une seule fois, sur le serveur :
+
+```bash
+make move-data DEST=/srv/veille-hermes/data
+```
+
+Le conteneur est arrêté, `./data` est déplacé (renommage ; sur un autre disque : copie, puis
+l'original est **renommé**, jamais supprimé), `VEILLE_DATA_DIR` est écrit dans `.env`, puis
+`deploy.sh` redéploie et vérifie l'inventaire. Le chien de garde est réinstallé s'il l'était ;
+relancer `make mcp-install` si le serveur MCP est branché sur le Hermes de l'hôte.
 
 L'image amont est **épinglée** dans le `Dockerfile`. Dependabot propose ses montées de version
 en PR ; la CI les valide (tests, lint, smoke test et test d'intégration sur l'image construite,
@@ -236,7 +285,7 @@ lisible. `destinataire.txt` devient `recipients.txt`. Ensuite, sur l'hôte :
 1. ajoute `ALERT_EMAIL` (et, pour l'interface, le résultat de `make ui-password`) dans `.env` ;
 2. réinstalle la surveillance : `make watchdog-install`.
 
-Avant la mise à jour, une sauvegarde est recommandée : `make backup`.
+`make update` sauvegarde les données avant toute mise à jour (voir plus haut).
 
 ## Arborescence
 
