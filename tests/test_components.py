@@ -200,6 +200,7 @@ def test_group_one_row_per_component():
     # composant retiré de la liste : ses avis restent visibles
     gone = comp.group(notices, comps[1:])
     assert gone[0]["mpn"] == "LM317T" and not gone[0]["tracked"] and gone[0]["ref"] == ""
+    assert not gone[0]["critical"]  # un composant retiré n'est plus une alerte (comme summary / rappel)
     # ancre : stable, sûre, distincte
     keys = {r["key"] for r in rows}
     assert {comp.anchor(k) for k in keys} == {r["anchor"] for r in rows} and len({r["anchor"] for r in rows}) == 3
@@ -503,16 +504,36 @@ def test_chapter(watch, tools):
     text = md.read_text()
     assert text.count(service.CHAPTER_MARK) == 1 and text.startswith("# Rapport\n\nTexte.")
     assert text.index("Nouvelles fins de vie") < text.index("Autres nouveaux avis")
-    (v.dir / "rapports" / f"{comp.today()}-veille.pdf").write_bytes(b"%PDF")  # exécution réussie
-    # le lendemain : plus rien de nouveau, mais le rappel des fins de vie reste
+    (v.dir / "rapports" / "2026-10-12-veille.pdf").write_bytes(b"%PDF")  # exécution réussie
+    # la semaine suivante (rapport horodaté, comme le produit le prompt) : plus rien de nouveau,
+    # mais le rappel des fins de vie reste
+    md2 = v.dir / "rapports" / "2026-10-19-06h30-veille.md"
+    md2.write_text("# Rapport\n")
+    assert service.components_chapter(watch.slug, v.slug, md2) == ""
+    assert "Aucun nouvel avis" in md2.read_text() and "Rappel" in md2.read_text()
+
+
+def test_chapter_delivery_day_is_the_report_day(watch, tools):
+    """Une exécution commencée avant minuit (rapport 23h55) dont le chapitre est ajouté après minuit
+    reste rattachée à son rapport : pas de double envoi au run suivant."""
     import veille_core.components as c_mod
+    v = service.create_veille(name="Veille Indus", subject="s", schedule_expr="30 6 * * 1",
+                              recipients=["a@example.org"], brief="# b\n", include_components=watch.slug)
+    finalize(watch, [cand(["NE555P"], ntype="PCN", url="https://a.org/p")])
+    rdir = v.dir / "rapports"
+    md = rdir / "2099-01-04-23h55-veille.md"
+    md.write_text("# r\n")
     orig = c_mod.today
     try:
-        c_mod.today = lambda: "2099-01-01"
-        assert service.components_chapter(watch.slug, v.slug, md) == ""
+        c_mod.today = lambda: "2099-01-05"  # la commande tourne après minuit
+        service.components_chapter(watch.slug, v.slug, md)
     finally:
         c_mod.today = orig
-    assert "Aucun nouvel avis" in md.read_text() and "Rappel" in md.read_text()
+    assert {n["delivered"][c_mod.chapter_channel(v.slug)] for n in comp.load_notices(watch.slug)} == {"2099-01-04"}
+    (rdir / "2099-01-04-23h55-veille.pdf").write_bytes(b"%PDF")  # l'exécution a abouti
+    md2 = rdir / "2099-01-11-23h55-veille.md"
+    md2.write_text("# r\n")
+    assert service.components_chapter(watch.slug, v.slug, md2) == "" and "Aucun nouvel avis" in md2.read_text()
 
 
 def test_chapter_path_validation(watch, tmp_path):
@@ -659,7 +680,8 @@ def test_ui_components_list_filters_and_detail(ui, watch):
     assert 'id="fins-de-vie"' not in t and 'id="avis"' not in t  # 3 blocs fusionnés en une liste
     rows = _rows_html(t)
     assert len(rows) == 3 and rows[0] == '<tr class="comp crit"'  # LM317T (dernière commande) en tête
-    assert t.count('<tr class="detail"') == 3 and 'data-types="NRND PCN"' in t  # 2 avis -> 1 ligne
+    assert 'data-types="NRND PCN"' in t  # 2 avis -> 1 ligne
+    assert '<tr class="detail"' not in t and "hx-get" not in t  # détail créé et chargé au clic (app.js)
     assert 'id="comp-search"' in t and t.count("data-col=") == 5 and "data-types aria-label" in t
     assert 'href="https://st.com/nrnd/1" target="_blank" rel="noopener noreferrer"' in t  # lien du pire avis
     assert "1 en fin de vie ou dernière commande" in t
@@ -667,7 +689,7 @@ def test_ui_components_list_filters_and_detail(ui, watch):
     assert "style=" not in t and not re.search(r"\son[a-z]+=", t)
     assert all("src=" in tag for tag in re.findall(r"<script[^>]*>", t))
     # détail au clic (htmx) : avis complets, échappés
-    anchors = dict(re.findall(r'hx-get="/veilles/[^/]+/components/(c-[0-9a-f]{10})"[^>]*><strong>([^<]+)<', t))
+    anchors = dict(re.findall(r'data-detail="/veilles/[^/]+/components/(c-[0-9a-f]{10})".*?<strong>([^<]+)<', t, re.S))
     assert set(anchors.values()) == {"LM317T", "STM32F103C8T6", "NE555P"}
     by_mpn = {m: a for a, m in anchors.items()}
     d = client.get(f"/veilles/{watch.slug}/components/{by_mpn['STM32F103C8T6']}")
@@ -711,10 +733,20 @@ def test_ui_lists_every_component_without_cap(ui, watch):
 
 def test_ui_removed_component_keeps_its_notices(ui, watch):
     client, _ = ui
-    finalize(watch, [cand(["NE555P"], ntype="PCN", url="https://a.org/p")])
+    finalize(watch, [cand(["NE555P"], url="https://a.org/eol")])
     service.remove_components(watch.slug, ["NE555P"])
     t = client.get(f"/veilles/{watch.slug}").text
     assert len(_rows_html(t)) == 3 and "(retiré)" in t
+    assert '<tr class="comp crit"' not in t and "en fin de vie ou dernière commande" not in t  # plus une alerte
+    d = client.get(f"/veilles/{watch.slug}/components/{comp.anchor(comp.key_of('NE555P', 'Texas Instruments'))}")
+    assert d.status_code == 200 and "retiré de la liste suivie" in d.text and "https://a.org/eol" in d.text
+
+
+def test_ui_empty_component_list(ui, watch):
+    client, _ = ui
+    service.remove_components(watch.slug, ["LM317T", "STM32F103C8T6", "NE555P"])
+    t = client.get(f"/veilles/{watch.slug}").text
+    assert "Aucun composant suivi" in t and not _rows_html(t) and "0 / 0" in t
 
 
 def test_ui_create_and_edit_components(ui):

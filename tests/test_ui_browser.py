@@ -42,28 +42,40 @@ def page(watch, monkeypatch):  # noqa: F811
     deadline = time.monotonic() + 10
     while not server.started and time.monotonic() < deadline:
         time.sleep(0.05)
-    with playwright.sync_playwright() as p:
-        try:
-            browser = p.chromium.launch(executable_path=_chromium())
-        except Exception as exc:  # noqa: BLE001 - navigateur absent : test sauté
-            pytest.skip(f"Chromium indisponible : {exc}")
-        pg = browser.new_page(viewport={"width": 390, "height": 844})  # PWA mobile
-        errors = []
-        pg.on("pageerror", lambda e: errors.append(str(e)))
-        pg.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
-        base = f"http://localhost:{port}"
-        pg.goto(base + "/login")
-        pg.fill("input[name=password]", PASSWORD)
-        pg.click("button")
-        pg.goto(f"{base}/veilles/{watch.slug}")
-        yield pg
-        assert errors == []  # aucune erreur JS ni violation CSP
-        browser.close()
-    server.should_exit = True
+    try:
+        assert server.started, "serveur de test non démarré"
+        with playwright.sync_playwright() as p:
+            try:
+                browser = p.chromium.launch(executable_path=_chromium())
+            except Exception as exc:  # noqa: BLE001 - navigateur absent : test sauté
+                pytest.skip(f"Chromium indisponible : {exc}")
+            try:
+                pg = browser.new_page(viewport={"width": 390, "height": 844})  # PWA mobile
+                errors = []
+                pg.on("pageerror", lambda e: errors.append(str(e)))
+                pg.on("console", lambda m: errors.append(m.text) if m.type == "error" and not m.text.startswith(
+                    "Failed to load resource") else None)  # échec réseau simulé : attendu
+                base = f"http://localhost:{port}"
+                pg.goto(base + "/login")
+                pg.fill("input[name=password]", PASSWORD)
+                pg.click("button")
+                pg.goto(f"{base}/veilles/{watch.slug}")
+                yield pg
+                assert errors == []  # aucune erreur JS ni violation CSP
+            finally:
+                browser.close()
+    finally:
+        server.should_exit = True
 
 
-def _visible(pg) -> list[str]:
-    return pg.eval_on_selector_all("tr.comp:not([hidden]) .comp-toggle strong", "els => els.map(e => e.textContent)")
+def _visible(pg, expected: list[str] | None = None) -> list[str]:
+    """MPN des lignes affichées ; avec `expected`, attend que le filtrage (différé de 120 ms) l'atteigne."""
+    def names():
+        return pg.eval_on_selector_all("tr.comp:not([hidden]) .comp-toggle strong", "els => els.map(e => e.textContent)")
+    deadline = time.monotonic() + 3
+    while expected is not None and names() != expected and time.monotonic() < deadline:
+        pg.wait_for_timeout(50)
+    return names()
 
 
 @pytest.fixture
@@ -76,26 +88,26 @@ def data(watch, tools):  # noqa: F811
 
 def test_search_column_filters_and_detail(data, page):
     pg = page
-    assert _visible(pg) == ["LM317T", "STM32F103C8T6", "NE555P"] and pg.text_content("#comp-count") == "3 / 3"
+    assert _visible(pg, ["LM317T", "STM32F103C8T6", "NE555P"]) == ["LM317T", "STM32F103C8T6", "NE555P"] and pg.text_content("#comp-count") == "3 / 3"
     # recherche plein texte, temps réel, sans casse ni accents, sur le contenu des avis
     pg.fill("#comp-search", "boitier to-220")
-    assert _visible(pg) == ["STM32F103C8T6"] and pg.text_content("#comp-count") == "1 / 3"
+    assert _visible(pg, ["STM32F103C8T6"]) == ["STM32F103C8T6"] and pg.text_content("#comp-count") == "1 / 3"
     pg.fill("#comp-search", "texas ltb")  # code du type d'avis, pas seulement son libellé
-    assert _visible(pg) == ["LM317T"]
+    assert _visible(pg, ["LM317T"]) == ["LM317T"]
     pg.fill("#comp-search", "introuvable")
-    assert _visible(pg) == [] and pg.is_visible("#comp-empty")
+    assert _visible(pg, []) == [] and pg.is_visible("#comp-empty")
     pg.fill("#comp-search", "")
     # filtre de type
     pg.select_option("select[data-types]", "critical")
-    assert _visible(pg) == ["LM317T"]
+    assert _visible(pg, ["LM317T"]) == ["LM317T"]
     pg.select_option("select[data-types]", "none")
-    assert _visible(pg) == ["NE555P"]
+    assert _visible(pg, ["NE555P"]) == ["NE555P"]
     pg.select_option("select[data-types]", "PCN")
-    assert _visible(pg) == ["STM32F103C8T6"]
+    assert _visible(pg, ["STM32F103C8T6"]) == ["STM32F103C8T6"]
     pg.select_option("select[data-types]", "")
     # filtre de colonne (Composant)
     pg.fill("input[data-col='0']", "ne5")
-    assert _visible(pg) == ["NE555P"]
+    assert _visible(pg, ["NE555P"]) == ["NE555P"]
     pg.fill("input[data-col='0']", "")
     # détail : clic sur la ligne, chargé une fois, replié au second clic
     row = pg.locator("tr.comp", has_text="STM32F103C8T6")
@@ -108,6 +120,39 @@ def test_search_column_filters_and_detail(data, page):
     # un détail ouvert suit le filtrage de sa ligne
     row.locator(".comp-toggle").click()
     pg.fill("#comp-search", "lm317")
-    assert pg.locator("tr.detail:not([hidden])").count() == 0
+    assert _visible(pg, ["LM317T"]) == ["LM317T"] and pg.locator("tr.detail:not([hidden])").count() == 0
     pg.fill("#comp-search", "")
+    assert len(_visible(pg, ["LM317T", "STM32F103C8T6", "NE555P"])) == 3
     assert pg.locator("tr.detail:not([hidden])").count() == 1
+    assert pg.locator("tr.detail").count() == 1  # une seule ligne de détail créée, réutilisée
+
+
+@pytest.fixture
+def two_rows_max(monkeypatch):
+    from veille_ui import app as app_mod
+    monkeypatch.setitem(app_mod.templates.env.globals, "COMP_ROWS_SHOWN", 2)
+
+
+def test_rows_capped_then_show_all(data, two_rows_max, page):
+    """Mise en page légère : au plus COMP_ROWS_SHOWN lignes, « tout afficher » sur demande."""
+    pg = page
+    assert _visible(pg, ["LM317T", "STM32F103C8T6"]) == ["LM317T", "STM32F103C8T6"]
+    assert pg.text_content("#comp-count") == "3 / 3" and "1 autre(s)" in pg.text_content("#comp-more")
+    pg.fill("#comp-search", "ne555")  # la recherche porte sur toute la liste, pas seulement l'affichée
+    assert _visible(pg, ["NE555P"]) == ["NE555P"] and not pg.is_visible("#comp-more")
+    pg.fill("#comp-search", "")
+    assert _visible(pg, ["LM317T", "STM32F103C8T6"]) == ["LM317T", "STM32F103C8T6"]
+    pg.click("#comp-more button")
+    assert _visible(pg, ["LM317T", "STM32F103C8T6", "NE555P"]) == ["LM317T", "STM32F103C8T6", "NE555P"]
+
+
+def test_detail_network_failure_can_be_retried(data, page):
+    pg = page
+    pg.route("**/components/c-*", lambda route: route.abort())  # hors ligne
+    row = pg.locator("tr.comp", has_text="STM32F103C8T6")
+    row.locator(".comp-toggle").click()
+    pg.get_by_text("Détail indisponible").wait_for()
+    pg.unroute("**/components/c-*")
+    row.locator(".comp-toggle").click()  # replier
+    row.locator(".comp-toggle").click()  # rouvrir : nouvel essai
+    pg.get_by_text("Nouveau site d'assemblage").wait_for()

@@ -35,7 +35,8 @@ from . import auth
 
 HERE = Path(__file__).resolve().parent
 ACTOR = "ui"
-ANCHOR_RE = re.compile(r"^c-[0-9a-f]{10}$")  # identifiant d'un composant (components.anchor)
+ANCHOR_RE = re.compile(r"c-[0-9a-f]{10}")  # identifiant d'un composant (components.anchor), fullmatch
+COMP_ROWS_SHOWN = 200  # liste des composants : lignes affichées avant « tout afficher » (mobile)
 USER_ERRORS = (StoreError, schedule.ScheduleError, service.ServiceError, hermes.HermesError)
 
 # Messages affichés après redirection : codes en liste blanche (aucun texte réfléchi).
@@ -112,6 +113,7 @@ templates.env.globals["DAYS"] = schedule.DAYS
 templates.env.globals["NOTICE_TYPES"] = components.TYPES
 templates.env.globals["CRITICAL"] = components.CRITICAL
 templates.env.globals["badge_class"] = components.badge_class
+templates.env.globals["COMP_ROWS_SHOWN"] = COMP_ROWS_SHOWN
 templates.env.globals["FIELDS"] = bom_import.FIELDS
 templates.env.globals["LABELS"] = bom_import.LABELS
 templates.env.globals["column_name"] = bom_import.column_name
@@ -351,7 +353,7 @@ def create_app() -> FastAPI:
     def component_detail(request: Request, slug: str, anchor: str):
         """Détail d'un composant, chargé au clic dans la liste (htmx)."""
         try:
-            if not ANCHOR_RE.match(anchor) or store.load(slug).kind != "composants":
+            if not ANCHOR_RE.fullmatch(anchor) or store.load(slug).kind != "composants":
                 raise StoreError("introuvable")
             row = next((r for r in component_rows(slug) if r["anchor"] == anchor), None)
         except components.ComponentsError as exc:

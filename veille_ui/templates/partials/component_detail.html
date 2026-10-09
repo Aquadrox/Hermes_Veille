@@ -13,8 +13,9 @@
     <li{% if n.type in CRITICAL %} class="crit"{% endif %}>{{ badge(n.type) }} <strong>{{ n.title }}</strong>
       {% if n.number %}<span class="muted small">({{ n.number }})</span>{% endif %}
       {% if n.scope == "gamme" %}<span class="muted small">· gamme</span>{% endif %}
-      <div class="small muted">Publié {{ n.published or "—" }} · dernière cde <strong>{{ n.ltb_date or "—" }}</strong>
-        {% if n.eol_date %}· fin de vie {{ n.eol_date }} {% endif %}· détecté {{ n.found_at }}</div>
+      <div class="small muted">Publié {{ n.published or "—" }}
+        {% if n.ltb_date %}· dernière cde <strong>{{ n.ltb_date }}</strong> {% endif %}
+        {% if n.eol_date %}· fin de vie <strong>{{ n.eol_date }}</strong> {% endif %}· détecté {{ n.found_at }}</div>
       {% if n.summary %}<div class="small">{{ n.summary }}</div>{% endif %}
       <div class="small">Sources : {% for s in n.sources %}{{ source_link(s) }}{{ " · " if not loop.last }}{% endfor %}</div>
     </li>

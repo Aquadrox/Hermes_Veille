@@ -115,3 +115,7 @@ def test_report_date_reads_optional_time(tmp_path):
     problem, detail = watchdog.check_report({"dir": str(vol / "veilles" / "demo")}, 192, 20000,
                                             dt.datetime.now() + dt.timedelta(days=1))
     assert problem is None and f"{day}-23h59-veille.pdf" in detail
+    (rdir / f"{day}-veille.pdf").write_bytes(b"x" * 10)  # ancien nom le même jour (jour de la mise à jour)
+    problem, detail = watchdog.check_report({"dir": str(vol / "veilles" / "demo")}, 192, 20000,
+                                            dt.datetime.now() + dt.timedelta(days=1))
+    assert problem is None and f"{day}-23h59-veille.pdf" in detail

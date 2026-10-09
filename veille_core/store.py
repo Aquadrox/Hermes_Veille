@@ -28,7 +28,7 @@ from . import paths
 SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$")
 EMAIL_RE = re.compile(r"^[^@\s,;<>\"]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 # Horodatage AAAA-MM-JJ-HHhMM (sans « : », interdit sur Windows / FAT) ; l'ancien nom au jour reste lu.
-REPORT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:-(\d{2})h(\d{2}))?-veille\.(pdf|md)$")
+REPORT_RE = re.compile(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})(?:-([0-9]{2})h([0-9]{2}))?-veille\.(pdf|md)\Z")
 RUN_LOG_RE = re.compile(r"^\d{8}-\d{6}\.log$")
 KINDS = ("veille", "composants")
 

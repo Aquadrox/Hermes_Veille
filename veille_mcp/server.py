@@ -157,7 +157,7 @@ def get_veille(slug: str) -> dict:
         "pdf": {"title": v.pdf.title, "header": v.pdf.header, "footer": v.pdf.footer,
                 "audience": v.pdf.audience, "accent": v.pdf.accent},
         "alert_after_days": round(v.max_age_hours / 24, 1),
-        "reports": [r["date"] for r in store.list_reports(slug)[:5]],
+        "reports": [r["stamp"] for r in store.list_reports(slug)[:5]],
     }
 
 
@@ -179,7 +179,7 @@ def list_reports(slug: str, limit: int = 10) -> list[dict]:
     _guard(store.load, slug)
     out = []
     for r in store.list_reports(slug)[: max(1, min(limit, 100))]:
-        item = {"date": r["date"], "time": r["time"], "pdf": r.get("pdf"), "markdown": r.get("md"), "size_kb": round((r.get("size") or 0) / 1024)}
+        item = {"date": r["date"], "time": r["time"], "stamp": r["stamp"], "pdf": r.get("pdf"), "markdown": r.get("md"), "size_kb": round((r.get("size") or 0) / 1024)}
         if r.get("pdf"):
             item["pdf_host_path"] = _host_path(store.report_path(slug, r["pdf"]))
         out.append(item)
@@ -187,20 +187,20 @@ def list_reports(slug: str, limit: int = 10) -> list[dict]:
 
 
 def read_report(slug: str, date: str | None = None, max_chars: int = MAX_TEXT) -> dict:
-    """Contenu Markdown d'un rapport (le plus récent si `date` est omise, format AAAA-MM-JJ ; le plus
-    récent de ce jour s'il y en a plusieurs) : pour le résumer, en extraire des points ou répondre à
-    une question sur la veille."""
+    """Contenu Markdown d'un rapport (le plus récent si `date` est omise) : pour le résumer, en extraire
+    des points ou répondre à une question sur la veille. `date` : AAAA-MM-JJ (le plus récent de ce
+    jour) ou horodatage exact AAAA-MM-JJ-HHhMM (champ `stamp` de list_reports)."""
     _guard(store.load, slug)
     reports = store.list_reports(slug)
     if date:
-        reports = [r for r in reports if r["date"] == date]
+        reports = [r for r in reports if date in (r["date"], r["stamp"])]
     report = next((r for r in reports if r.get("md")), None)
     if report is None:
         raise ToolError("aucun rapport Markdown " + (f"daté du {date}" if date else "pour cette veille"))
     text = store.report_path(slug, report["md"]).read_text(encoding="utf-8", errors="replace")
     limit = max(1000, min(max_chars, 100_000))
     pdf = report.get("pdf")
-    return {"date": report["date"], "time": report["time"], "truncated": len(text) > limit, "markdown": text[:limit],
+    return {"date": report["date"], "time": report["time"], "stamp": report["stamp"], "truncated": len(text) > limit, "markdown": text[:limit],
             "pdf_host_path": _host_path(store.report_path(slug, pdf)) if pdf else None}
 
 

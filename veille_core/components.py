@@ -444,7 +444,8 @@ def group(notices: list[dict], components: list[dict], include_quiet: bool = Fal
     l'échéance et le lien de son avis le plus critique.
 
     `include_quiet` ajoute les composants suivis sans avis ; les avis d'un composant retiré de la
-    liste restent affichés (`tracked` faux). Tri : critiques, puis criticité, échéance, MPN.
+    liste restent affichés (`tracked` faux) mais ne sont plus une alerte (`critical` faux, comme dans
+    `summary` et le rappel). Tri : critiques, puis criticité, échéance, MPN.
     """
     by_key = {key_of(c["mpn"], c["manufacturer"]): c for c in components}
     buckets: dict[str, list[dict]] = {k: [] for k in by_key} if include_quiet else {}
@@ -463,7 +464,7 @@ def group(notices: list[dict], components: list[dict], include_quiet: bool = Fal
             "mpn": c.get("mpn") or worst["mpn"], "manufacturer": c.get("manufacturer") or worst["manufacturer"],
             "ref": c.get("ref") or "", "web_checked_at": c.get("web_checked_at"), "notices": ns, "worst": worst, "link": link,
             "types": list(dict.fromkeys(n["type"] for n in ns)),
-            "critical": any(n["type"] in CRITICAL for n in ns),
+            "critical": bool(c) and any(n["type"] in CRITICAL for n in ns),
             "deadline": next((d for n in ns if (d := n.get("ltb_date") or n.get("eol_date"))), ""),
             "found": max((n["found_at"] for n in ns), default=""),
         })
@@ -522,14 +523,11 @@ def _md_sources(n: dict) -> str:
     return " · ".join(f"[{md_escape(s['label'])}]({_md_url(s['url'])})" for s in n["sources"])
 
 
-def _sections(view: dict, reminder_limit: int) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
-    """Lignes par composant communes au PDF et à l'e-mail : (nouveaux critiques, autres nouveaux,
-    rappel, détail). Le détail couvre chaque avis affiché, une seule fois."""
-    comps, new = view["comps"], view["new_critical"] + view["new_other"]
-    rows = group(new, comps)
-    reminder = group(view["reminder"][:reminder_limit], comps)
-    shown = list({id(n): n for n in new + view["reminder"][:reminder_limit]}.values())
-    return [r for r in rows if r["critical"]], [r for r in rows if not r["critical"]], reminder, group(shown, comps)
+def _sections(view: dict, reminder_limit: int) -> tuple[list[dict], list[dict], list[dict]]:
+    """Lignes par composant communes au PDF et à l'e-mail : (nouveaux critiques, autres nouveaux, rappel)."""
+    rows = group(view["new_critical"] + view["new_other"], view["comps"])
+    return ([r for r in rows if r["critical"]], [r for r in rows if not r["critical"]],
+            group(view["reminder"][:reminder_limit], view["comps"]))
 
 
 def _md_badges(types: list[str]) -> str:
@@ -575,7 +573,10 @@ def to_markdown(view: dict, heading: str = "##", reminder_limit: int = 200) -> s
     compacts par composant, puis le détail de chacun (cible des liens du tableau)."""
     h, sub = heading, heading + "#"
     crit, other, rem = view["new_critical"], view["new_other"], view["reminder"]
-    crit_rows, other_rows, rem_rows, detail_rows = _sections(view, reminder_limit)
+    crit_rows, other_rows, rem_rows = _sections(view, reminder_limit)
+    # détail : chaque avis affiché (nouveautés et rappel), une seule fois
+    shown = {id(n): n for n in crit + other + rem[:reminder_limit]}
+    detail_rows = group(list(shown.values()), view["comps"])
     lines = [f"{h} Composants — PCN & fins de vie", "",
              "::: {.keyfigures}",
              "::: {.fig}", f"**{len(crit)}**", "", "nouvelle(s) fin(s) de vie / dernière(s) commande(s)", ":::",
@@ -638,7 +639,7 @@ def to_html_email(view: dict, title: str, ui_hint: str = "") -> str:
         return (f'<table style="border-collapse:collapse;width:100%;font-size:13px">'
                 f"<tr>{head}</tr>{''.join(body)}</table>")
 
-    crit_rows, other_rows, rem_rows, _ = _sections(view, 200)
+    crit_rows, other_rows, rem_rows = _sections(view, 200)
     rem = view["reminder"]
     parts = ['<div style="font-family:Arial,sans-serif;color:#1f2933;max-width:900px">',
              f"<h2 style=\"margin:0 0 12px\">{esc(title)}</h2>"]
@@ -659,7 +660,7 @@ def to_html_email(view: dict, title: str, ui_hint: str = "") -> str:
 
 
 def to_text_email(view: dict) -> str:
-    crit_rows, other_rows, _, _ = _sections(view, 0)
+    crit_rows, other_rows, _ = _sections(view, 0)
     lines = []
     for label, rows in (("NOUVELLES FINS DE VIE / DERNIÈRES COMMANDES", crit_rows),
                         ("AUTRES NOUVEAUX AVIS", other_rows)):

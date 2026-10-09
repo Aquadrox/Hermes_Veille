@@ -22,9 +22,15 @@ Veille composants lisible avec beaucoup de références, sur PC comme sur mobile
   - **Filtre par colonne** (composant, fabricant, réf., type d'avis — dont « fin de vie / dernière
     cde », « avec avis », « sans avis » —, échéance, date de détection) et compteur « N / M ».
   - **Clic sur un composant** : le détail se déplie sous la ligne (avis complets, sources, statut et
-    fiche Digi-Key, dates de vérification), chargé à la demande pour rester léger avec des milliers
-    de références. Plus de plafond à 100 avis affichés.
-  - Mobile (PWA) : plus de « tuile » par avis ; lignes compactes, colonnes secondaires dans le détail.
+    fiche Digi-Key, dates de vérification), chargé à la demande ; un échec réseau se réessaie en
+    rouvrant la ligne.
+  - La recherche porte sur **toute** la liste (plus de plafond à 100 avis) ; 200 lignes au plus sont
+    affichées à la fois (« tout afficher » sur demande) pour rester fluide sur mobile avec des
+    milliers de références.
+  - Mobile (PWA) : plus de « tuile » par avis ; lignes compactes sur deux niveaux (MPN · lien /
+    badges · échéance), sans défilement horizontal, colonnes secondaires dans le détail.
+  - Un composant retiré de la liste garde ses avis visibles (« retiré ») mais n'est plus compté ni
+    affiché comme alerte de fin de vie (comme dans le tableau de bord et le rappel).
   - Filtrage dans `static/app.js` : aucune règle CSP assouplie, aucun script ni style en ligne.
 - **PDF et chapitre composants** : un tableau compact **par composant** (types en badges colorés,
   échéance, lien), puis une section « Détail par composant » ; le MPN du tableau est un lien vers
@@ -35,9 +41,18 @@ Veille composants lisible avec beaucoup de références, sur PC comme sur mobile
   remplace plus le rapport précédent. Les anciens noms restent lus partout (interface, MCP, CLI,
   chien de garde). Veilles thématiques : le prompt fait calculer l'horodatage une seule fois par
   l'agent (`date +%Y-%m-%d-%Hh%M`) puis le réutiliser.
-- MCP : `list_reports` et `read_report` renvoient aussi l'heure (`time`) ; `read_report(date)` lit
-  le plus récent du jour.
+- MCP : `list_reports` et `read_report` renvoient aussi l'heure (`time`) et l'horodatage (`stamp`) ;
+  `read_report(date)` accepte un jour (le plus récent de ce jour) ou un horodatage exact ;
+  `get_veille` liste les horodatages des derniers rapports.
 - Chien de garde : l'heure du nom départage les rapports d'un même jour.
+
+### Corrigé
+
+- PDF composants : une longue liste n'est plus reportée en bloc à la page suivante (page 1 à moitié
+  vide, cadre vide en page 2) ; le tableau se coupe entre deux lignes, en-tête répété.
+- Chapitre composants : le jour de livraison est celui du **nom du rapport** et non l'heure de la
+  commande ; une exécution commencée avant minuit n'est plus prise pour un échec (avis renvoyés en
+  double la fois suivante). Le message d'erreur indique le nom de rapport attendu.
 
 ## [0.3.1] — 2026-10-09
 

@@ -1,5 +1,5 @@
 {# Veille composants : une ligne par composant, filtrable (recherche + filtre par colonne, app.js),
-   détail chargé au clic (htmx). Fins de vie en tête et en rouge. #}
+   détail chargé au clic (app.js). Fins de vie en tête et en rouge. #}
 {% from "partials/macros.html" import badge, source_link %}
 <section class="card" id="composants">
   <div class="head">
@@ -12,7 +12,7 @@
     <span class="small muted" id="comp-count" aria-live="polite">{{ comp_rows|length }} / {{ comp_rows|length }}</span>
   </div>
   <div class="table-wrap">
-  <table class="comps" id="comp-table">
+  <table class="comps" id="comp-table" data-limit="{{ COMP_ROWS_SHOWN }}">
     <thead>
       <tr><th>Composant</th><th class="opt">Fabricant</th><th class="opt">Réf.</th><th>Avis</th><th>Échéance</th><th class="opt">Détecté</th><th>Lien</th></tr>
       <tr class="filters">
@@ -33,10 +33,11 @@
     </thead>
     <tbody>
     {% for r in comp_rows %}
-      <tr class="comp{% if r.critical %} crit{% endif %}" data-types="{{ r.types|join(' ') }}"
+      {# au-delà de la limite : masquées dès le rendu (mise en page légère), app.js gère ensuite #}
+      <tr class="comp{% if r.critical %} crit{% endif %}"{% if loop.index > COMP_ROWS_SHOWN %} hidden{% endif %}
+          data-types="{{ r.types|join(' ') }}" data-detail="/veilles/{{ v.slug }}/components/{{ r.anchor }}"
           data-q="{{ r.ref }} {{ r.dk.status or '' }}{% for n in r.notices %} {{ NOTICE_TYPES[n.type][0] }} {{ n.title }} {{ n.number }} {{ n.summary }}{% endfor %}">
-        <td class="c-mpn"><button type="button" class="link comp-toggle" aria-expanded="false" aria-controls="d-{{ r.anchor }}"
-              hx-get="/veilles/{{ v.slug }}/components/{{ r.anchor }}" hx-target="#d-{{ r.anchor }}" hx-trigger="click once"><strong>{{ r.mpn }}</strong></button>{% if not r.tracked %} <span class="muted small">(retiré)</span>{% endif %}</td>
+        <td class="c-mpn"><button type="button" class="link comp-toggle" aria-expanded="false" aria-controls="d-{{ r.anchor }}"><strong>{{ r.mpn }}</strong></button>{% if not r.tracked %} <span class="muted small">(retiré)</span>{% endif %}</td>
         <td class="opt">{{ r.manufacturer }}</td>
         <td class="opt">{{ r.ref or "—" }}</td>
         <td class="c-types">{% for t in r.types %}{{ badge(t) }} {% else %}<span class="muted">—</span>{% endfor %}</td>
@@ -44,12 +45,14 @@
         <td class="opt nowrap">{{ r.found or "—" }}</td>
         <td class="c-link">{% if r.link %}{{ source_link(r.link) }}{% else %}—{% endif %}</td>
       </tr>
-      <tr class="detail" hidden><td id="d-{{ r.anchor }}" colspan="7"><span class="muted small">Chargement…</span></td></tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">Aucun composant suivi : <a href="/veilles/{{ v.slug }}/edit">ajouter ou importer une liste</a>.</td></tr>
     {% endfor %}
     </tbody>
   </table>
   </div>
   <p class="muted" id="comp-empty" hidden>Aucun composant ne correspond aux filtres.</p>
+  <p class="small muted" id="comp-more"{% if comp_rows|length <= COMP_ROWS_SHOWN %} hidden{% endif %}><span>{{ comp_rows|length - COMP_ROWS_SHOWN }} autre(s) composant(s) correspondent : affine la recherche ou </span><button type="button" class="link">tout afficher</button>.</p>
   {% if not digikey_configured %}
   <p class="flash">Statut Digi-Key non vérifié : <a href="/sources">configurer les clés Digi-Key</a>
     pour contrôler chaque semaine le cycle de vie de toutes les références (recommandé).</p>
