@@ -140,7 +140,11 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h \
     M=/tmp/h/veilles/smoke-veille/rapports/$D-veille.md; echo "# Rapport" > "$M"
     veillectl components chapter smoke-composants --for smoke-veille --append "$M" | grep -q "PREFIXE_SUJET=\[EOL"
     grep -q "Nouvelles fins de vie" "$M"
-    echo "  veille composants : OK (PDF $size octets)"
+    # Import d'\''une nomenclature Excel (openpyxl + defusedxml dans le venv de l'\''application)
+    /opt/veille-app/.venv/bin/python -c "import defusedxml; from openpyxl import Workbook; wb = Workbook(); ws = wb.active; ws.append([\"Fabricant\", \"Mfr. P/N\", \"Digi-Key Part Number\"]); ws.append([\"Yageo\", \"RC0603FR-0710KL\", \"311-ND\"]); wb.save(\"/tmp/h/bom.xlsx\")"
+    veillectl components import smoke-composants /tmp/h/bom.xlsx | grep -q "1 ajouté"
+    veillectl components list smoke-composants | grep -q "RC0603FR-0710KL"
+    echo "  veille composants : OK (PDF $size octets, import Excel)"
 ' || { fail "veille composants en échec"; exit 1; }
 ok "veille composants fonctionnelle"
 
@@ -178,8 +182,8 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h "$REF" -lc '
     $H config set mcp_servers.veilles.command veille-mcp >/dev/null
     $H config set mcp_servers.veilles.trust untrusted >/dev/null
     out=$(timeout 120 $H mcp test veilles 2>&1)
-    echo "$out" | grep -q "Tools discovered: 28" || { echo "$out"; exit 1; }
-    echo "  Hermes : connexion OK, 28 outils découverts"
+    echo "$out" | grep -q "Tools discovered: 30" || { echo "$out"; exit 1; }
+    echo "  Hermes : connexion OK, 30 outils découverts"
 ' || { fail "serveur MCP en échec"; exit 1; }
 ok "serveur MCP fonctionnel"
 

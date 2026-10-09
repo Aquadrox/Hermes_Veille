@@ -11,3 +11,6 @@ itsdangerous==2.2.0
 argon2-cffi==25.1.0
 markdown-it-py==4.2.0
 mcp==2.3.0
+# Import de nomenclatures Excel ; defusedxml : openpyxl l'utilise contre les attaques XML
+openpyxl==3.1.5
+defusedxml==0.7.1

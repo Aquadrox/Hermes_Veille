@@ -131,6 +131,8 @@ def test_compose_config_resolves_data_dir(tmp_path):
 def test_backup_next_to_data_without_secrets_and_rotated(repo, tmp_path):
     data = make_data(tmp_path / "srv" / "data")
     (data / "veilles" / ".credentials.json").write_text('{"values": {"DIGIKEY_CLIENT_SECRET": "x"}}')
+    (data / "imports").mkdir()
+    (data / "imports" / "bom.xlsx").write_bytes(b"nomenclature confidentielle")
     backups = tmp_path / "srv" / "backups"
     backups.mkdir()
     for i in range(3):  # anciennes archives, de la plus ancienne à la plus récente
@@ -148,6 +150,7 @@ def test_backup_next_to_data_without_secrets_and_rotated(repo, tmp_path):
     assert "./cron/jobs.json" in names
     assert "./.env" not in names and not any(n.startswith("./logs") for n in names)
     assert "./veilles/.credentials.json" not in names  # clés saisies dans l'interface : jamais archivées
+    assert not any(n.startswith("./imports") for n in names)  # nomenclatures déposées : transitoires
     kept = sorted(p.name for p in backups.iterdir())
     assert kept == sorted([archive.name, "veille-data-20260102-000000.tar.gz"])
 

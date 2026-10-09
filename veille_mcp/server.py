@@ -14,7 +14,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from veille_core import components, deepseek, hermes, paths, pricing, schedule, service, store, version
+from veille_core import bom_import, components, deepseek, hermes, paths, pricing, schedule, service, store, version
 from veille_core.store import StoreError
 
 USER_ERRORS = (StoreError, schedule.ScheduleError, service.ServiceError, hermes.HermesError)
@@ -25,6 +25,7 @@ DESTROY = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempoten
 
 Frequency = Literal["daily", "weekdays", "weekly", "monthly", "cron"]
 Kind = Literal["veille", "composants"]
+ImportMode = Literal["add", "replace"]
 NoticeType = Literal["EOL", "PDN", "OBSOLETE", "LTB", "NRND", "PCN", "AUTRE"]
 DAY_NAMES = {
     "dimanche": 0, "lundi": 1, "mardi": 2, "mercredi": 3, "jeudi": 4, "vendredi": 5, "samedi": 6,
@@ -51,6 +52,11 @@ Gestion des veilles technologiques automatisées (rapports PDF envoyés par e-ma
   sources) ; `list_components` l'état de chaque référence. Les FINS DE VIE sont l'information la
   plus critique : présente-les toujours en premier. `include_components` (sur une veille
   thématique) ajoute ces avis en chapitre de son e-mail.
+- IMPORT d'une nomenclature (CSV ou Excel) : dépose le fichier reçu dans le dossier d'import du
+  serveur (chemin donné par `preview_component_import` s'il est introuvable), appelle
+  `preview_component_import`, MONTRE la correspondance proposée (colonnes MPN / Fabricant /
+  Réf. interne, aperçu, lignes ignorées) et attends l'accord de l'utilisateur ou ses corrections
+  avant `import_components` (mode add par défaut ; replace remplace toute la liste).
 - Clés d'API des distributeurs (Digi-Key) : JAMAIS par la conversation. Elles se saisissent dans
   l'interface web, page « Sources » ; `health` indique seulement si elles sont configurées.
 - Coûts : `get_costs` donne les tokens et le coût en USD de chaque exécution. DeepSeek facture
@@ -268,6 +274,40 @@ def list_notices(slug: str | None = None, type: NoticeType | None = None, since:
              "found_at": n["found_at"]} for n in rows]
 
 
+def _import_proposal(filename: str, sheet: str | None, header_row: int | None, mpn_column: str | None,
+                     manufacturer_column: str | None, ref_column: str | None,
+                     default_manufacturer: str | None) -> dict:
+    try:
+        path = bom_import.import_path(filename)
+    except StoreError as exc:
+        where = _host_path(paths.imports_dir()) or str(paths.imports_dir())
+        raise ToolError(f"{exc} — dossier d'import sur le serveur : {where}") from None
+    columns = {f: v for f, v in (("mpn", mpn_column), ("manufacturer", manufacturer_column),
+                                 ("ref", ref_column)) if v is not None}
+    return _guard(lambda: bom_import.propose_options(bom_import.read_path(path, sheet), header_row, columns,
+                                                     default_manufacturer or ""))
+
+
+def preview_component_import(filename: str, sheet: str | None = None, header_row: int | None = None,
+                             mpn_column: str | None = None, manufacturer_column: str | None = None,
+                             ref_column: str | None = None, default_manufacturer: str | None = None) -> dict:
+    """Analyse une nomenclature (CSV ou Excel) déposée dans le dossier d'import et PROPOSE la
+    correspondance des colonnes (MPN, fabricant, réf. interne), reconnue par règles, sans rien
+    enregistrer : feuilles, en-têtes, colonnes retenues et leur confiance, aperçu, lignes ignorées.
+    `header_row` : 0 = pas d'en-tête, n = ligne n (omis = détection) ; colonnes : libellé, lettre ou
+    numéro, pour corriger la proposition."""
+    p = _import_proposal(filename, sheet, header_row, mpn_column, manufacturer_column, ref_column,
+                         default_manufacturer)
+    return {"filename": filename, "sheets": p["sheets"], "sheet": p["sheet"],
+            "header_row": p["header_row"] + 1 if p["header_row"] is not None else 0,
+            "columns": [f"{bom_import.column_name(i)} : {c}" for i, c in enumerate(p["columns"])],
+            "mapping": {f: {"column": (f"{bom_import.column_name(m['col'])} : {p['columns'][m['col']]}"
+                                       if m["col"] is not None else None), "confidence": m["confidence"]}
+                        for f, m in p["mapping"].items()},
+            "error": p["error"], "valid": len(p["components"]), "data_rows": p["rows"],
+            "preview": p["preview"], "rejected": p["rejected"][:20], "rejected_count": len(p["rejected"])}
+
+
 def _cost_run(r: dict) -> dict:
     return {"date": _iso(r["started_at"]), "duration_min": r["duration_min"], "models": r["models"],
             "input_tokens": r["input_tokens"] + r["cache_read_tokens"],
@@ -432,6 +472,22 @@ def remove_components(slug: str, mpns: list[str]) -> dict:
     return {"slug": slug, "removed": removed, "total": len(components.load_components(slug)["components"])}
 
 
+def import_components(slug: str, filename: str, mode: ImportMode = "add", sheet: str | None = None,
+                      header_row: int | None = None, mpn_column: str | None = None,
+                      manufacturer_column: str | None = None, ref_column: str | None = None,
+                      default_manufacturer: str | None = None) -> dict:
+    """Importe dans une veille composants la nomenclature du dossier d'import, avec la
+    correspondance validée par l'utilisateur (mêmes options que `preview_component_import`, à
+    appeler d'abord). `mode` : add (ajout, doublons ignorés) ou replace (la liste devient celle du
+    fichier ; l'historique des avis est conservé). Les lignes invalides sont ignorées."""
+    p = _import_proposal(filename, sheet, header_row, mpn_column, manufacturer_column, ref_column,
+                         default_manufacturer)
+    if p["error"]:
+        raise ToolError(p["error"])
+    st = _guard(service.import_components, slug, p["components"], mode, actor=_actor())
+    return {"slug": slug, **st, "ignored_rows": len(p["rejected"])}
+
+
 def pause_veille(slug: str) -> dict:
     """Met une veille en pause : elle n'est plus exécutée ni surveillée jusqu'à sa reprise."""
     _guard(service.pause, slug, actor=_actor())
@@ -481,10 +537,12 @@ def archive_veille(slug: str, confirm_slug: str) -> dict:
 
 
 READ_TOOLS = [list_veilles, get_veille, get_brief, list_brief_templates, list_reports, read_report,
-              get_run_log, run_history, preview_schedule, get_costs, health, list_components, list_notices]
+              get_run_log, run_history, preview_schedule, get_costs, health, list_components, list_notices,
+              preview_component_import]
 WRITE_TOOLS = [(create_veille, WRITE), (update_veille, WRITE), (set_recipients, WRITE),
                (add_recipients, WRITE), (remove_recipients, WRITE), (update_brief, WRITE),
                (edit_brief, WRITE), (add_components, WRITE), (remove_components, WRITE),
+               (import_components, DESTROY),  # mode replace : la liste existante est remplacée
                (pause_veille, WRITE), (resume_veille, WRITE),
                (check_component_statuses, WRITE), (run_veille_now, SEND), (send_test_email, SEND),
                (archive_veille, DESTROY)]

@@ -20,7 +20,9 @@ umask 077
 mkdir -p "$BACKUP_DIR"
 ARCHIVE="$BACKUP_DIR/veille-data-$(date +%Y%m%d-%H%M%S).tar.gz"
 # Secrets exclus : .env et clés saisies dans l'interface (à ressaisir après restauration).
-tar --exclude='./.env' --exclude='./veilles/.credentials.json' --exclude='./logs' -czf "$ARCHIVE" -C "$DATA" .
+# Nomenclatures déposées pour import : transitoires et souvent confidentielles, exclues aussi.
+tar --exclude='./.env' --exclude='./veilles/.credentials.json' --exclude='./imports' --exclude='./logs' \
+    -czf "$ARCHIVE" -C "$DATA" .
 find "$BACKUP_DIR" -maxdepth 1 -name 'veille-data-*.tar.gz' -printf '%T@ %p\n' \
     | sort -rn | tail -n +"$((KEEP + 1))" | cut -d' ' -f2- | xargs -r -d '\n' rm -f --
 echo "$ARCHIVE"

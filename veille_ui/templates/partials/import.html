@@ -1,0 +1,61 @@
+{# Proposition d'import (fichier CSV ou Excel) : correspondance modifiable, aperçu, décomptes.
+   Toute modification réanalyse le fichier conservé côté serveur (jeton lié à la session).
+   Chaque contrôle porte sa requête (hérite hx-params / hx-target du panneau) ; feuille et ligne
+   d'en-tête signalent leur changement (import_changed) pour relancer la détection. #}
+{% macro refresh() %}hx-post="/fragments/import/preview" hx-trigger="change"{% endmacro %}
+<div id="import-panel" class="import-panel"
+     hx-params="import_token,import_sheet,import_header,import_mpn,import_manufacturer,import_ref,import_default_mfr,import_mode,import_changed"
+     hx-target="#import-panel" hx-swap="outerHTML">
+  {% if error %}<p class="flash err">{{ error }}</p>{% endif %}
+  {% if p %}
+  <input type="hidden" name="import_token" value="{{ token }}">
+  <p class="small"><strong>{{ filename }}</strong>{% if p.sheet %} · feuille « {{ p.sheet }} »{% endif %} ·
+    {{ p.rows }} ligne{{ 's' if p.rows > 1 }} de données. Vérifie la correspondance proposée, corrige-la si besoin.</p>
+  <div class="grid4">
+    {% if p.sheets|length > 1 %}
+    <label>Feuille
+      <select name="import_sheet" {{ refresh() }} hx-vals='{"import_changed": "sheet"}'>{% for s in p.sheets %}<option{% if s == p.sheet %} selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+    {% endif %}
+    <label>Ligne d'en-tête
+      <select name="import_header" {{ refresh() }} hx-vals='{"import_changed": "header"}'>
+        <option value="0"{% if p.header_row is none %} selected{% endif %}>Aucune (données dès la ligne 1)</option>
+        {% for row in header_choices %}<option value="{{ loop.index }}"{% if p.header_row == loop.index0 %} selected{% endif %}>Ligne {{ loop.index }} — {{ row }}</option>{% endfor %}
+      </select></label>
+    {% for f in FIELDS %}{% set m = p.mapping[f] %}
+    <label>{{ LABELS[f] }}
+      {% if m.confidence == "exacte" or m.confidence == "choisie" %}<span class="badge ok">{{ "reconnue" if m.confidence == "exacte" else "choisie" }}</span>
+      {% elif m.confidence == "probable" %}<span class="badge paused">à vérifier</span>
+      {% elif f != "ref" %}<span class="badge bad">à choisir</span>{% endif %}
+      <select name="import_{{ f }}" {{ refresh() }}>
+        <option value=""{% if m.col is none %} selected{% endif %}>(aucune)</option>
+        {% for c in p.columns %}<option value="#{{ loop.index }}"{% if m.col == loop.index0 %} selected{% endif %}>{{ column_name(loop.index0) }} — {{ c }}</option>{% endfor %}
+      </select></label>
+    {% endfor %}
+    <label>Fabricant par défaut <span class="muted small">(cellule ou colonne vide)</span>
+      <input name="import_default_mfr" value="{{ p.default_manufacturer }}" maxlength="80" autocapitalize="off" {{ refresh() }}></label>
+  </div>
+
+  {% if p.error %}<p class="flash err">{{ p.error }}</p>
+  {% else %}
+  <p><strong>{{ p.components|length }} composant{{ 's' if p.components|length > 1 }} valide{{ 's' if p.components|length > 1 }}</strong>
+    {% if p.rejected %} · <span class="warn">{{ p.rejected|length }} ligne{{ 's' if p.rejected|length > 1 }} ignorée{{ 's' if p.rejected|length > 1 }}</span>
+    <span class="muted small">({% for r in p.rejected[:8] %}l. {{ r.line }} : {{ r.reason }}{{ ", " if not loop.last }}{% endfor %}{{ " …" if p.rejected|length > 8 }})</span>{% endif %}</p>
+  <div class="table-wrap">
+  <table class="list">
+    <thead><tr><th>MPN</th><th>Fabricant</th><th>Réf. interne</th></tr></thead>
+    <tbody>{% for c in p.preview %}
+      <tr><td data-label="MPN"><strong>{{ c.mpn }}</strong></td><td data-label="Fabricant">{{ c.manufacturer }}</td><td data-label="Réf.">{{ c.ref or "—" }}</td></tr>
+    {% endfor %}</tbody>
+  </table>
+  </div>
+  {% if p.components|length > p.preview|length %}<p class="small muted">Aperçu : {{ p.preview|length }} premiers sur {{ p.components|length }}.</p>{% endif %}
+  <div class="actions">
+    <label class="inline-choice"><input type="radio" name="import_mode" value="add"{% if mode != "replace" %} checked{% endif %}> Ajouter à la liste</label>
+    <label class="inline-choice"><input type="radio" name="import_mode" value="replace"{% if mode == "replace" %} checked{% endif %}> Remplacer la liste</label>
+    <button type="button" class="primary" hx-post="/fragments/import/apply" hx-trigger="click"
+            hx-params="import_token,import_sheet,import_header,import_mpn,import_manufacturer,import_ref,import_default_mfr,import_mode,components"
+            hx-target="#components-field" hx-swap="outerHTML">Appliquer à la liste ci-dessous</button>
+  </div>
+  {% endif %}
+  {% endif %}
+</div>

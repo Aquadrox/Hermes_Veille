@@ -15,6 +15,7 @@ Veille composants (PCN / fins de vie) :
   veillectl components list|notices <slug> [--type EOL]
   veillectl components add <slug> (--file bom.csv | "MPN;Fabricant;Réf" …)
   veillectl components remove <slug> MPN …
+  veillectl components import <slug> bom.xlsx [--dry-run] [--replace] [--mpn COL] [--manufacturer COL] …
   veillectl components scan <slug>                                  (étape 1 du job)
   veillectl components scan <slug> --status-only                    (statut Digi-Key seul, à la demande)
   veillectl components finalize <slug> <avis.json>                  (étape 5 du job)
@@ -27,7 +28,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import components, hermes, schedule, service, store, version
+from . import bom_import, components, hermes, schedule, service, store, version
 
 
 def _print_overview() -> int:
@@ -65,9 +66,55 @@ def _show(slug: str) -> int:
 
 
 def _components_file(path: str | None) -> list[dict] | None:
+    """Fichier de composants : texte « MPN ; Fabricant ; Réf » (inchangé) ou Excel (colonnes
+    reconnues automatiquement ; une ligne invalide est une erreur, comme pour le texte)."""
     if not path:
         return None
-    return components.parse_components(Path(path).read_text(encoding="utf-8"))
+    if Path(path).suffix.lower() not in (".xlsx", ".xlsm"):
+        return components.parse_components(Path(path).read_text(encoding="utf-8"))
+    p = bom_import.propose_options(bom_import.read_path(Path(path)))
+    if p["error"] or p["rejected"]:
+        raise components.ComponentsError(p["error"] or "lignes invalides : " + ", ".join(
+            f"{r['line']} ({r['reason']})" for r in p["rejected"][:10]) + " — `veillectl components import` "
+            "permet de les ignorer et de choisir les colonnes")
+    return p["components"]
+
+
+def _print_proposal(p: dict) -> None:
+    print(f"Feuille : {p['sheet'] or '—'}   ligne d'en-tête : "
+          f"{p['header_row'] + 1 if p['header_row'] is not None else 'aucune'}   lignes de données : {p['rows']}")
+    for f in bom_import.FIELDS:
+        m = p["mapping"][f]
+        col = (f"{bom_import.column_name(m['col'])} « {p['columns'][m['col']]} »" if m["col"] is not None
+               else "(aucune)")
+        print(f"  {bom_import.LABELS[f]:<26} → {col}  [{m['confidence'] or 'non trouvée'}]")
+    if p["error"]:
+        print(f"✗ {p['error']}")
+        return
+    print(f"{len(p['components'])} composant(s) valide(s), {len(p['rejected'])} ligne(s) ignorée(s)")
+    for r in p["rejected"][:10]:
+        print(f"  ligne {r['line']} : {r['reason']}")
+    for c in p["preview"]:
+        print(f"  {c['mpn']:<28} {c['manufacturer']:<24} {c['ref']}")
+
+
+def _import(args) -> int:
+    if not args.items:
+        raise store.StoreError("chemin du fichier à importer manquant")
+    columns = {f: v for f, v in (("mpn", args.mpn), ("manufacturer", args.manufacturer), ("ref", args.ref))
+               if v is not None}
+    p = bom_import.propose_options(bom_import.read_path(Path(args.items[0]), args.sheet), args.header_row,
+                                   columns, args.default_manufacturer or "")
+    _print_proposal(p)
+    if p["error"]:
+        return 1
+    if args.dry_run:
+        print("(simulation : rien n'est enregistré)")
+        return 0
+    st = service.import_components(args.slug, p["components"], "replace" if args.replace else "add")
+    print(f"✓ import : {st['added']} ajouté(s), {st['existing']} déjà présent(s), {st['removed']} retiré(s) — "
+          f"{st['total']} composant(s) suivis")
+    return 0
 
 
 def _components(args) -> int:
@@ -86,6 +133,8 @@ def _components(args) -> int:
         print(f"✓ {service.add_components(slug, items)} composant(s) ajouté(s)")
     elif args.action == "remove":
         print(f"✓ {service.remove_components(slug, args.items)} composant(s) retiré(s)")
+    elif args.action == "import":
+        return _import(args)
     elif args.action == "scan" and args.status_only:
         dk = service.components_scan(slug, actor="cli", plan_batch=False)["digikey"]
         print(f"✓ Digi-Key : {dk['checked']} statut(s) lu(s), {dk['errors']} référence(s) non trouvée(s)")
@@ -191,7 +240,8 @@ def main(argv: list[str] | None = None) -> int:
     p_edit.add_argument("--batch-size", type=int)
 
     p_comp = sub.add_parser("components", help="veille composants : PCN et fins de vie")
-    p_comp.add_argument("action", choices=("list", "notices", "add", "remove", "scan", "finalize", "chapter"))
+    p_comp.add_argument("action", choices=("list", "notices", "add", "remove", "import", "scan", "finalize",
+                                           "chapter"))
     p_comp.add_argument("slug")
     p_comp.add_argument("items", nargs="*", help="add : lignes « MPN;Fabricant;Réf » ; remove : MPN ; "
                                                   "finalize : fichier JSON")
@@ -199,6 +249,15 @@ def main(argv: list[str] | None = None) -> int:
     p_comp.add_argument("--type", choices=tuple(components.TYPES), help="notices : filtre par type")
     p_comp.add_argument("--for", dest="for_slug", help="chapter : veille qui reçoit le chapitre")
     p_comp.add_argument("--append", help="chapter : rapport Markdown du jour de cette veille")
+    imp = p_comp.add_argument_group("import (fichier CSV ou Excel)")
+    imp.add_argument("--sheet", help="feuille Excel (défaut : la première non vide)")
+    imp.add_argument("--header-row", help="ligne d'en-tête (défaut : détectée ; 0 = aucune)")
+    imp.add_argument("--mpn", help="colonne du MPN : libellé, lettre (A…) ou numéro")
+    imp.add_argument("--manufacturer", help="colonne du fabricant")
+    imp.add_argument("--ref", help="colonne de la réf. interne")
+    imp.add_argument("--default-manufacturer", help="fabricant si la colonne ou la cellule est vide")
+    imp.add_argument("--replace", action="store_true", help="remplacer la liste (défaut : ajouter)")
+    imp.add_argument("--dry-run", action="store_true", help="afficher la proposition sans rien enregistrer")
     p_comp.add_argument("--status-only", action="store_true",
                         help="scan : statut Digi-Key seulement (le lot de la prochaine exécution est conservé)")
 

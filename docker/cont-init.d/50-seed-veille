@@ -32,10 +32,12 @@ as_hermes() {
     "$S6_SETUIDGID" hermes "$@"
 }
 
-# --- 1. Répertoire des veilles ---
-as_hermes mkdir -p "$VEILLES_DIR" \
-    || { mkdir -p "$VEILLES_DIR" && chown hermes:hermes "$VEILLES_DIR" 2>/dev/null; } \
-    || log "ERREUR : impossible de créer $VEILLES_DIR"
+# --- 1. Répertoires des veilles et des imports de nomenclature ---
+for dir in "$VEILLES_DIR" "$HERMES_HOME/imports"; do
+    as_hermes mkdir -p "$dir" \
+        || { mkdir -p "$dir" && chown hermes:hermes "$dir" 2>/dev/null; } \
+        || log "ERREUR : impossible de créer $dir"
+done
 
 # --- 2. Modèle + fuseau horaire (premier démarrage) ---
 # Le scheduler cron lit la timezone de la config Hermes (pas seulement $TZ).

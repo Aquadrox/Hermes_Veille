@@ -604,25 +604,37 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
 
 
 def _edit_components(slug: str, edit, actor: str, action: str) -> int:
-    """Modifie la liste SOUS le verrou (relecture comprise : aucune édition concurrente perdue)."""
+    """Modifie la liste SOUS le verrou (relecture comprise : aucune édition concurrente perdue) ;
+    renvoie la différence de taille. Enregistrée dès qu'une entrée change (pas seulement le nombre)."""
+    def entries(lst):
+        return [(c["mpn"], c["manufacturer"], c.get("ref", "")) for c in lst]
     with _locked():
         data = comp.load_components(_components_veille(slug).slug)
-        before = len(data["components"])
-        data["components"] = comp.replace_components(data["components"], edit(data["components"]))
-        delta = abs(len(data["components"]) - before)
-        if delta:
+        before = data["components"]
+        data["components"] = comp.replace_components(before, edit(before))
+        delta = abs(len(data["components"]) - len(before))
+        if entries(data["components"]) != entries(before):
             comp.save_components(slug, data)
     audit(actor, action, slug, f"{delta} composant(s)")
     return delta
 
 
+def import_components(slug: str, items: list[dict], mode: str = "add", actor: str = "cli") -> dict:
+    """Import d'une liste (fichier analysé par bom_import) : ajout ou remplacement, sous verrou.
+    Renvoie {"added", "existing", "removed", "total"} ; l'historique des avis est conservé."""
+    stats: dict = {}
+
+    def edit(current):
+        new, st = comp.combine(current, items, mode)
+        stats.update(st)
+        return new
+    _edit_components(slug, edit, actor, f"components-import-{mode}")
+    return {**stats, "total": len(comp.load_components(slug)["components"])}
+
+
 def add_components(slug: str, items: list[dict], actor: str = "cli") -> int:
     """Ajoute des références (doublons ignorés) ; renvoie le nombre réellement ajouté."""
-    def edit(current):
-        keys = {comp.key_of(c["mpn"], c["manufacturer"]) for c in current}
-        fresh = {comp.key_of(i["mpn"], i["manufacturer"]): i for i in items}
-        return current + [i for k, i in fresh.items() if k not in keys]
-    return _edit_components(slug, edit, actor, "components-add")
+    return import_components(slug, items, "add", actor)["added"]
 
 
 def remove_components(slug: str, mpns: list[str], actor: str = "cli") -> int:

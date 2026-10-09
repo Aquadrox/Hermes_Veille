@@ -1,0 +1,8 @@
+{# Zone « Composants suivis » : rendue par le formulaire ET par l'application d'un import. #}
+<label id="components-field">Un composant par ligne : <code>MPN ; Fabricant ; Réf. interne</code>
+  <span class="muted small">(réf. facultative ; collage direct depuis un tableur accepté, une ligne d'en-tête « MPN » est ignorée)</span>
+  <textarea name="components" rows="12" class="mono" spellcheck="false" autocapitalize="off"
+            placeholder="LM317T ; Texas Instruments ; R-001&#10;STM32F103C8T6 ; STMicroelectronics ; U-12">{{ components_text }}</textarea>
+  {% if import_result %}<span class="flash ok small block">{{ import_result }}</span>{% endif %}
+  {% if import_error %}<span class="flash err small block">{{ import_error }}</span>{% endif %}
+</label>
