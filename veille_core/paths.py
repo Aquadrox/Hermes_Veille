@@ -17,6 +17,11 @@ def archive_dir() -> Path:
     return veilles_dir() / ".archive"
 
 
+def imports_dir() -> Path:
+    """Nomenclatures à importer (déposées pour Telegram / CLI) et analyses en cours de l'interface."""
+    return hermes_home() / "imports"
+
+
 def legacy_dir() -> Path:
     """Ancienne disposition mono-veille (avant la v0.3)."""
     return hermes_home() / "veille"

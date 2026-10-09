@@ -79,13 +79,37 @@ def same_manufacturer(a: str, b: str) -> bool:
     return bool(na) and (na == nb or (len(na) >= 4 and na in nb))
 
 
+def validate_entry(mpn, manufacturer, ref="") -> tuple[dict | None, str]:
+    """Une référence -> (entrée normalisée, "") ou (None, motif du rejet). Règle unique pour la
+    saisie manuelle et l'import de fichiers."""
+    mpn, mfr, ref = (" ".join(str(x or "").split()) for x in (mpn, manufacturer, ref))
+    if not MPN_RE.match(mpn):
+        return None, "MPN vide ou invalide" if mpn else "MPN vide"
+    if not norm_mfr(mfr) or len(mfr) > 80:
+        return None, "fabricant manquant ou invalide"
+    return {"mpn": mpn, "manufacturer": mfr, "ref": ref[:64]}, ""
+
+
+def unique(entries: list[dict]) -> list[dict]:
+    """Doublons (même fabricant et MPN) fusionnés, première occurrence gardée ; taille bornée."""
+    seen, out = set(), []
+    for e in entries:
+        key = key_of(e["mpn"], e["manufacturer"])
+        if key not in seen:
+            seen.add(key)
+            out.append(e)
+    if len(out) > MAX_COMPONENTS:
+        raise ComponentsError(f"trop de composants ({len(out)}) : {MAX_COMPONENTS} au plus par veille")
+    return out
+
+
 def parse_components(text: str) -> list[dict]:
     """Une référence par ligne : « MPN ; Fabricant ; Réf. interne » (tabulation, ; ou ,).
 
     Le collage depuis un tableur (tabulations) fonctionne tel quel ; `#` commente une ligne ;
     une ligne d'en-tête « MPN… » est ignorée ; doublons fusionnés (même fabricant et MPN).
     """
-    out, seen, bad, first = [], set(), [], True
+    out, bad, first = [], [], True
     for n, raw in enumerate((text or "").splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -96,26 +120,35 @@ def parse_components(text: str) -> list[dict]:
         first = False
         if header:  # ligne d'en-tête d'un export de tableur
             continue
-        mpn, mfr = parts[0], parts[1] if len(parts) > 1 else ""
-        ref = parts[2][:64] if len(parts) > 2 else ""
-        if not MPN_RE.match(mpn) or not norm_mfr(mfr) or len(mfr) > 80:
+        entry, _ = validate_entry(*(parts + ["", ""])[:3])
+        if entry is None:
             bad.append(f"ligne {n}")
-            continue
-        key = key_of(mpn, mfr)
-        if key not in seen:
-            seen.add(key)
-            out.append({"mpn": mpn, "manufacturer": mfr, "ref": ref})
+        else:
+            out.append(entry)
     if bad:
         raise ComponentsError("format attendu « MPN ; Fabricant ; Réf. interne » : "
                               + ", ".join(bad[:10]) + (" …" if len(bad) > 10 else ""))
-    if len(out) > MAX_COMPONENTS:
-        raise ComponentsError(f"trop de composants ({len(out)}) : {MAX_COMPONENTS} au plus par veille")
-    return out
+    return unique(out)
 
 
 def format_components(components: list[dict]) -> str:
     """Inverse de parse_components (formulaire d'édition)."""
     return "\n".join(" ; ".join(filter(None, (c["mpn"], c["manufacturer"], c.get("ref")))) for c in components)
+
+
+def combine(current: list[dict], items: list[dict], mode: str = "add") -> tuple[list[dict], dict]:
+    """Liste résultant d'un import : `add` (ajout, doublons ignorés) ou `replace` (la liste devient
+    `items`). Renvoie (liste, {"added", "existing", "removed"})."""
+    if mode not in ("add", "replace"):
+        raise ComponentsError(f"mode d'import inconnu : {mode!r} (add ou replace)")
+    items = unique(items)
+    have = {key_of(c["mpn"], c["manufacturer"]) for c in current}
+    new = {key_of(i["mpn"], i["manufacturer"]) for i in items}
+    stats = {"added": len(new - have), "existing": len(new & have),
+             "removed": len(have - new) if mode == "replace" else 0}
+    if mode == "replace":
+        return items, stats
+    return unique(current + [i for i in items if key_of(i["mpn"], i["manufacturer"]) not in have]), stats
 
 
 def replace_components(current: list[dict], wanted: list[dict]) -> list[dict]:

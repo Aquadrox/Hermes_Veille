@@ -7,6 +7,45 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.3.1] — 2026-10-09
+
+Import d'une nomenclature CSV ou Excel dans une veille composants.
+
+### Ajouté
+
+- **Import CSV / Excel** (`.csv`, `.txt`, `.xlsx`, `.xlsm`) dans une veille composants, en création
+  comme en édition. Les colonnes MPN, Fabricant et Réf. interne sont **reconnues par règles**
+  (dictionnaire de libellés FR / EN, forme des valeurs, sans LLM : rien ne sort du serveur).
+  La correspondance est **proposée et modifiable** (feuille, ligne d'en-tête, colonnes, fabricant
+  par défaut), avec un aperçu, le décompte des composants valides et des lignes ignorées
+  (numérotées). Les lignes de titre au-dessus du tableau sont ignorées. Une colonne de référence
+  distributeur (Digi-Key, Mouser…) n'est jamais prise pour le MPN.
+- Choix **« Ajouter à la liste »** (défaut, doublons ignorés) ou **« Remplacer la liste »**
+  (l'historique des avis est conservé), avec le décompte ajoutés / déjà présents / retirés.
+- Interface : carte « Importer un fichier » au-dessus de la liste des composants. Le fichier
+  reste sur le serveur (jeton lié à la session, 1 h, 0600) : le navigateur n'échange que la
+  correspondance.
+- Telegram / MCP : `preview_component_import` (lecture) et `import_components` (modification),
+  limités aux fichiers déposés dans `<données>/imports/`. 30 outils (14 en lecture).
+- CLI : `veillectl components import <slug> <fichier> [--dry-run] [--replace] [--sheet] [--header-row]
+  [--mpn] [--manufacturer] [--ref] [--default-manufacturer]` ; `--components-file` accepte aussi
+  un fichier Excel.
+- Dépendances : `openpyxl` (lecture Excel) et `defusedxml` (XML sûr).
+- Tests : `tests/test_bom_import.py` ; smoke test : import d'un vrai `.xlsx` dans l'image.
+
+### Corrigé
+
+- Modification de la liste des composants (`_edit_components`) : un remplacement à nombre de
+  composants égal n'était pas enregistré (seule la taille était comparée).
+
+### Sécurité
+
+- Fichiers importés traités comme non fiables : 5 Mo, 10 000 lignes, 100 colonnes et 200
+  caractères par cellule au plus ; archive xlsx contrôlée avant ouverture (bombe zip) ; XML lu
+  via defusedxml (entités refusées, testé) ; formules jamais évaluées, macros jamais exécutées.
+- MCP : seul un nom de fichier du dossier d'import est accepté (aucun chemin, lien symbolique
+  vers l'extérieur refusé). Dossier d'import exclu de `make backup`.
+
 ## [0.3.0] — 2026-10-09
 
 Veille composants : détection des avis PCN et des fins de vie (EOL) d'une nomenclature.

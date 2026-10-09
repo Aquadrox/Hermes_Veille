@@ -103,6 +103,16 @@ lundi 6h30 — job de la veille thématique rattachée
 - **Liste** : `MPN ; Fabricant ; Réf. interne`, une par ligne, collage depuis un tableur accepté
   (interface, `veillectl components add --file bom.csv`, ou Telegram : « Ajoute le LM317T de Texas
   Instruments à la veille composants »).
+- **Import d'une nomenclature CSV ou Excel** (`.csv`, `.xlsx`, `.xlsm`) : dans le formulaire de la
+  veille, « Importer un fichier ». Les colonnes MPN, Fabricant et Réf. interne sont reconnues par
+  règles (libellés FR / EN usuels, forme des valeurs ; aucun service externe), puis **proposées** :
+  feuille, ligne d'en-tête, colonnes et fabricant par défaut se corrigent avant d'appliquer, avec un
+  aperçu et les lignes ignorées. « Ajouter à la liste » ou « Remplacer la liste », puis enregistrer
+  la veille comme d'habitude.
+  - Telegram : envoie le fichier à Hermes. Il le dépose dans `<données>/imports/`, te montre la
+    correspondance (`preview_component_import`) et importe après ton accord (`import_components`).
+  - CLI : `veillectl components import <slug> bom.xlsx --dry-run`, puis sans `--dry-run`
+    (`--replace`, `--mpn COL`, `--manufacturer COL`, `--default-manufacturer X`…).
 - **Incrémental** : chaque référence garde la date de sa dernière vérification (Digi-Key et web) ;
   la recherche web ne remonte qu'à cette date (moins 30 jours de marge) et un avis déjà connu
   n'est jamais signalé à nouveau. Avis et dates sont conservés dans `components.json` et
@@ -153,7 +163,7 @@ industriel, chaque lundi à 8h, pour moi@exemple.fr », « Quelles fins de vie o
 ce mois-ci ? »…
 
 - **Transport stdio via `docker exec -i`** : aucun port réseau n'est ouvert.
-- **`trust: untrusted`** : les 13 outils de lecture s'exécutent directement ; les 15 outils de
+- **`trust: untrusted`** : les 14 outils de lecture s'exécutent directement ; les 16 outils de
   modification demandent ton **approbation dans Telegram**. `run_veille_now` et
   `send_test_email` envoient de vrais e-mails ; `archive_veille` exige en plus de répéter le slug.
 - Chaque action est tracée dans le journal d'audit avec l'origine « telegram ».
@@ -162,9 +172,10 @@ ce mois-ci ? »…
 
 Outils : `list_veilles`, `get_veille`, `get_brief`, `list_brief_templates`, `list_reports`,
 `read_report`, `get_run_log`, `run_history`, `preview_schedule`, `get_costs`, `health`,
-`list_components`, `list_notices` (lecture) ;
+`list_components`, `list_notices`, `preview_component_import` (lecture) ;
 `create_veille`, `update_veille`, `set_recipients`, `add_recipients`, `remove_recipients`,
-`update_brief`, `edit_brief`, `add_components`, `remove_components`, `check_component_statuses`,
+`update_brief`, `edit_brief`, `add_components`, `remove_components`, `import_components`,
+`check_component_statuses`,
 `pause_veille`, `resume_veille`, `run_veille_now`,
 `send_test_email`, `archive_veille` (modification).
 
@@ -221,7 +232,7 @@ docker exec veille-hermes veillectl components list|notices composants-carte-x [
 | `make tunnel` | rappelle la commande de tunnel SSH |
 | `make mcp-install` / `make mcp-check` | branche le serveur MCP sur le Hermes de l'hôte / liste ses outils |
 | `make ui-password` | génère le hash du mot de passe et le secret de l'interface |
-| `make backup` | archive horodatée des données (sans `.env` ni clés d'API saisies dans l'interface, 10 dernières conservées), rangée à côté du dossier de données |
+| `make backup` | archive horodatée des données (sans `.env`, clés d'API saisies dans l'interface ni nomenclatures déposées pour import, 10 dernières conservées), rangée à côté du dossier de données |
 | `make move-data DEST=…` | sort les données du dépôt git (`VEILLE_DATA_DIR`), sans rien perdre |
 | `make test` / `make lint` | tests unitaires avec couverture / ruff + shellcheck (+ hadolint) |
 | `make smoke` | teste l'image (dépendances, chaîne PDF, contrat CLI Hermes, veillectl, interface) |
@@ -257,6 +268,8 @@ veilles/<slug>/
     runs/             journaux des lancements manuels
     components.json   veille composants : références, statut Digi-Key, dates de vérification
     notices.json      veille composants : avis PCN / EOL détectés, sources, livraisons
+imports/            nomenclatures déposées pour import (Telegram / CLI), analyses en cours de
+                    l'interface (supprimées après 1 h) ; exclu des sauvegardes
 veilles/.archive/   veilles archivées
 veilles/.audit.log  journal d'audit (interface, CLI, amorçage)
 cron/jobs.json      jobs Hermes (état, prochain et dernier run)
