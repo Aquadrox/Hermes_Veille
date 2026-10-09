@@ -655,7 +655,8 @@ def to_html_email(view: dict, title: str, ui_hint: str = "") -> str:
         parts.append(f"<h3>Rappel : {len(rem)} composant(s) en fin de vie ou en dernière commande</h3>"
                      f"{table(rem_rows, '#7f1d1d')}")
     parts.append(f'<p style="color:#66727f;font-size:12px">{view["components"]} composants suivis. '
-                 f"Détail de chaque avis dans le PDF joint. {esc(ui_hint)}</p></div>")
+                 f"Détail de chaque avis dans le PDF joint, liste complète dans le fichier Excel joint. "
+                 f"{esc(ui_hint)}</p></div>")
     return "".join(parts)
 
 
@@ -670,3 +671,73 @@ def to_text_email(view: dict) -> str:
                       f"{' — ' + r['link']['url'] if r['link'] else ''}" for r in rows]
             lines.append("")
     return "\n".join(lines) or "Aucun nouvel avis depuis le précédent envoi."
+
+
+# Export Excel : toutes les lignes de `group(..., include_quiet=True)`, comme la liste de l'interface.
+XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_XLSX_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")  # = openpyxl ILLEGAL_CHARACTERS_RE
+_XLSX_COLUMNS = (("Composant", 24), ("Fabricant", 22), ("Réf. interne", 14), ("Critique", 9), ("Avis", 28),
+                 ("Avis principal", 48), ("Échéance", 12), ("Détecté", 12), ("Statut Digi-Key", 20),
+                 ("Vérifié Digi-Key", 15), ("Recherche web", 15), ("Lien", 48), ("Suivi", 9))
+
+
+def xlsx_name(slug: str, stamp: str) -> str:
+    """Nom du fichier exporté (slug validé, horodatage AAAA-MM-JJ[-HHhMM])."""
+    return f"{stamp}-{slug}.xlsx"
+
+
+def _xlsx_cell(value: str) -> str | dt.date:
+    """Valeur sûre pour une cellule : date ISO -> vraie date ; texte sans caractère de contrôle
+    (openpyxl les refuse : un titre d'avis venu du web ferait échouer l'envoi)."""
+    if DATE_RE.match(value) and _date(value):
+        return dt.date.fromisoformat(value)
+    return _XLSX_ILLEGAL.sub("", value)
+
+
+def to_xlsx(rows: list[dict]) -> bytes:
+    """Classeur Excel d'une ligne par composant (critiques en tête, filtre automatique).
+
+    Les textes viennent du web : chaque cellule texte est forcée en type CHAÎNE, une valeur
+    « =… » n'est jamais une formule ; seuls les liens validés par `normalize_url` sont cliquables.
+    """
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Composants"
+    ws.append([name for name, _ in _XLSX_COLUMNS])
+    for i, (_, width) in enumerate(_XLSX_COLUMNS, 1):
+        ws.cell(1, i).font = Font(bold=True, color="FFFFFF")
+        ws.cell(1, i).fill = PatternFill("solid", fgColor="0F766E")
+        ws.column_dimensions[ws.cell(1, i).column_letter].width = width
+    crit_fill = PatternFill("solid", fgColor="FEF2F2")
+    for n, r in enumerate(rows, 2):  # numéro de ligne tenu ici : ws.max_row parcourt toute la feuille
+        dk, link = r["dk"], r["link"]
+        url = normalize_url(link["url"]) if link else None
+        values = (r["mpn"], r["manufacturer"], r["ref"], "Oui" if r["critical"] else "",
+                  ", ".join(TYPES[t][0] for t in r["types"]), r["worst"]["title"] if r["worst"] else "",
+                  r["deadline"], r["found"], dk.get("status") or dk.get("error") or "", dk.get("checked_at") or "",
+                  r["web_checked_at"] or "", url or "", "" if r["tracked"] else "retiré")
+        for col, value in enumerate(values, 1):
+            cell = ws.cell(n, col, _xlsx_cell(value))
+            if cell.data_type == "f":  # « =… » venu du web : texte, jamais formule
+                cell.data_type = "s"
+            elif cell.is_date:
+                cell.number_format = "yyyy-mm-dd"
+            if r["critical"]:
+                cell.fill = crit_fill
+        if url:
+            ws.cell(n, len(_XLSX_COLUMNS) - 1).hyperlink = url
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    # Impression : paysage, toutes les colonnes sur la largeur d'une page, en-tête répété.
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_rows = "1:1"
+    out = BytesIO()
+    wb.save(out)
+    return out.getvalue()

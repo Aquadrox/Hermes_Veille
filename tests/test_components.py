@@ -499,8 +499,8 @@ def test_chapter(watch, tools):
     finalize(watch, [cand(["LM317T"], ltb_date="2027-03-31"), cand(["NE555P"], ntype="PCN", url="https://a.org/p")])
     md = v.dir / "rapports" / "2026-10-12-veille.md"
     md.write_text("# Rapport\n\nTexte.\n")
-    assert service.components_chapter(watch.slug, v.slug, md) == "[EOL ×1]"
-    assert service.components_chapter(watch.slug, v.slug, md) == "[EOL ×1]"  # relance : idempotent
+    assert service.components_chapter(watch.slug, v.slug, md)[0] == "[EOL ×1]"
+    assert service.components_chapter(watch.slug, v.slug, md)[0] == "[EOL ×1]"  # relance : idempotent
     text = md.read_text()
     assert text.count(service.CHAPTER_MARK) == 1 and text.startswith("# Rapport\n\nTexte.")
     assert text.index("Nouvelles fins de vie") < text.index("Autres nouveaux avis")
@@ -509,7 +509,7 @@ def test_chapter(watch, tools):
     # mais le rappel des fins de vie reste
     md2 = v.dir / "rapports" / "2026-10-19-06h30-veille.md"
     md2.write_text("# Rapport\n")
-    assert service.components_chapter(watch.slug, v.slug, md2) == ""
+    assert service.components_chapter(watch.slug, v.slug, md2)[0] == ""
     assert "Aucun nouvel avis" in md2.read_text() and "Rappel" in md2.read_text()
 
 
@@ -533,7 +533,7 @@ def test_chapter_delivery_day_is_the_report_day(watch, tools):
     (rdir / "2099-01-04-23h55-veille.pdf").write_bytes(b"%PDF")  # l'exécution a abouti
     md2 = rdir / "2099-01-11-23h55-veille.md"
     md2.write_text("# r\n")
-    assert service.components_chapter(watch.slug, v.slug, md2) == "" and "Aucun nouvel avis" in md2.read_text()
+    assert service.components_chapter(watch.slug, v.slug, md2)[0] == "" and "Aucun nouvel avis" in md2.read_text()
 
 
 def test_chapter_path_validation(watch, tmp_path):
@@ -894,7 +894,7 @@ def test_chapter_requires_link_and_channel_namespace(watch, tools):
     service.update_veille("report", include_components=watch.slug)
     comp.save_notices(watch.slug, [{**n, "delivered": {"report": "2026-01-01"}}
                                    for n in comp.load_notices(watch.slug)])
-    assert service.components_chapter(watch.slug, "report", md) == "[EOL ×1]"  # pas de collision
+    assert service.components_chapter(watch.slug, "report", md)[0] == "[EOL ×1]"  # pas de collision
 
 
 def test_header_and_short_manufacturer_names():
@@ -1080,3 +1080,130 @@ def test_prompts_fix_the_timestamp_once(watch):
         prompt = (x.dir / "job-prompt.md").read_text()
         assert "`date +%Y-%m-%d-%Hh%M`" in prompt and "UNE SEULE FOIS" in prompt and "${" not in prompt
     assert f"--append {v.dir}/rapports/D-veille.md" in (v.dir / "job-prompt.md").read_text()
+
+
+# --------------------------------------------------------------------------
+# Export Excel (liste complète) et pièce jointe des e-mails
+# --------------------------------------------------------------------------
+def _sheet(data: bytes):
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+    return load_workbook(BytesIO(data))["Composants"]
+
+
+def _sheet_xml(data: bytes) -> str:
+    import zipfile
+    from io import BytesIO
+    with zipfile.ZipFile(BytesIO(data)) as z:
+        return z.read("xl/worksheets/sheet1.xml").decode()
+
+
+def test_xlsx_full_list_critical_first_and_safe_cells(watch, tools):
+    """Toutes les références (y compris sans avis ou retirées), critiques en tête ; un texte venu du
+    web n'est jamais une formule, les caractères de contrôle n'empêchent pas l'export."""
+    service.components_scan(watch.slug, client=FakeClient({"LM317T": {"status": "Last Time Buy",
+                                                                      "product_url": "https://www.digikey.com/p/1"}}))
+    finalize(watch, [cand(["STM32F103C8T6"], ntype="PCN", url="https://st.com/pcn/1",
+                          title='=HYPERLINK("http://evil/x","clic")\x02', ltb_date="2027-03-31"),
+                     cand(["NE555P"], ntype="EOL", url="https://www.ti.com/eol/9", number="TI-9")])
+    service.remove_components(watch.slug, ["NE555P"])  # retiré : ses avis restent, plus une alerte
+    data = service.components_xlsx(watch.slug)
+    ws = _sheet(data)
+    rows = list(ws.iter_rows(values_only=True))
+    assert rows[0][:4] == ("Composant", "Fabricant", "Réf. interne", "Critique")
+    assert [r[0] for r in rows[1:]] == ["LM317T", "NE555P", "STM32F103C8T6"]
+    lm, ne, stm = rows[1:]
+    assert lm[3] == "Oui" and lm[8] == "Last Time Buy" and lm[12] is None and lm[2] == "R-001"
+    assert ne[3] is None and ne[12] == "retiré"
+    assert stm[5] == '=HYPERLINK("http://evil/x","clic")' and stm[6] == dt_date(2027, 3, 31)
+    assert ws.cell(4, 6).data_type == "s" and "<f>" not in _sheet_xml(data)  # texte, jamais formule
+    assert ws.cell(4, 12).hyperlink.target == "https://st.com/pcn/1"
+    assert ws.cell(2, 1).fill.fgColor.rgb.endswith("FEF2F2") and ws.freeze_panes == "A2" and ws.auto_filter.ref
+    assert ws.page_setup.orientation == "landscape" and ws.sheet_properties.pageSetUpPr.fitToPage
+
+
+def test_xlsx_rejects_unsafe_link_and_control_chars():
+    row = {"mpn": "A1", "manufacturer": "X", "ref": "", "critical": False, "types": [], "worst": None,
+           "deadline": "", "found": "", "dk": {"status": "Obsolete\x01", "checked_at": "2026-13-45"},
+           "web_checked_at": None, "tracked": True, "link": {"url": "javascript:alert(1)", "label": "x"}}
+    ws = _sheet(comp.to_xlsx([row]))
+    assert ws.cell(2, 12).value is None and ws.cell(2, 12).hyperlink is None
+    assert ws.cell(2, 9).value == "Obsolete" and ws.cell(2, 10).value == "2026-13-45"  # date invalide : texte
+    assert _sheet(comp.to_xlsx([])).max_row == 1  # liste vide : en-tête seul
+
+
+def dt_date(*a):
+    import datetime as dt
+    return dt.datetime(*a)  # openpyxl relit les dates en datetime
+
+
+def test_finalize_attaches_xlsx_snapshot(watch, tools):
+    service.components_scan(watch.slug)
+    finalize(watch, [cand(["LM317T"])])
+    (mail,) = tools()
+    args = mail["args"]
+    attached = [args[i + 1] for i, a in enumerate(args) if a == "--attach"]
+    assert len(attached) == 2 and attached[0].endswith("-veille.pdf")
+    xlsx = Path(attached[1])
+    stamp = store.list_reports(watch.slug)[0]["stamp"]
+    assert xlsx.name == f"{stamp}-{watch.slug}.xlsx" and xlsx.parent == watch.dir / "rapports"
+    assert [r[0] for r in _sheet(xlsx.read_bytes()).iter_rows(min_row=2, values_only=True)] == [
+        "LM317T", "NE555P", "STM32F103C8T6"]
+    assert len(store.list_reports(watch.slug)) == 1  # l'Excel ne se mêle pas à la liste des rapports
+    assert "fichier Excel joint" in mail["html"]
+
+
+def test_chapter_writes_xlsx_and_prompt_attaches_it(watch, tools, capsys):
+    v = service.create_veille(name="Veille Indus", subject="s", schedule_expr="30 6 * * 1",
+                              recipients=["a@example.org"], brief="# b\n", include_components=watch.slug)
+    finalize(watch, [cand(["LM317T"])])
+    md = v.dir / "rapports" / "2026-10-12-06h30-veille.md"
+    md.write_text("# r\n")
+    prefix, xlsx = service.components_chapter(watch.slug, v.slug, md)
+    assert prefix == "[EOL ×1]" and xlsx == v.dir / "rapports" / f"2026-10-12-06h30-{watch.slug}.xlsx"
+    assert _sheet(xlsx.read_bytes()).max_row == 4
+    assert cli.main(["components", "chapter", watch.slug, "--for", v.slug, "--append", str(md)]) == 0
+    assert f"PIECE_JOINTE={xlsx}" in capsys.readouterr().out  # relance : même fichier, remplacé
+    prompt = (v.dir / "job-prompt.md").read_text()
+    assert "PIECE_JOINTE=<chemin>" in prompt and "--attach <chemin>" in prompt
+
+
+def test_ui_export_xlsx(ui, watch):
+    client, _ = ui
+    page = client.get(f"/veilles/{watch.slug}").text
+    assert f'href="/veilles/{watch.slug}/components.xlsx" download' in page
+    r = client.get(f"/veilles/{watch.slug}/components.xlsx")
+    assert r.status_code == 200 and r.headers["content-type"] == comp.XLSX_TYPE
+    assert re.fullmatch(rf'attachment; filename="\d{{4}}-\d{{2}}-\d{{2}}-{watch.slug}\.xlsx"',
+                        r.headers["content-disposition"])
+    assert r.headers["cache-control"] == "no-store" and _sheet(r.content).max_row == 4
+    other = service.create_veille(name="Veille Indus", subject="s", schedule_expr="30 6 * * 1",
+                                  recipients=["a@example.org"], brief="# b\n")
+    assert client.get(f"/veilles/{other.slug}/components.xlsx").status_code == 404
+    assert client.get("/veilles/inconnue/components.xlsx").status_code == 404
+    (watch.dir / "notices.json").write_text("{oups")
+    assert client.get(f"/veilles/{watch.slug}/components.xlsx").status_code == 500
+    client.cookies.clear()
+    assert client.get(f"/veilles/{watch.slug}/components.xlsx", follow_redirects=False).status_code == 303
+
+
+def test_ui_run_end_updates_head_without_reload(ui, watch, monkeypatch):
+    """Le suivi du journal (`poll=1`) renvoie l'en-tête à jour (hors bande) quand le lancement se termine."""
+    client, _ = ui
+    log = "20261009-120000.log"
+    store.runs_dir(watch.slug).mkdir(parents=True, exist_ok=True)
+    (store.runs_dir(watch.slug) / log).write_text("analyse…\n")
+    running = {"pid": 4242}
+    monkeypatch.setattr(service, "running_pid", lambda slug: running["pid"])
+    page = client.get(f"/veilles/{watch.slug}").text
+    assert 'id="detail-head"' in page and ">en cours</span>" in page and "hx-swap-oob" not in page
+    url = f"/veilles/{watch.slug}/runs/{log}"
+    r = client.get(url, params={"poll": 1}).text
+    assert f'hx-get="{url}?poll=1"' in r and "detail-head" not in r  # en cours : journal seul
+    running["pid"] = None
+    r = client.get(url, params={"poll": 1}).text
+    head = r[r.index('id="detail-head"'):]
+    assert 'hx-swap-oob="true"' in head and ">actif</span>" in head and "disabled" not in head
+    assert "hx-get" not in r[:r.index('id="detail-head"')]  # le suivi s'arrête
+    assert "detail-head" not in client.get(url).text  # journal ouvert seul : pas d'en-tête

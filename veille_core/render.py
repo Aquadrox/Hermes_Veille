@@ -60,7 +60,9 @@ def components_step(v: Veille) -> str:
         f"   veillectl components chapter {v.components} --for {v.slug} --append {v.dir}/rapports/D-veille.md\n"
         "   La commande ajoute elle-même le chapitre à la fin du rapport : ne le modifie pas, ne le résume pas.\n"
         "   Si elle affiche une ligne « PREFIXE_SUJET=… », place ce préfixe AU DÉBUT de l'objet de l'e-mail "
-        "(étape 8) et ajoute au texte de l'e-mail une ligne sur les fins de vie détectées."
+        "(étape 8) et ajoute au texte de l'e-mail une ligne sur les fins de vie détectées.\n"
+        "   Si elle affiche une ligne « PIECE_JOINTE=<chemin> », ajoute `--attach <chemin>` (liste Excel des "
+        "composants) à la commande d'envoi de l'étape 8, en plus du PDF."
     )
 
 

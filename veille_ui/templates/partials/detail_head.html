@@ -1,0 +1,23 @@
+{# En-tête de la page d'une veille : titre, état, actions. Renvoyé aussi par le journal d'un lancement
+   à sa fin (`oob`, échange hors bande htmx) : état et boutons à jour sans recharger la page. #}
+{% from "partials/macros.html" import run_confirm %}
+{% set st = row.status %}{% set cls = status_class(row) %}
+<div class="head" id="detail-head"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <h1>{{ v.name }} <span class="badge {{ cls }}">{% if not st.exists %}job absent{% elif row.running %}en cours{% elif st.paused %}en pause{% elif cls == 'bad' %}en échec{% else %}actif{% endif %}</span></h1>
+  <div class="actions">
+    {% if st.exists %}
+      {% if st.paused %}
+      <form method="post" action="/veilles/{{ v.slug }}/resume" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Reprendre</button></form>
+      {% else %}
+      <form method="post" action="/veilles/{{ v.slug }}/pause" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Pause</button></form>
+      <form method="post" action="/veilles/{{ v.slug }}/run" class="inline" data-confirm="{{ run_confirm(row) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary"{% if row.running %} disabled{% endif %}>{{ "Lancer l'analyse" if v.kind == "composants" else "Lancer maintenant" }}</button></form>
+      {% endif %}
+    {% endif %}
+    {% if v.kind == "composants" %}
+    <form method="post" action="/veilles/{{ v.slug }}/check-status" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button title="Statut Digi-Key de toutes les références, sans LLM ni e-mail"{% if row.running %} disabled{% endif %}>Vérifier les statuts Digi-Key</button></form>
+    {% endif %}
+    <form method="post" action="/veilles/{{ v.slug }}/test-email" class="inline" data-confirm="Envoyer un e-mail de test à {{ row.recipients|length }} destinataire(s) ?"><input type="hidden" name="csrf" value="{{ csrf }}"><button>E-mail de test</button></form>
+    <a class="button" href="/veilles/{{ v.slug }}/edit">Modifier</a>
+  </div>
+</div>

@@ -727,6 +727,21 @@ def _mark(slug: str, ids: set[str], channel: str, day: str) -> None:
         comp.save_notices(slug, notices)
 
 
+def components_xlsx(slug: str) -> bytes:
+    """Liste complète des composants au format Excel (export à la demande)."""
+    _components_veille(slug)
+    return comp.to_xlsx(comp.group(comp.load_notices(slug), comp.load_components(slug)["components"],
+                                   include_quiet=True))
+
+
+def _write_xlsx(rdir: Path, slug: str, data: dict, notices: list[dict], stamp: str) -> Path:
+    """Instantané Excel de la veille composants `slug`, joint à l'e-mail : écrit à côté du rapport
+    (`rdir`), hors verrou (données déjà lues)."""
+    path = rdir / comp.xlsx_name(slug, stamp)
+    store.atomic_write(path, comp.to_xlsx(comp.group(notices, data["components"], include_quiet=True)))
+    return path
+
+
 def _build_pdf(v: Veille, md: Path, pdf: Path, subtitle: str, meta: str) -> None:
     script = os.environ.get(
         "BUILD_REPORT", str(paths.hermes_home() / "skills/productivity/styled-pdf-report/scripts/build_report.py"))
@@ -797,13 +812,14 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         lines.append(f"e-mail : inclus dans la veille {', '.join(linked)} (chapitre composants)")
         return "\n".join(lines)
     view = comp.digest(data["components"], notices, mail)
+    xlsx = _write_xlsx(pdf.parent, slug, data, notices, stamp)
     with tempfile.NamedTemporaryFile("w", suffix=".html", encoding="utf-8", delete=False) as fh:
         fh.write(comp.to_html_email(view, f"{v.name} — {day}", "Détail et historique : interface web des veilles."))
     try:
         out = _brevo(["--bcc-file", str(v.dir / "recipients.txt"),
                       "--subject", f"{comp.subject_prefix(view)}{v.name} — {day}",
                       "--html-file", fh.name, "--text", comp.to_text_email(view),
-                      "--attach", str(pdf), "--verify"])
+                      "--attach", str(pdf), "--attach", str(xlsx), "--verify"])
     finally:
         os.unlink(fh.name)
     _mark(slug, {n["id"] for n in mail}, "mail", day)
@@ -811,9 +827,10 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
     return "\n".join([*lines, out])
 
 
-def components_chapter(slug: str, for_slug: str, report_md: Path, actor: str = "job") -> str | None:
-    """Ajoute le chapitre composants au rapport Markdown du jour d'une veille ; renvoie le préfixe
-    d'objet (« [EOL ×2] », vide sinon), ou None si la veille composants n'existe plus.
+def components_chapter(slug: str, for_slug: str, report_md: Path, actor: str = "job") -> tuple[str, Path] | None:
+    """Ajoute le chapitre composants au rapport Markdown du jour d'une veille et écrit à côté la liste
+    Excel à joindre à l'e-mail ; renvoie (préfixe d'objet « [EOL ×2] » ou vide, chemin de l'Excel),
+    ou None si la veille composants n'existe plus.
 
     Idempotent : relancé sur le même fichier, le chapitre précédent (toujours en fin) est remplacé.
     """
@@ -846,8 +863,10 @@ def components_chapter(slug: str, for_slug: str, report_md: Path, actor: str = "
             n["delivered"].pop(channel, None)
         comp.mark_delivered(notices, {n["id"] for n in new}, channel, day)
         comp.save_notices(slug, notices)
+    # Même horodatage que le rapport : l'Excel d'une relance remplace le précédent.
+    xlsx = _write_xlsx(rdir, slug, data, notices, path.name.removesuffix("-veille.md"))
     audit(actor, "components-chapter", slug, f"{for_slug} : {len(new)} avis")
-    return comp.subject_prefix(view).strip()
+    return comp.subject_prefix(view).strip(), xlsx
 
 
 # --------------------------------------------------------------------------

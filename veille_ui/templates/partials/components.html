@@ -5,6 +5,7 @@
   <div class="head">
     <h2>Composants <span class="muted small">({{ comp_rows|length }} · {{ notice_total }} avis)</span></h2>
     {% if critical_count %}<span class="badge eol">⚠ {{ critical_count }} en fin de vie ou dernière commande</span>{% endif %}
+    {% if comp_rows %}<a class="button" href="/veilles/{{ v.slug }}/components.xlsx" download>Exporter (Excel)</a>{% endif %}
   </div>
   <div class="comp-tools">
     <input type="search" id="comp-search" placeholder="Rechercher : MPN, fabricant, réf., avis, mot-clé…"

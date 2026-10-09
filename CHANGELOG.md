@@ -7,6 +7,38 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.3.4] — 2026-10-09
+
+Liste des composants exportable en Excel et jointe aux e-mails ; état d'une analyse à jour sans
+recharger la page.
+
+### Ajouté
+
+- **Export Excel de la liste des composants** : bouton « Exporter (Excel) » de la liste
+  (`/veilles/<slug>/components.xlsx`). Une ligne par référence, comme dans l'interface : fins de
+  vie et dernières commandes en tête et en rouge, filtre automatique, en-tête figé, dates au format
+  date, lien cliquable de l'avis le plus critique, statut et dates de vérification Digi-Key / web.
+- **Excel joint à l'e-mail périodique**, dans les deux modes de livraison :
+  - e-mail dédié de la veille composants : joint à côté du PDF (`veillectl components finalize`) ;
+  - chapitre d'une veille thématique : `veillectl components chapter` écrit l'Excel au même
+    horodatage que le rapport et affiche `PIECE_JOINTE=<chemin>` ; l'étape « 6 bis » du prompt
+    demande à l'agent de l'ajouter (`--attach`) à l'envoi. Le prompt des veilles rattachées est
+    re-rendu au prochain démarrage (réconciliation), sans action manuelle.
+  - Instantané conservé dans `rapports/` (`<horodatage>-<slug>.xlsx`), hors de la liste des rapports.
+
+### Corrigé
+
+- **Fin d'une analyse sans rechargement** : le badge « en cours » à côté du titre passe tout seul à
+  « actif » (ou « en échec ») et les boutons « Lancer l'analyse » / « Vérifier les statuts » se
+  réactivent. Le suivi du journal (toutes les 5 s) renvoie l'en-tête à jour une seule fois, en
+  échange hors bande htmx : aucun minuteur ni JS supplémentaire (CSP inchangée).
+
+### Sécurité
+
+- Excel : les textes venus du web (titres d'avis, statuts) sont forcés en texte — une valeur
+  « =… » n'est jamais une formule — et purgés des caractères de contrôle ; seuls les liens
+  http(s) validés sont cliquables.
+
 ## [0.3.3] — 2026-10-09
 
 Adresses d'alerte du chien de garde modifiables dans l'interface, sans toucher au `.env`.
