@@ -48,7 +48,7 @@
     <tbody>
     {% for r in reports[:30] %}
       <tr>
-        <td data-label="Date">{{ r.date }}</td>
+        <td data-label="Date" class="nowrap">{{ r.date }}{% if r.time %} {{ r.time }}{% endif %}</td>
         <td data-label="PDF">{% if r.pdf %}<a href="/veilles/{{ v.slug }}/reports/{{ r.pdf }}" target="_blank" rel="noopener">{{ r.pdf }}</a> <span class="muted small">{{ r.size|size }}</span>{% else %}—{% endif %}</td>
         <td data-label="Markdown">{% if r.md %}<a href="/veilles/{{ v.slug }}/reports/{{ r.md }}" target="_blank" rel="noopener">{{ r.md }}</a>{% else %}—{% endif %}</td>
       </tr>

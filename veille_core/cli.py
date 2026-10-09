@@ -61,7 +61,7 @@ def _show(slug: str) -> int:
     if r["components"]:
         print(f"  composants   : {r['components']}")
     for rep in store.list_reports(slug)[:5]:
-        print(f"  rapport      : {rep['date']}  {rep.get('pdf', '(pas de PDF)')}")
+        print(f"  rapport      : {rep['date']} {rep['time'] or '     '}  {rep.get('pdf', '(pas de PDF)')}")
     return 0
 
 

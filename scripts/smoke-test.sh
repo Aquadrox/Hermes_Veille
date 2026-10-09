@@ -136,7 +136,8 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h \
     D=$(date +%F); R=/tmp/h/veilles/smoke-composants/rapports
     echo "{\"notices\":[{\"mpns\":[\"LM317T\"],\"type\":\"EOL\",\"title\":\"Fin de vie\",\"sources\":[{\"url\":\"https://www.ti.com/eol/1\",\"label\":\"TI\"}]}]}" > "$R/$D-pcn.json"
     veillectl components finalize smoke-composants "$R/$D-pcn.json" | grep -q "OK: veille composants — 1 nouvel"
-    size=$(stat -c%s "$R/$D-veille.pdf"); test "$size" -gt 20000
+    set -- "$R/$D"-[0-9][0-9]h[0-9][0-9]-veille.pdf; test -f "$1"  # nom horodaté AAAA-MM-JJ-HHhMM
+    size=$(stat -c%s "$1"); test "$size" -gt 20000
     M=/tmp/h/veilles/smoke-veille/rapports/$D-veille.md; echo "# Rapport" > "$M"
     veillectl components chapter smoke-composants --for smoke-veille --append "$M" | grep -q "PREFIXE_SUJET=\[EOL"
     grep -q "Nouvelles fins de vie" "$M"

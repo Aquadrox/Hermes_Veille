@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import urllib.request
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -34,7 +35,8 @@ from . import auth
 
 HERE = Path(__file__).resolve().parent
 ACTOR = "ui"
-NOTICES_SHOWN = 100  # page de détail (mobile) : au-delà, filtrer par type
+ANCHOR_RE = re.compile(r"c-[0-9a-f]{10}")  # identifiant d'un composant (components.anchor), fullmatch
+COMP_ROWS_SHOWN = 200  # liste des composants : lignes affichées avant « tout afficher » (mobile)
 USER_ERRORS = (StoreError, schedule.ScheduleError, service.ServiceError, hermes.HermesError)
 
 # Messages affichés après redirection : codes en liste blanche (aucun texte réfléchi).
@@ -110,6 +112,8 @@ templates.env.globals["status_class"] = status_class
 templates.env.globals["DAYS"] = schedule.DAYS
 templates.env.globals["NOTICE_TYPES"] = components.TYPES
 templates.env.globals["CRITICAL"] = components.CRITICAL
+templates.env.globals["badge_class"] = components.badge_class
+templates.env.globals["COMP_ROWS_SHOWN"] = COMP_ROWS_SHOWN
 templates.env.globals["FIELDS"] = bom_import.FIELDS
 templates.env.globals["LABELS"] = bom_import.LABELS
 templates.env.globals["column_name"] = bom_import.column_name
@@ -311,7 +315,7 @@ def create_app() -> FastAPI:
             return form_page(request, values, 400, creating=True, error=str(exc))
         return RedirectResponse(f"/veilles/{v.slug}?ok=created", status_code=303)
 
-    def detail_ctx(slug: str, ntype: str = "") -> dict:
+    def detail_ctx(slug: str) -> dict:
         v = store.load(slug)
         row = service.describe(v)
         logs = store.list_run_logs(slug)
@@ -319,32 +323,46 @@ def create_app() -> FastAPI:
         nxt = schedule.next_runs(v.schedule, 3)
         return {"row": row, "v": v, "reports": store.list_reports(slug), "logs": logs, "runs": runs,
                 "next_runs": nxt, "next_peak": bool(nxt) and pricing.is_peak(nxt[0]),
-                "costs": service.costs(slug), **components_ctx(v, ntype)}
+                "costs": service.costs(slug), **components_ctx(v)}
 
-    def components_ctx(v: store.Veille, ntype: str = "") -> dict:
+    def component_rows(slug: str) -> list[dict]:
+        """Tous les composants (et ceux retirés qui ont des avis), une ligne chacun."""
+        return components.group(components.load_notices(slug), components.load_components(slug)["components"],
+                                include_quiet=True)
+
+    def components_ctx(v: store.Veille) -> dict:
         if v.kind != "composants":
             return {}
-        comps = components.load_components(v.slug)["components"]
-        notices = components.load_notices(v.slug)
-        worst = components.worst_by_key(notices)
-        ntype = ntype if ntype in components.TYPES else ""
-        shown = components.for_display(notices, ntype or None)
-        return {"digikey_configured": credentials.status("digikey")["configured"],
-                "comps": [{**c, "worst": worst.get(components.key_of(c["mpn"], c["manufacturer"]))} for c in comps],
-                "notices": shown[:NOTICES_SHOWN], "notices_hidden": max(0, len(shown) - NOTICES_SHOWN),
-                "notice_total": len(notices), "ntype": ntype,
-                "critical": components.digest(comps, notices, [])["reminder"],
+        rows = component_rows(v.slug)
+        return {"digikey_configured": credentials.status("digikey")["configured"], "comp_rows": rows,
+                "critical_count": sum(1 for r in rows if r["critical"] and r["tracked"]),
+                "notice_total": sum(len(r["notices"]) for r in rows),
                 "linked": [x.slug for x in service._linked_veilles(v.slug)]}
 
     @app.get("/veilles/{slug}", response_class=HTMLResponse)
     def detail(request: Request, slug: str):
         try:
-            ctx = detail_ctx(slug, request.query_params.get("type", ""))
+            ctx = detail_ctx(slug)
         except components.ComponentsError as exc:  # fichier corrompu : le dire, pas « introuvable »
             return render(request, "error.html", 500, error=str(exc))
         except StoreError:
             return render(request, "error.html", 404, error="Veille introuvable.")
         return render(request, "veille_detail.html", **ctx)
+
+    @app.get("/veilles/{slug}/components/{anchor}", response_class=HTMLResponse)
+    def component_detail(request: Request, slug: str, anchor: str):
+        """Détail d'un composant, chargé au clic dans la liste (htmx)."""
+        try:
+            if not ANCHOR_RE.fullmatch(anchor) or store.load(slug).kind != "composants":
+                raise StoreError("introuvable")
+            row = next((r for r in component_rows(slug) if r["anchor"] == anchor), None)
+        except components.ComponentsError as exc:
+            return PlainTextResponse(str(exc), status_code=500)
+        except StoreError:
+            row = None
+        if row is None:
+            return PlainTextResponse("composant introuvable", status_code=404)
+        return render(request, "partials/component_detail.html", r=row)
 
     @app.get("/veilles/{slug}/edit", response_class=HTMLResponse)
     def edit_form(request: Request, slug: str):

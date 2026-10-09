@@ -7,6 +7,53 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.3.2] — 2026-10-09
+
+Veille composants lisible avec beaucoup de références, sur PC comme sur mobile ; rapports horodatés.
+
+### Modifié
+
+- **Interface — liste des composants** : les blocs « Fins de vie », « Avis détectés » et
+  « Composants suivis » sont remplacés par **une liste unique de tous les composants**, une ligne
+  chacun : types d'avis en badges, fins de vie / dernières commandes en rouge et en tête, échéance,
+  date de détection, lien vers la source de l'avis le plus critique.
+  - **Recherche en temps réel** (mots-clés, sans casse ni accents) sur le MPN, le fabricant, la
+    réf. interne, les intitulés, numéros et résumés des avis et le statut Digi-Key.
+  - **Filtre par colonne** (composant, fabricant, réf., type d'avis — dont « fin de vie / dernière
+    cde », « avec avis », « sans avis » —, échéance, date de détection) et compteur « N / M ».
+  - **Clic sur un composant** : le détail se déplie sous la ligne (avis complets, sources, statut et
+    fiche Digi-Key, dates de vérification), chargé à la demande ; un échec réseau se réessaie en
+    rouvrant la ligne.
+  - La recherche porte sur **toute** la liste (plus de plafond à 100 avis) ; 200 lignes au plus sont
+    affichées à la fois (« tout afficher » sur demande) pour rester fluide sur mobile avec des
+    milliers de références.
+  - Mobile (PWA) : plus de « tuile » par avis ; lignes compactes sur deux niveaux (MPN · lien /
+    badges · échéance), sans défilement horizontal, colonnes secondaires dans le détail.
+  - Un composant retiré de la liste garde ses avis visibles (« retiré ») mais n'est plus compté ni
+    affiché comme alerte de fin de vie (comme dans le tableau de bord et le rappel).
+  - Filtrage dans `static/app.js` : aucune règle CSP assouplie, aucun script ni style en ligne.
+- **PDF et chapitre composants** : un tableau compact **par composant** (types en badges colorés,
+  échéance, lien), puis une section « Détail par composant » ; le MPN du tableau est un lien vers
+  son détail.
+- **E-mail dédié** : même tableau compact (une ligne par composant, intitulé de l'avis le plus
+  critique) ; le détail est dans le PDF joint.
+- **Rapports horodatés** `AAAA-MM-JJ-HHhMM-veille.{md,pdf}` : relancer une veille le même jour ne
+  remplace plus le rapport précédent. Les anciens noms restent lus partout (interface, MCP, CLI,
+  chien de garde). Veilles thématiques : le prompt fait calculer l'horodatage une seule fois par
+  l'agent (`date +%Y-%m-%d-%Hh%M`) puis le réutiliser.
+- MCP : `list_reports` et `read_report` renvoient aussi l'heure (`time`) et l'horodatage (`stamp`) ;
+  `read_report(date)` accepte un jour (le plus récent de ce jour) ou un horodatage exact ;
+  `get_veille` liste les horodatages des derniers rapports.
+- Chien de garde : l'heure du nom départage les rapports d'un même jour.
+
+### Corrigé
+
+- PDF composants : une longue liste n'est plus reportée en bloc à la page suivante (page 1 à moitié
+  vide, cadre vide en page 2) ; le tableau se coupe entre deux lignes, en-tête répété.
+- Chapitre composants : le jour de livraison est celui du **nom du rapport** et non l'heure de la
+  commande ; une exécution commencée avant minuit n'est plus prise pour un échec (avis renvoyés en
+  double la fois suivante). Le message d'erreur indique le nom de rapport attendu.
+
 ## [0.3.1] — 2026-10-09
 
 Import d'une nomenclature CSV ou Excel dans une veille composants.

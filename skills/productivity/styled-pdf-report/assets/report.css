@@ -149,6 +149,21 @@ nav#TOC a { color: #334155; }
 .critical h2, .critical h3 { color: #b91c1c; background: none; border-left: none; padding-left: 0; }
 .critical thead th { background: #b91c1c; }
 .critical tbody tr:nth-child(even) { background: #fff5f5; }
+/* Types d'avis composants (même code couleur que l'interface : fond plein pour les fins de vie) */
+.badge.eol   { background: #b91c1c; color: #ffffff; border: 1px solid #b91c1c; }
+.badge.ltb   { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
+.badge.nrnd  { background: #fef3c7; color: #a16207; border: 1px solid #fcd34d; }
+.badge.pcn, .badge.autre { background: #dbeafe; color: #1d4ed8; border: 1px solid #93c5fd; }
+/* Tableau compact des composants : coupé entre deux lignes plutôt que reporté en bloc à la page
+   suivante (une longue liste laissait des pages à moitié vides) ; l'en-tête est répété. */
+.comp-table table { break-inside: auto; }
+.comp-table tr { break-inside: avoid; }
+.comp-table .badge, .comp .badge { white-space: nowrap; }
+/* Détail d'un composant (cible des liens du tableau compact) */
+.comp { border-top: 1px solid #e2e8f0; padding: 4pt 0 2pt 0; font-size: 8.6pt; break-inside: avoid; }
+.comp p { margin: 0 0 2pt 0; }
+.comp ul { margin: 0; padding-left: 12pt; }
+.comp li { margin-bottom: 3pt; }
 
 /* ---------- Tables ---------- */
 table { width: 100%; border-collapse: collapse; margin: 8pt 0; font-size: 8.6pt; break-inside: avoid; }

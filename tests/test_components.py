@@ -175,6 +175,71 @@ def test_digest_reminder_and_empty_view():
     assert comp.for_display(notices, "PCN", "2026-01-01")[0]["type"] == "PCN"
 
 
+def _demo_notices():
+    notices = []
+    comp.merge(notices, _valid(ntype="PCN", url="https://a.org/pcn"), "2026-01-01")
+    comp.merge(notices, _valid(ntype="EOL", url="https://a.org/eol", ltb_date="2027-03-31"), "2026-02-01")
+    comps = comp.replace_components([], comp.parse_components(
+        "LM317T;Texas Instruments;R-1\nSTM32F103C8T6;STMicroelectronics\nNE555P;Texas Instruments"))
+    valid, _ = comp.validate_candidates({"notices": [cand(["STM32F103C8T6"], ntype="NRND", url="https://st.com/n")]},
+                                        comps)
+    comp.merge(notices, valid, "2026-03-01")
+    return comps, notices
+
+
+def test_group_one_row_per_component():
+    comps, notices = _demo_notices()
+    rows = comp.group(notices, comps, include_quiet=True)
+    assert [r["mpn"] for r in rows] == ["LM317T", "STM32F103C8T6", "NE555P"]  # critiques, sévérité, sans avis
+    lm = rows[0]
+    assert lm["types"] == ["EOL", "PCN"] and lm["critical"] and lm["deadline"] == "2027-03-31"
+    assert lm["link"]["url"] == "https://a.org/eol" and lm["worst"]["type"] == "EOL" and lm["ref"] == "R-1"
+    assert lm["found"] == "2026-02-01" and lm["tracked"]
+    assert rows[2]["types"] == [] and rows[2]["link"] is None and not rows[2]["critical"]
+    assert [r["mpn"] for r in comp.group(notices, comps)] == ["LM317T", "STM32F103C8T6"]  # sans les silencieux
+    # composant retiré de la liste : ses avis restent visibles
+    gone = comp.group(notices, comps[1:])
+    assert gone[0]["mpn"] == "LM317T" and not gone[0]["tracked"] and gone[0]["ref"] == ""
+    assert not gone[0]["critical"]  # un composant retiré n'est plus une alerte (comme summary / rappel)
+    # ancre : stable, sûre, distincte
+    keys = {r["key"] for r in rows}
+    assert {comp.anchor(k) for k in keys} == {r["anchor"] for r in rows} and len({r["anchor"] for r in rows}) == 3
+    assert all(re.fullmatch(r"c-[0-9a-f]{10}", r["anchor"]) for r in rows)
+    assert comp.badge_class("PDN") == "eol" and comp.badge_class("NRND") == "nrnd"
+
+
+def test_compact_markdown_links_each_row_to_its_detail():
+    comps, notices = _demo_notices()
+    view = comp.digest(comps, notices, notices)
+    md = comp.to_markdown(view)
+    lm = comp.anchor(comp.key_of("LM317T", "Texas Instruments"))
+    assert md.count(f"](#{lm})") == 2  # tableau des nouveautés + rappel
+    assert md.count(f"::: {{#{lm} .comp}}") == 1  # un seul bloc de détail
+    assert "[Fin de vie]{.badge .eol} [Modification \\(PCN\\)]{.badge .pcn}" in md  # 2 avis -> 1 ligne
+    assert md.index("Nouvelles fins de vie") < md.index("Autres nouveaux avis") < md.index("Rappel") \
+        < md.index("Détail par composant")
+    assert "réf. R\\-1" in md and "dernière cde 2027\\-03\\-31" in md
+    text = comp.to_text_email(view)
+    assert "- LM317T (Texas Instruments) : Fin de vie, Modification (PCN) — https://a.org/eol" in text
+    html = comp.to_html_email(view, "T")
+    assert html.count("<tr>") == 1 + 3 + 1 + 1  # en-têtes + lignes : nouveaux (2 tableaux) + rappel
+    assert "background:#fef2f2;padding:6px" in html  # ligne critique teintée
+
+
+@pytest.mark.skipif(not shutil.which("pandoc"), reason="pandoc absent")
+def test_compact_markdown_through_pandoc():
+    """La syntaxe produite (liens internes, badges, blocs) est bien comprise par pandoc."""
+    import subprocess
+    comps, notices = _demo_notices()
+    notices[0]["title"] = "<img src=http://evil/x> | ::: {.x}"
+    md = comp.to_markdown(comp.digest(comps, notices, notices), heading="#")
+    out = subprocess.run(["pandoc", "-f", "markdown+fenced_divs+bracketed_spans+pipe_tables", "-t", "html5"],
+                         input=md, capture_output=True, text=True, check=True).stdout
+    lm = comp.anchor(comp.key_of("LM317T", "Texas Instruments"))
+    assert f'href="#{lm}"' in out and f'<div id="{lm}" class="comp">' in out
+    assert '<span class="badge eol">Fin de vie</span>' in out and "<img" not in out and "&lt;img" in out
+
+
 def test_corrupted_files_are_errors_not_empty(env):
     v = service.create_veille(name="Composants", subject="", schedule_expr=service.COMPONENTS_SCHEDULE,
                               recipients=["a@example.org"], brief="# b\n", kind="composants")
@@ -439,16 +504,36 @@ def test_chapter(watch, tools):
     text = md.read_text()
     assert text.count(service.CHAPTER_MARK) == 1 and text.startswith("# Rapport\n\nTexte.")
     assert text.index("Nouvelles fins de vie") < text.index("Autres nouveaux avis")
-    (v.dir / "rapports" / f"{comp.today()}-veille.pdf").write_bytes(b"%PDF")  # exécution réussie
-    # le lendemain : plus rien de nouveau, mais le rappel des fins de vie reste
+    (v.dir / "rapports" / "2026-10-12-veille.pdf").write_bytes(b"%PDF")  # exécution réussie
+    # la semaine suivante (rapport horodaté, comme le produit le prompt) : plus rien de nouveau,
+    # mais le rappel des fins de vie reste
+    md2 = v.dir / "rapports" / "2026-10-19-06h30-veille.md"
+    md2.write_text("# Rapport\n")
+    assert service.components_chapter(watch.slug, v.slug, md2) == ""
+    assert "Aucun nouvel avis" in md2.read_text() and "Rappel" in md2.read_text()
+
+
+def test_chapter_delivery_day_is_the_report_day(watch, tools):
+    """Une exécution commencée avant minuit (rapport 23h55) dont le chapitre est ajouté après minuit
+    reste rattachée à son rapport : pas de double envoi au run suivant."""
     import veille_core.components as c_mod
+    v = service.create_veille(name="Veille Indus", subject="s", schedule_expr="30 6 * * 1",
+                              recipients=["a@example.org"], brief="# b\n", include_components=watch.slug)
+    finalize(watch, [cand(["NE555P"], ntype="PCN", url="https://a.org/p")])
+    rdir = v.dir / "rapports"
+    md = rdir / "2099-01-04-23h55-veille.md"
+    md.write_text("# r\n")
     orig = c_mod.today
     try:
-        c_mod.today = lambda: "2099-01-01"
-        assert service.components_chapter(watch.slug, v.slug, md) == ""
+        c_mod.today = lambda: "2099-01-05"  # la commande tourne après minuit
+        service.components_chapter(watch.slug, v.slug, md)
     finally:
         c_mod.today = orig
-    assert "Aucun nouvel avis" in md.read_text() and "Rappel" in md.read_text()
+    assert {n["delivered"][c_mod.chapter_channel(v.slug)] for n in comp.load_notices(watch.slug)} == {"2099-01-04"}
+    (rdir / "2099-01-04-23h55-veille.pdf").write_bytes(b"%PDF")  # l'exécution a abouti
+    md2 = rdir / "2099-01-11-23h55-veille.md"
+    md2.write_text("# r\n")
+    assert service.components_chapter(watch.slug, v.slug, md2) == "" and "Aucun nouvel avis" in md2.read_text()
 
 
 def test_chapter_path_validation(watch, tmp_path):
@@ -575,35 +660,93 @@ def ui(watch, monkeypatch):
     return client, login(client)
 
 
-def test_ui_components_detail_and_filters(ui, watch):
+def _rows_html(page: str) -> list[str]:
+    return re.findall(r'<tr class="comp[^"]*"', page)
+
+
+def test_ui_components_list_filters_and_detail(ui, watch):
+    """Une ligne par composant (y compris sans avis), filtrable, détail chargé au clic."""
     client, _ = ui
     service.components_scan(watch.slug, client=FakeClient({"LM317T": {"status": "Last Time Buy",
                                                                       "product_url": "https://www.digikey.com/p/1"}}))
     finalize(watch, [cand(["STM32F103C8T6"], ntype="PCN", url="https://st.com/pcn/1",
-                          title="<script>alert(1)</script>", summary="résumé")])
+                          title="<script>alert(1)</script>", summary="résumé"),
+                     cand(["STM32F103C8T6"], ntype="NRND", url="https://st.com/nrnd/1")])
     r = client.get(f"/veilles/{watch.slug}")
     assert r.status_code == 200 and "script-src 'self'" in r.headers["Content-Security-Policy"]
     t = r.text
-    assert "<script>alert" not in t and "&lt;script&gt;alert(1)&lt;/script&gt;" in t
-    assert t.index('id="fins-de-vie"') < t.index('id="avis"') < t.index('id="rapports"')
-    assert 'href="https://st.com/pcn/1" target="_blank" rel="noopener noreferrer"' in t
-    assert "style=" not in t  # CSP : aucun style en ligne
-    t = client.get(f"/veilles/{watch.slug}?type=PCN").text
-    assert "https://st.com/pcn/1" in t and "https://www.digikey.com/p/1\" target" in t  # tableau des composants
-    t = client.get(f"/veilles/{watch.slug}?type=EOL").text
-    assert "Aucun avis de ce type." in t
-    assert client.get(f"/veilles/{watch.slug}?type=<x>").status_code == 200
+    assert "<script>alert" not in t and "&lt;script&gt;alert(1)&lt;/script&gt;" in t  # dans data-q, échappé
+    assert t.index('id="composants"') < t.index('id="rapports"')
+    assert 'id="fins-de-vie"' not in t and 'id="avis"' not in t  # 3 blocs fusionnés en une liste
+    rows = _rows_html(t)
+    assert len(rows) == 3 and rows[0] == '<tr class="comp crit"'  # LM317T (dernière commande) en tête
+    assert 'data-types="NRND PCN"' in t  # 2 avis -> 1 ligne
+    assert '<tr class="detail"' not in t and "hx-get" not in t  # détail créé et chargé au clic (app.js)
+    assert 'id="comp-search"' in t and t.count("data-col=") == 5 and "data-types aria-label" in t
+    assert 'href="https://st.com/nrnd/1" target="_blank" rel="noopener noreferrer"' in t  # lien du pire avis
+    assert "1 en fin de vie ou dernière commande" in t
+    # CSP : aucun style, gestionnaire d'événement ni script en ligne
+    assert "style=" not in t and not re.search(r"\son[a-z]+=", t)
+    assert all("src=" in tag for tag in re.findall(r"<script[^>]*>", t))
+    # détail au clic (htmx) : avis complets, échappés
+    anchors = dict(re.findall(r'data-detail="/veilles/[^/]+/components/(c-[0-9a-f]{10})".*?<strong>([^<]+)<', t, re.S))
+    assert set(anchors.values()) == {"LM317T", "STM32F103C8T6", "NE555P"}
+    by_mpn = {m: a for a, m in anchors.items()}
+    d = client.get(f"/veilles/{watch.slug}/components/{by_mpn['STM32F103C8T6']}")
+    assert d.status_code == 200 and "<html" not in d.text  # fragment, pas une page
+    assert "&lt;script&gt;" in d.text and "<script>alert" not in d.text and "résumé" in d.text
+    assert d.text.index("Déconseillé") < d.text.index("Modification (PCN)")  # le plus critique d'abord
+    d = client.get(f"/veilles/{watch.slug}/components/{by_mpn['LM317T']}").text
+    assert 'href="https://www.digikey.com/p/1"' in d and "Last Time Buy" in d
+    assert "Aucun avis détecté" in client.get(f"/veilles/{watch.slug}/components/{by_mpn['NE555P']}").text
     dash = client.get("/").text
-    assert "1 en fin de vie" in dash and "badge kind" in dash
+    assert "1 en fin de vie" in dash and f'href="/veilles/{watch.slug}#composants"' in dash
 
 
-def test_ui_caps_notices_shown(ui, watch, monkeypatch):
+@pytest.mark.parametrize("path", ["c-0000000000", "x", "c-ABCDEF0123", "c-00000000000", "..%2F..%2Fcron"])
+def test_ui_component_detail_rejects_unknown(ui, watch, path):
     client, _ = ui
-    import veille_ui.app as app_mod
+    assert client.get(f"/veilles/{watch.slug}/components/{path}").status_code == 404
+
+
+def test_ui_component_detail_other_veilles_and_login(ui, watch):
+    client, _ = ui
+    anchor = comp.anchor(comp.key_of("LM317T", "Texas Instruments"))
+    assert client.get(f"/veilles/{watch.slug}/components/{anchor}").status_code == 200
+    assert client.get(f"/veilles/inconnue/components/{anchor}").status_code == 404
+    v = service.create_veille(name="Veille", subject="", schedule_expr="0 8 * * 1",
+                              recipients=["a@example.org"], brief="# b\n")
+    assert client.get(f"/veilles/{v.slug}/components/{anchor}").status_code == 404  # pas une veille composants
+    client.cookies.clear()
+    r = client.get(f"/veilles/{watch.slug}/components/{anchor}", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+
+
+def test_ui_lists_every_component_without_cap(ui, watch):
+    """Filtrage côté navigateur : la liste doit être complète (plus de plafond à 100 avis)."""
+    client, _ = ui
+    service.add_components(watch.slug, [{"mpn": f"R{i:03d}", "manufacturer": "Yageo", "ref": ""} for i in range(150)])
     finalize(watch, [cand(["LM317T"], ntype="PCN", url=f"https://a.org/{i}") for i in range(3)])
-    monkeypatch.setattr(app_mod, "NOTICES_SHOWN", 2)
     t = client.get(f"/veilles/{watch.slug}").text
-    assert "2 avis affichés, 1 de plus" in t
+    assert len(_rows_html(t)) == 153 and "153 / 153" in t
+
+
+def test_ui_removed_component_keeps_its_notices(ui, watch):
+    client, _ = ui
+    finalize(watch, [cand(["NE555P"], url="https://a.org/eol")])
+    service.remove_components(watch.slug, ["NE555P"])
+    t = client.get(f"/veilles/{watch.slug}").text
+    assert len(_rows_html(t)) == 3 and "(retiré)" in t
+    assert '<tr class="comp crit"' not in t and "en fin de vie ou dernière commande" not in t  # plus une alerte
+    d = client.get(f"/veilles/{watch.slug}/components/{comp.anchor(comp.key_of('NE555P', 'Texas Instruments'))}")
+    assert d.status_code == 200 and "retiré de la liste suivie" in d.text and "https://a.org/eol" in d.text
+
+
+def test_ui_empty_component_list(ui, watch):
+    client, _ = ui
+    service.remove_components(watch.slug, ["LM317T", "STM32F103C8T6", "NE555P"])
+    t = client.get(f"/veilles/{watch.slug}").text
+    assert "Aucun composant suivi" in t and not _rows_html(t) and "0 / 0" in t
 
 
 def test_ui_create_and_edit_components(ui):
@@ -730,7 +873,7 @@ def test_chapter_reincludes_notices_of_failed_run(watch, tools):
         md2.write_text("# r\n")
         service.components_chapter(watch.slug, v.slug, md2)
         assert "Autres nouveaux avis" in md2.read_text()  # réinclus
-        (rdir / "2099-01-12-veille.pdf").write_bytes(b"%PDF")  # cette fois le rapport est produit
+        (rdir / "2099-01-12-06h30-veille.pdf").write_bytes(b"%PDF")  # rapport produit (nom horodaté)
         c_mod.today = lambda: "2099-01-19"
         md3 = rdir / "2099-01-19-veille.md"
         md3.write_text("# r\n")
@@ -890,3 +1033,50 @@ def test_mcp_check_component_statuses(watch, with_keys, spawned):
     out = data(call(srv, "check_component_statuses", {"slug": watch.slug}))
     assert out["started"] is True and spawned[0]["cmd"][-1] == "--status-only"
     assert "AUCUN" in tools(srv)["run_veille_now"].description
+
+
+# --------------------------------------------------------------------------
+# Rapports horodatés (AAAA-MM-JJ-HHhMM) : plusieurs exécutions le même jour ne s'écrasent plus
+# --------------------------------------------------------------------------
+def test_two_runs_the_same_day_keep_both_reports(watch, tools, monkeypatch):
+    stamps = iter(["2026-10-09-09h05", "2026-10-09-14h30"])
+    monkeypatch.setattr(store, "report_stamp", lambda: next(stamps))
+    finalize(watch, [cand(["LM317T"])])
+    finalize(watch, [])
+    reps = store.list_reports(watch.slug)
+    assert [(r["stamp"], r["date"], r["time"]) for r in reps] == [
+        ("2026-10-09-14h30", "2026-10-09", "14:30"), ("2026-10-09-09h05", "2026-10-09", "09:05")]
+    assert all(r["pdf"] == f"{r['stamp']}-veille.pdf" and r["md"] == f"{r['stamp']}-veille.md" for r in reps)
+    args = tools()[-1]["args"]
+    assert args[args.index("--attach") + 1].endswith("2026-10-09-14h30-veille.pdf")
+
+
+def test_report_names_whitelist_and_legacy(env):
+    import datetime as dt
+    assert store.report_stamp(dt.datetime(2026, 10, 9, 7, 5)) == "2026-10-09-07h05"
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{2}h\d{2}", store.report_stamp())
+    ok = ["2026-10-09-14h30-veille.pdf", "2026-10-09-14h30-veille.md", "2026-10-09-veille.pdf"]
+    bad = ["2026-10-09-14:30-veille.pdf", "2026-10-09-1430-veille.pdf", "../2026-10-09-veille.pdf",
+           "2026-10-09-14h30-veille.pdf.exe", "2026-10-09-14h3-veille.pdf", "2026-10-09-14h30-charts.json"]
+    assert all(store.REPORT_RE.match(n) for n in ok) and not any(store.REPORT_RE.match(n) for n in bad)
+    v = service.create_veille(name="Veille", subject="", schedule_expr="0 8 * * 1",
+                              recipients=["a@example.org"], brief="# b\n")
+    rdir = v.dir / "rapports"
+    for name in ("2026-10-08-veille.pdf", "2026-10-09-veille.pdf", "2026-10-09-08h00-veille.pdf",
+                 "2026-10-09-08h00-veille.md", "2026-10-09-18h45-veille.pdf", "2026-10-09-18h45-charts.json"):
+        (rdir / name).write_bytes(b"%PDF")
+    reps = store.list_reports(v.slug)
+    assert [r["stamp"] for r in reps] == ["2026-10-09-18h45", "2026-10-09-08h00", "2026-10-09", "2026-10-08"]
+    assert reps[1]["md"] and reps[2]["time"] == "" and reps[2]["date"] == "2026-10-09"
+    for name in bad:
+        with pytest.raises(store.StoreError, match="nom de rapport invalide"):
+            store.report_path(v.slug, name)
+
+
+def test_prompts_fix_the_timestamp_once(watch):
+    v = service.create_veille(name="Veille Indus", subject="s", schedule_expr="30 6 * * 1",
+                              recipients=["a@example.org"], brief="# b\n", include_components=watch.slug)
+    for x in (watch, v):
+        prompt = (x.dir / "job-prompt.md").read_text()
+        assert "`date +%Y-%m-%d-%Hh%M`" in prompt and "UNE SEULE FOIS" in prompt and "${" not in prompt
+    assert f"--append {v.dir}/rapports/D-veille.md" in (v.dir / "job-prompt.md").read_text()

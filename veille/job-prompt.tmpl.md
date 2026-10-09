@@ -7,6 +7,7 @@ OBJECTIF : produire le rapport de veille au format PDF stylé et l'envoyer par e
 RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 - Brief de mission : `${dir}/config.md`
 - Rapports (historique + sortie du jour) : `${dir}/rapports/`
+- D = horodatage de l'exécution, au format AAAA-MM-JJ-HHhMM (ex. 2026-10-09-14h30) : obtiens-le UNE SEULE FOIS, au tout début, avec la commande `date +%Y-%m-%d-%Hh%M`, puis réutilise EXACTEMENT la même valeur à chaque étape (deux exécutions le même jour ne doivent pas s'écraser).
 - Destinataires (un par ligne) : `${dir}/recipients.txt`
 - Skill PDF : `/opt/data/skills/productivity/styled-pdf-report/scripts/build_report.py`
 - Skill e-mail : `/opt/data/skills/email/brevo-email/scripts/brevo_send.py`
@@ -21,7 +22,7 @@ RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 
 4. RECHERCHE : web_search / web_extract sur la période couverte, selon les thèmes du brief. Vérifie chaque source (date exacte, lien précis vers l'article), recoupe les faits clés.
 
-5. RÉDIGE le corps du rapport en Markdown enrichi, EXACTEMENT selon les conventions du brief (blocs `::: {.keyfigures}` avec `.fig`, `::: {.card}` avec badges, `::: {.callout}`, `::: {.timeline}`, `::: {.glossary}`, `::: {.sources}`, tableaux pipe, et UN `<div class="chart-slot"></div>`). Rédige en FRANÇAIS. Écris-le dans `${dir}/rapports/D-veille.md` (D = date du jour AAAA-MM-JJ).
+5. RÉDIGE le corps du rapport en Markdown enrichi, EXACTEMENT selon les conventions du brief (blocs `::: {.keyfigures}` avec `.fig`, `::: {.card}` avec badges, `::: {.callout}`, `::: {.timeline}`, `::: {.glossary}`, `::: {.sources}`, tableaux pipe, et UN `<div class="chart-slot"></div>`). Rédige en FRANÇAIS. Écris-le dans `${dir}/rapports/D-veille.md` (D : voir RÉPERTOIRES).
 
 6. DONNÉES DU GRAPHIQUE : écris `${dir}/rapports/D-charts.json` au format {"charts":[{"title":"...","source":"...","bars":[{"label":"...","value":N,"value_label":"..."}]}]}.${components_step}
 

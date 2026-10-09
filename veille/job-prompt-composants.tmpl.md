@@ -6,7 +6,8 @@ OBJECTIF : trouver les avis PCN (modification de produit), PDN / EOL (fin de vie
 
 RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 - Brief de recherche : `${dir}/config.md`
-- Sortie du jour : `${dir}/rapports/D-pcn.json` (D = date du jour AAAA-MM-JJ)
+- Sortie de l'exécution : `${dir}/rapports/D-pcn.json`
+- D = horodatage de l'exécution, au format AAAA-MM-JJ-HHhMM (ex. 2026-10-09-14h30) : obtiens-le UNE SEULE FOIS, au tout début, avec la commande `date +%Y-%m-%d-%Hh%M`, puis réutilise EXACTEMENT la même valeur à chaque étape (deux exécutions le même jour ne doivent pas s'écraser).
 
 ÉTAPES OBLIGATOIRES, dans cet ordre :
 

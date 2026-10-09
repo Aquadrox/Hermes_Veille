@@ -724,7 +724,8 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         raise comp.ComponentsError(f"fichier introuvable : {candidates}") from None
     except (OSError, ValueError) as exc:
         raise comp.ComponentsError(f"JSON invalide ({exc}) : corriger le fichier et relancer") from None
-    day = comp.today()
+    stamp = store.report_stamp()
+    day = stamp[:10]  # un seul instant : jour des livraisons et nom du rapport toujours d'accord
     with _locked():
         data, notices = comp.load_components(slug), comp.load_notices(slug)
         valid, rejected = comp.validate_candidates(raw, data["components"])
@@ -747,9 +748,9 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
              f"{', '.join(comp.md_escape(m) for m in searched) or 'aucune'}.*\n")
     if rejected:
         body += f"\n*{len(rejected)} entrée(s) de la recherche web rejetée(s) (source ou référence invalide).*\n"
-    md, pdf = store.veille_dir(slug) / "rapports" / f"{day}-veille.md", store.veille_dir(slug) / "rapports" / f"{day}-veille.pdf"
+    md, pdf = (store.veille_dir(slug) / "rapports" / f"{stamp}-veille.{ext}" for ext in ("md", "pdf"))
     store.atomic_write(md, body)
-    _build_pdf(v, md, pdf, subtitle=f"Avis PCN et fins de vie — {day}",
+    _build_pdf(v, md, pdf, subtitle=f"Avis PCN et fins de vie — {stamp[:10]} {stamp[11:]}",
                meta=f"Composants suivis : {view['components']} | Recherche web du jour : {len(lot)}")
     _mark(slug, {n["id"] for n in report}, "report", day)
     lines = [f"OK: veille composants — {len(new)} nouvel(s) avis "
@@ -788,19 +789,22 @@ def components_chapter(slug: str, for_slug: str, report_md: Path, actor: str = "
     path = report_md.resolve()
     if path.parent != rdir.resolve() or not store.REPORT_RE.match(path.name) \
             or not path.name.endswith(".md") or not path.is_file():
-        raise StoreError(f"rapport Markdown invalide pour la veille {for_slug} : {report_md}")
+        raise StoreError(f"rapport Markdown invalide pour la veille {for_slug} : {report_md} "
+                         f"(attendu : {rdir}/AAAA-MM-JJ-HHhMM-veille.md, fichier existant)")
     try:
         _components_veille(slug)
     except StoreError:
         return None
     if target.components != slug:
         raise StoreError(f"la veille {for_slug} n'inclut pas la veille composants {slug}")
-    day, channel = comp.today(), comp.chapter_channel(for_slug)
+    # Jour de livraison = jour inscrit dans le NOM du rapport (et non l'heure de cette commande) :
+    # une exécution commencée avant minuit reste rattachée à son rapport (détection des échecs).
+    day, channel = path.name[:10], comp.chapter_channel(for_slug)
     with _locked():
         data, notices = comp.load_components(slug), comp.load_notices(slug)
         # Livrés un jour où la veille n'a finalement produit aucun PDF (exécution en échec après
         # l'ajout du chapitre) : pas réellement envoyés, donc réinclus.
-        failed = {d for d in comp.delivery_days(notices, channel) if not (rdir / f"{d}-veille.pdf").is_file()}
+        failed = {d for d in comp.delivery_days(notices, channel) if not any(rdir.glob(f"{d}*-veille.pdf"))}
         new = comp.pending(notices, channel, {day} | failed)
         view = comp.digest(data["components"], notices, new)
         text = path.read_text(encoding="utf-8").split(CHAPTER_MARK)[0].rstrip()

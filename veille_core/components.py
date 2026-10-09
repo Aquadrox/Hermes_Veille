@@ -429,6 +429,50 @@ def worst_by_key(notices: list[dict]) -> dict[str, dict]:
     return out
 
 
+def badge_class(ntype: str) -> str:
+    """Classe CSS du badge d'un type d'avis (interface et PDF) : les fins de vie partagent « eol »."""
+    return "eol" if ntype in ("EOL", "PDN", "OBSOLETE") else ntype.lower()
+
+
+def anchor(key: str) -> str:
+    """Identifiant HTML / pandoc sûr d'un composant (la clé contient « | » et du texte libre)."""
+    return "c-" + hashlib.sha1(key.encode()).hexdigest()[:10]
+
+
+def group(notices: list[dict], components: list[dict], include_quiet: bool = False) -> list[dict]:
+    """Une ligne par composant : ses avis (le plus critique puis le plus récent d'abord), ses types,
+    l'échéance et le lien de son avis le plus critique.
+
+    `include_quiet` ajoute les composants suivis sans avis ; les avis d'un composant retiré de la
+    liste restent affichés (`tracked` faux) mais ne sont plus une alerte (`critical` faux, comme dans
+    `summary` et le rappel). Tri : critiques, puis criticité, échéance, MPN.
+    """
+    by_key = {key_of(c["mpn"], c["manufacturer"]): c for c in components}
+    buckets: dict[str, list[dict]] = {k: [] for k in by_key} if include_quiet else {}
+    for n in notices:
+        buckets.setdefault(n["key"], []).append(n)
+    rows = []
+    for key, ns in buckets.items():
+        ns = sorted(sorted(ns, key=lambda n: n["found_at"], reverse=True), key=lambda n: severity(n["type"]))
+        c = by_key.get(key) or {}
+        dk = c.get("dk") or {}
+        worst = ns[0] if ns else None
+        link = worst["sources"][0] if worst else (
+            {"url": dk["product_url"], "label": "Digi-Key"} if dk.get("product_url") else None)
+        rows.append({
+            "key": key, "anchor": anchor(key), "tracked": bool(c), "dk": dk,
+            "mpn": c.get("mpn") or worst["mpn"], "manufacturer": c.get("manufacturer") or worst["manufacturer"],
+            "ref": c.get("ref") or "", "web_checked_at": c.get("web_checked_at"), "notices": ns, "worst": worst, "link": link,
+            "types": list(dict.fromkeys(n["type"] for n in ns)),
+            "critical": bool(c) and any(n["type"] in CRITICAL for n in ns),
+            "deadline": next((d for n in ns if (d := n.get("ltb_date") or n.get("eol_date"))), ""),
+            "found": max((n["found_at"] for n in ns), default=""),
+        })
+    rows.sort(key=lambda r: (not r["critical"], severity(r["types"][0]) if r["types"] else 99,
+                             r["deadline"] or "9999", r["mpn"]))
+    return rows
+
+
 def summary(components: list[dict], notices: list[dict]) -> dict:
     worst = worst_by_key(notices)
     keys = {key_of(c["mpn"], c["manufacturer"]) for c in components}
@@ -439,7 +483,6 @@ def summary(components: list[dict], notices: list[dict]) -> dict:
 def digest(components: list[dict], notices: list[dict], new: list[dict]) -> dict:
     """Vue commune au rapport, au chapitre et à l'e-mail."""
     keys = {key_of(c["mpn"], c["manufacturer"]) for c in components}
-    refs = {key_of(c["mpn"], c["manufacturer"]): c.get("ref", "") for c in components}
     worst = worst_by_key(notices)
     reminder = _sort([w for k, w in worst.items() if k in keys and w["type"] in CRITICAL])
     new = _sort(new)
@@ -447,7 +490,7 @@ def digest(components: list[dict], notices: list[dict], new: list[dict]) -> dict
         "new_critical": [n for n in new if n["type"] in CRITICAL],
         "new_other": [n for n in new if n["type"] not in CRITICAL],
         "reminder": reminder,
-        "refs": refs,
+        "comps": components,
         "components": len(components),
         "web_checked": sum(1 for c in components if c.get("web_checked_at")),
         "dk_checked": sum(1 for c in components if (c.get("dk") or {}).get("status")),
@@ -480,24 +523,60 @@ def _md_sources(n: dict) -> str:
     return " · ".join(f"[{md_escape(s['label'])}]({_md_url(s['url'])})" for s in n["sources"])
 
 
-def _md_table(rows: list[dict], refs: dict[str, str]) -> list[str]:
-    out = ["| Composant | Fabricant | Réf. interne | Avis | Dernière cde | Sources |",
-           "|---|---|---|---|---|---|"]
-    for n in rows:
-        title = f"**{md_escape(TYPES[n['type']][0])}** — {md_escape(n['title'])}"
+def _sections(view: dict, reminder_limit: int) -> tuple[list[dict], list[dict], list[dict]]:
+    """Lignes par composant communes au PDF et à l'e-mail : (nouveaux critiques, autres nouveaux, rappel)."""
+    rows = group(view["new_critical"] + view["new_other"], view["comps"])
+    return ([r for r in rows if r["critical"]], [r for r in rows if not r["critical"]],
+            group(view["reminder"][:reminder_limit], view["comps"]))
+
+
+def _md_badges(types: list[str]) -> str:
+    return " ".join(f"[{md_escape(TYPES[t][0])}]{{.badge .{badge_class(t)}}}" for t in types)
+
+
+def _md_link(link: dict | None) -> str:
+    return f"[{md_escape(link['label'])}]({_md_url(link['url'])})" if link else "—"
+
+
+def _md_table(rows: list[dict]) -> list[str]:
+    """Tableau compact : une ligne par composant ; le MPN renvoie à son détail (lien interne).
+    Bloc `.comp-table` : le tableau peut se couper entre deux pages (sinon une longue liste saute de page)."""
+    out = ["::: {.comp-table}", "| Composant | Fabricant | Avis | Échéance | Lien |", "|---|---|---|---|---|"]
+    out += [f"| [**{md_escape(r['mpn'])}**](#{r['anchor']}) | {md_escape(r['manufacturer'])} "
+            f"| {_md_badges(r['types'])} | {md_escape(r['deadline'] or '—')} | {_md_link(r['link'])} |" for r in rows]
+    return [*out, ":::"]
+
+
+def _md_detail(r: dict) -> list[str]:
+    head = f"**{md_escape(r['mpn'])}** — {md_escape(r['manufacturer'])}"
+    if r["ref"]:
+        head += f" · réf. {md_escape(r['ref'])}"
+    out = [f"::: {{#{r['anchor']} .comp}}", head, ""]
+    for n in r["notices"]:
+        line = f"- {_md_badges([n['type']])} **{md_escape(n['title'])}**"
         if n.get("number"):
-            title += f" ({md_escape(n['number'])})"
+            line += f" ({md_escape(n['number'])})"
         if n.get("scope") == "gamme":
-            title += " · *gamme*"
-        out.append(f"| **{md_escape(n['mpn'])}** | {md_escape(n['manufacturer'])} | {md_escape(refs.get(n['key']))} "
-                   f"| {title} | {md_escape(n.get('ltb_date') or n.get('eol_date') or '—')} | {_md_sources(n)} |")
-    return out
+            line += " · *gamme*"
+        dates = [f"{label} {md_escape(n[f])}" for f, label in (("published", "publié"), ("ltb_date", "dernière cde"),
+                                                              ("eol_date", "fin de vie"), ("found_at", "détecté"))
+                 if n.get(f)]
+        out.append(line + (" — " + " · ".join(dates) if dates else "") + "\\")
+        if n.get("summary"):
+            out.append(f"  {md_escape(n['summary'])}\\")
+        out.append(f"  Sources : {_md_sources(n)}")
+    return [*out, ":::", ""]
 
 
 def to_markdown(view: dict, heading: str = "##", reminder_limit: int = 200) -> str:
-    """Chapitre (heading « ## ») ou corps de rapport (« # ») au format du skill PDF."""
+    """Chapitre (heading « ## ») ou corps de rapport (« # ») au format du skill PDF : tableaux
+    compacts par composant, puis le détail de chacun (cible des liens du tableau)."""
     h, sub = heading, heading + "#"
     crit, other, rem = view["new_critical"], view["new_other"], view["reminder"]
+    crit_rows, other_rows, rem_rows = _sections(view, reminder_limit)
+    # détail : chaque avis affiché (nouveautés et rappel), une seule fois
+    shown = {id(n): n for n in crit + other + rem[:reminder_limit]}
+    detail_rows = group(list(shown.values()), view["comps"])
     lines = [f"{h} Composants — PCN & fins de vie", "",
              "::: {.keyfigures}",
              "::: {.fig}", f"**{len(crit)}**", "", "nouvelle(s) fin(s) de vie / dernière(s) commande(s)", ":::",
@@ -505,71 +584,89 @@ def to_markdown(view: dict, heading: str = "##", reminder_limit: int = 200) -> s
              "::: {.fig}", f"**{len(rem)}** / {view['components']}", "",
              "composant(s) suivi(s) en fin de vie ou en dernière commande", ":::",
              ":::", ""]
-    if crit:
+    if crit_rows:
         lines += ["::: {.critical}", f"{sub} Nouvelles fins de vie et dernières commandes", "",
-                  *_md_table(crit, view["refs"]), ":::", ""]
-    if other:
-        lines += [f"{sub} Autres nouveaux avis", "", *_md_table(other, view["refs"]), ""]
-    if not crit and not other:
+                  *_md_table(crit_rows), ":::", ""]
+    if other_rows:
+        lines += [f"{sub} Autres nouveaux avis", "", *_md_table(other_rows), ""]
+    if not crit_rows and not other_rows:
         lines += ["::: {.note}", "Aucun nouvel avis depuis le précédent envoi.", ":::", ""]
-    if rem:
-        lines += [f"{sub} Rappel : composants en fin de vie ou en dernière commande", "",
-                  *_md_table(rem[:reminder_limit], view["refs"]), ""]
+    if rem_rows:
+        lines += [f"{sub} Rappel : composants en fin de vie ou en dernière commande", "", *_md_table(rem_rows), ""]
         if len(rem) > reminder_limit:
             lines += [f"*… et {len(rem) - reminder_limit} autres : voir l'interface.*", ""]
+    if detail_rows:
+        lines += [f"{sub} Détail par composant", ""]
+        for r in detail_rows:
+            lines += _md_detail(r)
     lines += [f"*Couverture : {view['components']} composants suivis ; statut Digi-Key connu pour "
               f"{view['dk_checked']} ; recherche web effectuée au moins une fois pour {view['web_checked']}.*", ""]
     return "\n".join(lines)
 
 
+# Couleurs des badges de l'e-mail (styles en ligne) : (texte, fond) ; fond plein pour les fins de vie.
+_MAIL_BADGE = {"eol": ("#ffffff", "#b91c1c"), "ltb": ("#b91c1c", "#ffffff"), "nrnd": ("#a16207", "#ffffff"),
+               "pcn": ("#1d4ed8", "#ffffff"), "autre": ("#1d4ed8", "#ffffff")}
+
+
 def to_html_email(view: dict, title: str, ui_hint: str = "") -> str:
-    """Corps d'e-mail HTML autonome (styles en ligne : les clients mail ignorent les feuilles)."""
+    """Corps d'e-mail HTML autonome (styles en ligne : les clients mail ignorent les feuilles) :
+    tableau compact par composant, le détail est dans le PDF joint."""
     esc = html.escape
+
+    def badges(types: list[str]) -> str:
+        out = []
+        for t in types:
+            ink, bg = _MAIL_BADGE[badge_class(t)]
+            out.append(f'<span style="display:inline-block;white-space:nowrap;font-size:11px;font-weight:bold;'
+                       f'padding:1px 6px;margin:1px 2px 1px 0;border-radius:9px;border:1px solid {bg if bg != "#ffffff" else ink};'
+                       f'color:{ink};background:{bg}">{esc(TYPES[t][0])}</span>')
+        return "".join(out)
 
     def table(rows: list[dict], color: str) -> str:
         head = "".join(f'<th style="text-align:left;padding:6px;background:{color};color:#fff">{c}</th>'
-                       for c in ("Composant", "Avis", "Dernière cde", "Sources"))
+                       for c in ("Composant", "Avis", "Échéance", "Lien"))
         body = []
-        for n in rows:
-            src = " · ".join(f'<a href="{esc(s["url"])}">{esc(s["label"])}</a>' for s in n["sources"])
-            avis = f"<b>{esc(TYPES[n['type']][0])}</b> — {esc(n['title'])}"
-            if n.get("number"):
-                avis += f" ({esc(n['number'])})"
-            ref = view["refs"].get(n["key"], "")
-            who = f"<b>{esc(n['mpn'])}</b><br><small>{esc(n['manufacturer'])}{' · ' + esc(ref) if ref else ''}</small>"
-            date = esc(n.get("ltb_date") or n.get("eol_date") or "—")
-            cells = (who, avis, f'<span style="white-space:nowrap">{date}</span>', src)
-            body.append("<tr>" + "".join(f'<td style="padding:6px;border-bottom:1px solid #e2e8f0;'
+        for r in rows:
+            link = (f'<a href="{esc(r["link"]["url"])}">{esc(r["link"]["label"])}</a>' if r["link"] else "—")
+            who = (f"<b>{esc(r['mpn'])}</b><br><small>{esc(r['manufacturer'])}"
+                   f"{' · ' + esc(r['ref']) if r['ref'] else ''}</small>")
+            avis = f'{badges(r["types"])}<br><small>{esc(r["worst"]["title"])}</small>'
+            cells = (who, avis, f'<span style="white-space:nowrap">{esc(r["deadline"] or "—")}</span>', link)
+            tint = "background:#fef2f2;" if r["critical"] else ""
+            body.append("<tr>" + "".join(f'<td style="{tint}padding:6px;border-bottom:1px solid #e2e8f0;'
                                           f'vertical-align:top">{c}</td>' for c in cells) + "</tr>")
         return (f'<table style="border-collapse:collapse;width:100%;font-size:13px">'
                 f"<tr>{head}</tr>{''.join(body)}</table>")
 
-    crit, other, rem = view["new_critical"], view["new_other"], view["reminder"]
+    crit_rows, other_rows, rem_rows = _sections(view, 200)
+    rem = view["reminder"]
     parts = ['<div style="font-family:Arial,sans-serif;color:#1f2933;max-width:900px">',
              f"<h2 style=\"margin:0 0 12px\">{esc(title)}</h2>"]
-    if crit:
+    if crit_rows:
         parts.append(f'<div style="border-left:6px solid #b91c1c;background:#fef2f2;padding:10px;margin:12px 0">'
-                     f'<h3 style="color:#b91c1c;margin:0 0 8px">⚠ {len(crit)} nouvelle(s) fin(s) de vie / '
-                     f"dernière(s) commande(s)</h3>{table(crit, '#b91c1c')}</div>")
-    if other:
-        parts.append(f"<h3>Autres nouveaux avis ({len(other)})</h3>{table(other, '#0f766e')}")
-    if not crit and not other:
+                     f'<h3 style="color:#b91c1c;margin:0 0 8px">⚠ {len(crit_rows)} composant(s) avec une nouvelle '
+                     f"fin de vie / dernière commande</h3>{table(crit_rows, '#b91c1c')}</div>")
+    if other_rows:
+        parts.append(f"<h3>Autres nouveaux avis ({len(other_rows)} composant(s))</h3>{table(other_rows, '#0f766e')}")
+    if not crit_rows and not other_rows:
         parts.append("<p>Aucun nouvel avis depuis le précédent envoi.</p>")
-    if rem:
+    if rem_rows:
         parts.append(f"<h3>Rappel : {len(rem)} composant(s) en fin de vie ou en dernière commande</h3>"
-                     f"{table(rem[:200], '#7f1d1d')}")
+                     f"{table(rem_rows, '#7f1d1d')}")
     parts.append(f'<p style="color:#66727f;font-size:12px">{view["components"]} composants suivis. '
-                 f"{esc(ui_hint)}</p></div>")
+                 f"Détail de chaque avis dans le PDF joint. {esc(ui_hint)}</p></div>")
     return "".join(parts)
 
 
 def to_text_email(view: dict) -> str:
+    crit_rows, other_rows, _ = _sections(view, 0)
     lines = []
-    for label, rows in (("NOUVELLES FINS DE VIE / DERNIÈRES COMMANDES", view["new_critical"]),
-                        ("AUTRES NOUVEAUX AVIS", view["new_other"])):
+    for label, rows in (("NOUVELLES FINS DE VIE / DERNIÈRES COMMANDES", crit_rows),
+                        ("AUTRES NOUVEAUX AVIS", other_rows)):
         if rows:
-            lines.append(f"{label} ({len(rows)})")
-            lines += [f"- {n['mpn']} ({n['manufacturer']}) : {TYPES[n['type']][0]} — {n['title']} — "
-                      f"{n['sources'][0]['url']}" for n in rows]
+            lines.append(f"{label} ({len(rows)} composant(s))")
+            lines += [f"- {r['mpn']} ({r['manufacturer']}) : {', '.join(TYPES[t][0] for t in r['types'])}"
+                      f"{' — ' + r['link']['url'] if r['link'] else ''}" for r in rows]
             lines.append("")
     return "\n".join(lines) or "Aucun nouvel avis depuis le précédent envoi."

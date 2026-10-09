@@ -145,6 +145,17 @@ def test_reports_and_host_paths(srv, demo, monkeypatch):
     assert rep["date"] == "2026-10-05" and "Trois messages clés" in rep["markdown"]
     r = call(srv, "read_report", {"slug": "veille-cyber", "date": "2020-01-01"})
     assert r.is_error
+    (rdir / "2026-10-05-17h40-veille.md").write_text("# Relance du soir\n")  # 2e rapport du même jour
+    reports = data(call(srv, "list_reports", {"slug": "veille-cyber"}))
+    assert [(r["date"], r["time"]) for r in reports] == [("2026-10-05", "17:40"), ("2026-10-05", "")]
+    rep = data(call(srv, "read_report", {"slug": "veille-cyber", "date": "2026-10-05"}))
+    assert rep["time"] == "17:40" and "Relance du soir" in rep["markdown"]
+    rep = data(call(srv, "read_report", {"slug": "veille-cyber", "date": "2026-10-05"}))
+    (rdir / "2026-10-05-09h05-veille.md").write_text("# Run du matin\n")
+    early = data(call(srv, "read_report", {"slug": "veille-cyber", "date": "2026-10-05-09h05"}))
+    assert early["time"] == "09:05" and "Run du matin" in early["markdown"]  # rapport antérieur du même jour
+    assert data(call(srv, "get_veille", {"slug": "veille-cyber"}))["reports"][:3] == [
+        "2026-10-05-17h40", "2026-10-05-09h05", "2026-10-05"]
 
 
 def test_preview_schedule_and_health(srv, demo):
