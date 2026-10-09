@@ -122,7 +122,8 @@ def test_compose_config_resolves_data_dir(tmp_path):
     [volume] = service["volumes"]
     assert volume["type"] == "bind" and volume["target"] == "/opt/data"
     assert volume["source"] == "/srv/veille-hermes/data"
-    assert volume["bind"]["create_host_path"] is False
+    # Selon la version de compose, la valeur par défaut (false) est omise de la sortie JSON.
+    assert volume.get("bind", {}).get("create_host_path", False) is False
     assert all(p["host_ip"] == "127.0.0.1" for p in service["ports"])
 
 
