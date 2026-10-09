@@ -747,9 +747,10 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
              f"{', '.join(comp.md_escape(m) for m in searched) or 'aucune'}.*\n")
     if rejected:
         body += f"\n*{len(rejected)} entrée(s) de la recherche web rejetée(s) (source ou référence invalide).*\n"
-    md, pdf = store.veille_dir(slug) / "rapports" / f"{day}-veille.md", store.veille_dir(slug) / "rapports" / f"{day}-veille.pdf"
+    stamp = store.report_stamp()
+    md, pdf = (store.veille_dir(slug) / "rapports" / f"{stamp}-veille.{ext}" for ext in ("md", "pdf"))
     store.atomic_write(md, body)
-    _build_pdf(v, md, pdf, subtitle=f"Avis PCN et fins de vie — {day}",
+    _build_pdf(v, md, pdf, subtitle=f"Avis PCN et fins de vie — {stamp[:10]} {stamp[11:]}",
                meta=f"Composants suivis : {view['components']} | Recherche web du jour : {len(lot)}")
     _mark(slug, {n["id"] for n in report}, "report", day)
     lines = [f"OK: veille composants — {len(new)} nouvel(s) avis "
@@ -800,7 +801,7 @@ def components_chapter(slug: str, for_slug: str, report_md: Path, actor: str = "
         data, notices = comp.load_components(slug), comp.load_notices(slug)
         # Livrés un jour où la veille n'a finalement produit aucun PDF (exécution en échec après
         # l'ajout du chapitre) : pas réellement envoyés, donc réinclus.
-        failed = {d for d in comp.delivery_days(notices, channel) if not (rdir / f"{d}-veille.pdf").is_file()}
+        failed = {d for d in comp.delivery_days(notices, channel) if not any(rdir.glob(f"{d}*-veille.pdf"))}
         new = comp.pending(notices, channel, {day} | failed)
         view = comp.digest(data["components"], notices, new)
         text = path.read_text(encoding="utf-8").split(CHAPTER_MARK)[0].rstrip()

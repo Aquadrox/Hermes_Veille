@@ -9,3 +9,11 @@ Lancer l'analyse complète de « {{ v.name }} » maintenant (statut Digi-Key, re
 Lancer « {{ v.name }} » maintenant ? Un rapport sera envoyé aux destinataires.
 {%- endif -%}
 {%- endmacro %}
+
+{# Avis composants : badge du type (fond plein pour les fins de vie) et liens des sources. #}
+{% macro badge(t) -%}
+<span class="badge {{ badge_class(t) }}">{{ NOTICE_TYPES[t][0] }}</span>
+{%- endmacro %}
+{% macro source_link(s) -%}
+<a href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ s.label }}</a>
+{%- endmacro %}

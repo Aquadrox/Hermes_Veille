@@ -70,8 +70,12 @@ Fonctions :
 - **détail** : historique complet des rapports (PDF et Markdown, en tête de page), journal du
   lancement en cours (rafraîchi en direct), coût des exécutions,
   historique d'exécution Hermes, e-mail de test, **archivage** (rien n'est effacé) ;
-- **veille composants** : liste des références, bandeau des fins de vie, avis filtrables par type
-  avec leurs liens sources, état Digi-Key de chaque référence ; boutons « Lancer l'analyse »
+- **veille composants** : **liste unique de tous les composants**, une ligne chacun (types d'avis en
+  badges, fins de vie en rouge et en tête, échéance, lien vers la source), avec **recherche en temps
+  réel** (mots-clés sur MPN, fabricant, réf., intitulés et résumés des avis, statut Digi-Key) et un
+  **filtre par colonne** ; un clic sur un composant déplie son détail (avis complets, sources, état
+  Digi-Key). Même présentation compacte dans le PDF (tableau puis « Détail par composant », MPN
+  cliquable) et l'e-mail ; boutons « Lancer l'analyse »
   (complète) et « Vérifier les statuts Digi-Key » (immédiat, sans LLM ni e-mail) — voir plus bas ;
 - **sources** : clés d'API des distributeurs (Digi-Key), saisie masquée et test de connexion ;
 - **santé** : état des veilles, crédits Brevo et journal d'audit.
@@ -264,7 +268,9 @@ veilles/<slug>/
     config.md         brief de mission (éditable dans l'interface)
     recipients.txt    destinataires, un par ligne
     job-prompt.md     prompt RENDU depuis le gabarit de l'image (ne pas éditer)
-    rapports/         AAAA-MM-JJ-veille.{md,pdf}, -charts.json (composants : -pcn.json)
+    rapports/         AAAA-MM-JJ-HHhMM-veille.{md,pdf}, -charts.json (composants : -pcn.json) ;
+                      horodatés : deux exécutions le même jour ne s'écrasent plus (anciens
+                      noms AAAA-MM-JJ-veille toujours lus)
     runs/             journaux des lancements manuels
     components.json   veille composants : références, statut Digi-Key, dates de vérification
     notices.json      veille composants : avis PCN / EOL détectés, sources, livraisons

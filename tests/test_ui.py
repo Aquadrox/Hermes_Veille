@@ -223,3 +223,9 @@ def test_report_history_listed_first_and_counted(client, env):
     assert 'data-label="PDF"' in page  # présentation en cartes sur mobile
     dashboard = client.get("/").text
     assert 'href="/veilles/veille-cyber#rapports">3 rapports</a>' in dashboard
+    # rapports horodatés (v0.3.2) : deux le même jour, heure affichée, téléchargeables
+    for stamp in ("2026-10-05-09h05", "2026-10-05-14h30"):
+        (rdir / f"{stamp}-veille.pdf").write_bytes(b"%PDF" + b"x" * 2048)
+    page = client.get("/veilles/veille-cyber").text
+    assert "2026-10-05 14:30" in page and page.index("2026-10-05-14h30-veille.pdf") < page.index("2026-10-05-09h05")
+    assert client.get("/veilles/veille-cyber/reports/2026-10-05-14h30-veille.pdf").status_code == 200

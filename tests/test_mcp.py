@@ -145,6 +145,11 @@ def test_reports_and_host_paths(srv, demo, monkeypatch):
     assert rep["date"] == "2026-10-05" and "Trois messages clés" in rep["markdown"]
     r = call(srv, "read_report", {"slug": "veille-cyber", "date": "2020-01-01"})
     assert r.is_error
+    (rdir / "2026-10-05-17h40-veille.md").write_text("# Relance du soir\n")  # 2e rapport du même jour
+    reports = data(call(srv, "list_reports", {"slug": "veille-cyber"}))
+    assert [(r["date"], r["time"]) for r in reports] == [("2026-10-05", "17:40"), ("2026-10-05", "")]
+    rep = data(call(srv, "read_report", {"slug": "veille-cyber", "date": "2026-10-05"}))
+    assert rep["time"] == "17:40" and "Relance du soir" in rep["markdown"]
 
 
 def test_preview_schedule_and_health(srv, demo):

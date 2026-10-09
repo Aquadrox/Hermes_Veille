@@ -54,7 +54,7 @@ DEFAULT_MAX_AGE_HOURS = 192
 COMPONENTS_MIN_SIZE = 8000
 ALERT_FROM_NAME = "Surveillance veille"
 REPORT_SUFFIX = "-veille.pdf"
-REPORT_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+REPORT_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})(?:-(\d{2})h(\d{2}))?")  # heure optionnelle (v0.3.2)
 OK_STATUSES = {None, "", "ok", "success", "running", "skipped"}
 
 
@@ -95,7 +95,8 @@ def report_date(path):
     m = REPORT_DATE_RE.match(os.path.basename(path))
     if m:
         try:
-            return dt.datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), 8, 0)
+            return dt.datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                               int(m.group(4) or 8), int(m.group(5) or 0))
         except ValueError:
             pass
     return dt.datetime.fromtimestamp(os.path.getmtime(path))

@@ -101,3 +101,17 @@ def test_state_written_and_no_repeat(tmp_path, monkeypatch):
     assert len(sent) == 1 and sent[0].startswith("[ALERTE]")
     state = json.loads((tmp_path / "state.json").read_text())
     assert state["problem_keys"] == ["demo:report"]
+
+
+def test_report_date_reads_optional_time(tmp_path):
+    """Rapports horodatés (v0.3.2) : l'heure du nom départage les rapports d'un même jour."""
+    assert watchdog.report_date("2026-10-09-14h30-veille.pdf") == dt.datetime(2026, 10, 9, 14, 30)
+    assert watchdog.report_date("2026-10-09-veille.pdf") == dt.datetime(2026, 10, 9, 8, 0)
+    vol = volume(tmp_path, report_days_ago=None)
+    rdir = vol / "veilles" / "demo" / "rapports"
+    day = dt.datetime.now().strftime("%Y-%m-%d")
+    (rdir / f"{day}-00h01-veille.pdf").write_bytes(b"x" * 10)  # ancien rapport du jour, petit
+    (rdir / f"{day}-23h59-veille.pdf").write_bytes(b"x" * 30000)
+    problem, detail = watchdog.check_report({"dir": str(vol / "veilles" / "demo")}, 192, 20000,
+                                            dt.datetime.now() + dt.timedelta(days=1))
+    assert problem is None and f"{day}-23h59-veille.pdf" in detail

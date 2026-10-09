@@ -65,10 +65,10 @@ dt { font-size: .8rem; color: var(--muted); }
 dd { margin: .1rem 0 0; }
 
 .table-wrap { overflow-x: auto; }
-table.list { width: 100%; border-collapse: collapse; background: var(--card); }
-.table-wrap table.list { border: 1px solid var(--line); border-radius: var(--radius); }
-table.list th, table.list td { text-align: left; padding: .55rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-table.list th { font-size: .8rem; color: var(--muted); font-weight: 600; }
+table.list, table.comps { width: 100%; border-collapse: collapse; background: var(--card); }
+.table-wrap table.list, .table-wrap table.comps { border: 1px solid var(--line); border-radius: var(--radius); }
+table.list th, table.list td, table.comps th, table.comps td { text-align: left; padding: .55rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.list th, table.comps th { font-size: .8rem; color: var(--muted); font-weight: 600; }
 td.actions { white-space: nowrap; }
 
 .badge { display: inline-block; font-size: .75rem; font-weight: 600; padding: .1rem .5rem; border-radius: 999px;
@@ -83,9 +83,25 @@ td.actions { white-space: nowrap; }
 .badge.ltb { color: var(--bad); }
 .badge.nrnd { color: var(--warn); }
 .badge.pcn, .badge.autre { color: var(--run); }
-.card.alert-eol { border: 2px solid var(--bad); background: color-mix(in srgb, var(--bad) 7%, var(--card)); }
-.card.alert-eol h2 { color: var(--bad); }
 tr.crit td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
+/* Liste des composants : une ligne compacte par composant, filtrable ; détail déplié dessous. */
+.comp-tools { display: flex; gap: .75rem; align-items: center; margin-bottom: .6rem; }
+.comp-tools input { margin: 0; flex: 1; }
+table.comps td, table.comps th { padding: .35rem .5rem; }
+table.comps tr.filters th { padding: .25rem .3rem; }
+table.comps tr.filters input, table.comps tr.filters select { margin: 0; padding: .25rem .35rem; font-size: .8rem; min-width: 5rem; }
+table.comps tr.comp { cursor: pointer; }
+table.comps tr.comp:hover { background: color-mix(in srgb, var(--accent) 6%, var(--card)); }
+table.comps tr.crit { background: color-mix(in srgb, var(--bad) 7%, var(--card)); }
+table.comps tr.comp .badge { margin: 0 .1rem .1rem 0; }
+button.comp-toggle { text-align: left; white-space: normal; color: var(--accent); }
+button.comp-toggle::before { content: "▸ "; color: var(--muted); }
+button.comp-toggle[aria-expanded=true]::before { content: "▾ "; }
+tr.detail > td { background: var(--bg); }
+.comp-detail p { margin: .2rem 0; }
+ul.notices { margin: .4rem 0; padding-left: 1.1rem; }
+ul.notices li { margin-bottom: .5rem; }
+ul.notices li.crit::marker { color: var(--bad); }
 .filters a, td.nowrap, .badge { white-space: nowrap; }
 h2.inline { display: inline; }
 details > summary h2 { margin: 0; }
@@ -112,4 +128,25 @@ pre.log { max-height: 420px; overflow: auto; background: var(--bg); border: 1px 
   table.list td[data-label]:not([data-label="Veille"])::before { content: attr(data-label) " : "; color: var(--muted); font-size: .8rem; }
   tr.crit { box-shadow: inset 3px 0 0 var(--bad); }
   tr.crit td:first-child { box-shadow: none; }
+  /* Composants : une ligne compacte sur 2 niveaux (MPN | lien / badges | échéance), sans défilement
+     horizontal ; colonnes secondaires dans le détail, filtres libellés par leur placeholder. */
+  table.comps, table.comps thead, table.comps tbody { display: block; }
+  table.comps thead tr:first-child, table.comps tr.filters th:empty { display: none; }
+  table.comps tr.filters { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .3rem; padding: .35rem; }
+  table.comps tr.filters th { padding: 0; border: 0; }
+  table.comps tr.filters input, table.comps tr.filters select { min-width: 0; }
+  table.comps tr.comp { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: .5rem;
+    grid-template-areas: "mpn link" "types due"; padding: .35rem .5rem; border-bottom: 1px solid var(--line); }
+  table.comps tr.comp > td { display: block; padding: 0; border: 0; }
+  table.comps tr.comp > td.opt, table.comps tr.filters > th.opt { display: none; }
+  table.comps td.c-mpn { grid-area: mpn; overflow-wrap: anywhere; }
+  table.comps td.c-link { grid-area: link; text-align: right; max-width: 45vw; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; font-size: .85rem; }
+  table.comps td.c-types { grid-area: types; }
+  table.comps td.c-due { grid-area: due; text-align: right; font-size: .85rem; }
+  table.comps tr.comp.crit { box-shadow: inset 3px 0 0 var(--bad); }
+  table.comps tr.crit td:first-child { box-shadow: none; }
+  table.comps tr.detail, table.comps tr.detail > td { display: block; }
+  .comp-tools { flex-wrap: wrap; }
+  .comp-tools input { flex-basis: 100%; }
 }

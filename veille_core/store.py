@@ -5,7 +5,7 @@
         config.md        brief de mission (éditable)
         recipients.txt   destinataires, un par ligne
         job-prompt.md    prompt RENDU depuis le gabarit (ne pas éditer à la main)
-        rapports/        AAAA-MM-JJ-veille.{md,pdf}, -charts.json
+        rapports/        AAAA-MM-JJ-HHhMM-veille.{md,pdf}, -charts.json (avant la v0.3.2 : AAAA-MM-JJ-veille)
         runs/            journaux des lancements manuels
         components.json  veille composants : références suivies (voir components.py)
         notices.json     veille composants : avis PCN / EOL détectés
@@ -27,7 +27,8 @@ from . import paths
 
 SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$")
 EMAIL_RE = re.compile(r"^[^@\s,;<>\"]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
-REPORT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-veille\.(pdf|md)$")
+# Horodatage AAAA-MM-JJ-HHhMM (sans « : », interdit sur Windows / FAT) ; l'ancien nom au jour reste lu.
+REPORT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:-(\d{2})h(\d{2}))?-veille\.(pdf|md)$")
 RUN_LOG_RE = re.compile(r"^\d{8}-\d{6}\.log$")
 KINDS = ("veille", "composants")
 
@@ -222,19 +223,30 @@ def brief_templates() -> dict[str, str]:
 # --------------------------------------------------------------------------
 # Rapports et journaux (noms en liste blanche : aucune traversée de chemin)
 # --------------------------------------------------------------------------
+def report_stamp(now: dt.datetime | None = None) -> str:
+    """Préfixe horodaté d'un nouveau rapport (heure de Paris) : plusieurs exécutions le même jour
+    ne s'écrasent plus."""
+    from .schedule import ZONE
+
+    return (now or dt.datetime.now(ZONE)).strftime("%Y-%m-%d-%Hh%M")
+
+
 def list_reports(slug: str) -> list[dict]:
+    """Rapports du plus récent au plus ancien : {"stamp", "date" (jour), "time" ("HH:MM" ou ""), "pdf", "md", "size"}."""
     rdir = veille_dir(slug) / "rapports"
     if not rdir.is_dir():
         return []
-    by_date: dict[str, dict] = {}
+    by_stamp: dict[str, dict] = {}
     for p in rdir.iterdir():
-        if REPORT_RE.match(p.name):
-            date = p.name[:10]
-            entry = by_date.setdefault(date, {"date": date})
-            entry[p.suffix[1:]] = p.name
-            if p.suffix == ".pdf":
+        m = REPORT_RE.match(p.name)
+        if m:
+            day, hh, mm, ext = m.groups()
+            stamp = p.name[: -len("-veille.") - len(ext)]
+            entry = by_stamp.setdefault(stamp, {"stamp": stamp, "date": day, "time": f"{hh}:{mm}" if hh else ""})
+            entry[ext] = p.name
+            if ext == "pdf":
                 entry["size"] = p.stat().st_size
-    return sorted(by_date.values(), key=lambda e: e["date"], reverse=True)
+    return sorted(by_stamp.values(), key=lambda e: e["stamp"], reverse=True)
 
 
 def report_path(slug: str, name: str) -> Path:
