@@ -48,6 +48,7 @@ done
 sed -e "s|/root/veille-hermes|$REPO|g" -e "s|--volume $REPO/data |--volume $DATA |" \
     "$REPO/deploy/systemd/$SERVICE" > "$UNIT_DIR/$SERVICE"
 
+echo "ℹ️  adresse(s) d'alerte : page « Paramètres » de l'interface (repli : ALERT_EMAIL du .env, puis BREVO_SENDER_EMAIL)"
 install -m 0644 "$REPO/deploy/systemd/$TIMER" "$UNIT_DIR/$TIMER"
 chmod +x "$REPO/scripts/watchdog.py"
 

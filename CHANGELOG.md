@@ -25,12 +25,16 @@ Adresses d'alerte du chien de garde modifiables dans l'interface, sans toucher a
 - **Chien de garde** : destinataires lus sur le volume — interface, sinon `ALERT_EMAIL` du `.env`
   (repli des installations existantes), sinon `BREVO_SENDER_EMAIL`. Chaque contrôle affiche le
   destinataire retenu et son origine. Pris en compte au contrôle suivant, sans réinstallation.
+  **Tout changement de destinataires est signalé à l'ancienne ET à la nouvelle adresse** : le
+  fichier vit sur le volume, accessible au conteneur, et ne peut donc pas détourner les alertes
+  en silence.
 - `ALERT_EMAIL` devient facultatif dans le `.env`. L'expéditeur (`BREVO_SENDER_*`) et
   `VEILLE_RECIPIENTS` (amorçage de la première veille) y restent ; les destinataires des rapports
   se règlent toujours dans chaque veille.
 
 ### Corrigé
 
+- Lecture des fichiers de réglages JSON (clés d'API, paramètres) factorisée (`store.read_json_dict`).
 - `make watchdog-install` : l'e-mail de test du canal d'alerte lit désormais le dossier de données
   réel (`VEILLE_DATA_DIR`) et non `./data` du dépôt.
 

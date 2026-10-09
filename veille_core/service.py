@@ -687,13 +687,18 @@ def check_credentials(provider: str, actor: str = "ui") -> str:
     return "Connexion à Digi-Key réussie."
 
 
+def alert_status() -> dict:
+    """Adresses d'alerte du chien de garde : enregistrées, effectives et leur origine."""
+    return settings.alert_status()
+
+
 def save_alert_emails(text: str, actor: str = "ui") -> bool:
     """Adresses des alertes du chien de garde (interface seule : jamais le MCP)."""
     with _locked():
-        changed = settings.save_alert_emails(text)
-    if changed:
-        audit(actor, "settings-alert-emails", detail=f"{len(settings.alert_status()['saved'])} adresse(s)")
-    return changed
+        saved = settings.save_alert_emails(text)
+    if saved is not None:  # nombre seulement, jamais les adresses
+        audit(actor, "settings-alert-emails", detail=f"{len(saved)} adresse(s)")
+    return saved is not None
 
 
 def send_test_alert(actor: str = "ui") -> str:

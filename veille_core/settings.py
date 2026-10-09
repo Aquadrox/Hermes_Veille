@@ -2,7 +2,8 @@
 
 Stockage : `veilles/.settings.json`, écriture atomique, mode 0644. Ce ne sont pas des secrets :
 le fichier est INCLUS dans les sauvegardes. Le chien de garde de l'hôte (scripts/watchdog.py,
-bibliothèque standard seule) le lit directement : même format, même ordre de priorité.
+bibliothèque standard seule) le lit directement : même format, même filtre, même priorité
+(vérifié par tests/test_settings.py).
 
 Destinataires des alertes, par priorité : interface > `ALERT_EMAIL` du `.env` > expéditeur
 Brevo. L'interface fait foi ; le `.env` ne sert plus que de repli (installations existantes).
@@ -25,13 +26,12 @@ def path():
 
 
 def _stored() -> dict:
-    try:
-        data = json.loads(path().read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}
-    except (OSError, ValueError) as exc:
-        raise SettingsError(f"fichier des paramètres illisible ({type(exc).__name__})") from None
-    return data if isinstance(data, dict) else {}
+    return store.read_json_dict(path(), SettingsError, "fichier des paramètres")
+
+
+def _saved(value) -> list[str]:
+    """Adresses enregistrées ; une valeur malformée (fichier édité à la main) est ignorée."""
+    return [a for a in value if isinstance(a, str) and "@" in a] if isinstance(value, list) else []
 
 
 def _split(value: str | None) -> list[str]:
@@ -44,16 +44,17 @@ def alert_status() -> dict:
         stored, error = _stored(), None
     except SettingsError as exc:  # affiché ; le .env prend le relais, comme dans le chien de garde
         stored, error = {}, str(exc)
-    saved = [a for a in stored.get("alert_emails") or [] if isinstance(a, str)]
+    saved = _saved(stored.get("alert_emails"))
     env_value = _split(envfile.get("ALERT_EMAIL"))
     sender = _split(envfile.get("BREVO_SENDER_EMAIL"))
     origin = "ui" if saved else "env" if env_value else "sender" if sender else None
     return {"saved": saved, "effective": saved or env_value or sender, "origin": origin,
-            "env_ignored": bool(saved and env_value), "error": error, "updated_at": stored.get("updated_at")}
+            "env_ignored": bool(saved and env_value and env_value != saved), "error": error,
+            "updated_at": stored.get("updated_at")}
 
 
-def save_alert_emails(text: str) -> bool:
-    """Enregistre les adresses (texte libre ; vide = retour au `.env`). Renvoie True si modifié.
+def save_alert_emails(text: str) -> list[str] | None:
+    """Enregistre les adresses (texte libre ; vide = retour au `.env`) ; None si inchangées.
 
     À appeler sous le verrou des veilles (service.save_alert_emails).
     """
@@ -66,7 +67,7 @@ def save_alert_emails(text: str) -> bool:
         data = {}  # illisible : remplacé (rien d'exploitable à conserver)
     else:
         if data.get("alert_emails", []) == addresses:
-            return False
+            return None
     data.update(alert_emails=addresses, updated_at=store.now_iso())
     store.atomic_write(path(), json.dumps(data, ensure_ascii=False, indent=1) + "\n")
-    return True
+    return addresses

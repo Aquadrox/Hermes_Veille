@@ -29,7 +29,6 @@ from veille_core import (
     store,
     version,
 )
-from veille_core import settings as admin_settings  # `settings` : réglages d'auth dans create_app
 from veille_core.store import StoreError
 
 from . import auth
@@ -540,7 +539,7 @@ def create_app() -> FastAPI:
 
     # -------------------------------------------------------------- paramètres (interface seule)
     def settings_page(request: Request, status_code: int = 200, /, **ctx):
-        return render(request, "settings.html", status_code, alert=admin_settings.alert_status(), **ctx)
+        return render(request, "settings.html", status_code, alert=service.alert_status(), **ctx)
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_form(request: Request):

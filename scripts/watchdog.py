@@ -103,8 +103,9 @@ def alert_recipients(volume, env):
     if saved:
         return ",".join(saved), "interface"
     for key, origin in (("ALERT_EMAIL", ".env"), ("BREVO_SENDER_EMAIL", "expéditeur Brevo")):
-        if env.get(key):
-            return env[key], origin
+        value = ",".join(a.strip() for a in (env.get(key) or "").split(",") if a.strip())
+        if value:
+            return value, origin
     return None, None
 
 
@@ -268,15 +269,16 @@ def check_logs(container, lines=25):
 # --------------------------------------------------------------------------
 # E-mail
 # --------------------------------------------------------------------------
-def send_mail(args, subject, body, dry_run):
+def send_mail(args, subject, body, dry_run, to=None):
+    to = to or args.to
     if dry_run:
         print("--- [dry-run] e-mail NON envoyé ---")
-        print(f"À      : {args.to}")
+        print(f"À      : {to}")
         print(f"Sujet  : {subject}")
         print(body)
         print("--- fin ---")
         return True
-    if not args.to:
+    if not to:
         print("✗ aucun destinataire d'alerte (interface : Paramètres ; ou ALERT_EMAIL dans .env, ou --to)",
               file=sys.stderr)
         return False
@@ -285,7 +287,7 @@ def send_mail(args, subject, body, dry_run):
         body_path = fh.name
     try:
         code, out = run(
-            [sys.executable, args.brevo_script, "--to", args.to, "--subject", subject,
+            [sys.executable, args.brevo_script, "--to", to, "--subject", subject,
              "--body-file", body_path, "--from-name", ALERT_FROM_NAME, "--env-file", args.env_file],
             timeout=120,
         )
@@ -325,6 +327,27 @@ def alert_subject(problems):
     if len(problems) > 1:
         subject += f" (+{len(problems) - 1} autre{'s' if len(problems) > 2 else ''})"
     return subject
+
+
+def notify_recipients_change(args, state, origin):
+    """Destinataires modifiés depuis le contrôle précédent : l'ANCIEN et le nouveau sont prévenus.
+
+    Le fichier des paramètres vit sur le volume, accessible au conteneur : un changement (même
+    hors de l'interface) ne peut donc pas détourner les alertes en silence.
+    """
+    previous = state.get("alert_to")
+    if previous and previous != args.to:
+        both = ",".join(dict.fromkeys(previous.split(",") + args.to.split(",")))
+        body = (f"Les alertes de panne des veilles iront désormais à : {args.to} (origine : {origin}).\n"
+                f"Auparavant : {previous}.\n\n"
+                "Si ce changement n'est pas de votre fait, vérifiez la page Paramètres de l'interface et le\n"
+                "journal d'audit (page Santé).\n\n— Surveillance automatique des veilles.")
+        sent = send_mail(args, "[INFO] Surveillance des veilles — destinataires des alertes modifiés", body,
+                         args.dry_run, to=both)
+        print(f"changement de destinataires signalé : {sent}")
+        if not sent:
+            return  # ancien destinataire conservé : nouvel essai au prochain contrôle
+    state["alert_to"] = args.to
 
 
 # --------------------------------------------------------------------------
@@ -413,6 +436,8 @@ def main(argv=None):
         print(f"  - {d}")
 
     state = load_state(args.state_file)
+    if origin != "--to" and args.to:
+        notify_recipients_change(args, state, origin)
     action = decide(state, problems.keys(), now.timestamp(), args.remind_days)
 
     if action in ("alert", "remind"):

@@ -309,7 +309,8 @@ Contrôle quotidien (10h, heure de Paris) :
 
 Les alertes vont aux adresses saisies dans l'interface, page **Paramètres** (stockées sur le
 volume, dans `veilles/.settings.json`, prises en compte au contrôle suivant) ; à défaut à
-`ALERT_EMAIL` du `.env`, puis à l'expéditeur Brevo. Alerte immédiate à chaque nouveau problème, rappel tous les
+`ALERT_EMAIL` du `.env`, puis à l'expéditeur Brevo. Un changement de destinataires est signalé à
+l'ancienne et à la nouvelle adresse. Alerte immédiate à chaque nouveau problème, rappel tous les
 3 jours tant qu'il persiste, puis **e-mail de rétablissement**. L'état est conservé dans
 `/var/lib/veille-watchdog/state.json`.
 

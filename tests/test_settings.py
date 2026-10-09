@@ -3,7 +3,6 @@ import importlib.util
 import json
 import re
 import stat
-import sys
 import textwrap
 from pathlib import Path
 
@@ -72,6 +71,11 @@ def test_save_file_mode_unchanged_clear_and_audit(env):
     assert service.save_alert_emails("", actor="test") is False
     audit = [e for e in service.read_audit() if e["action"] == "settings-alert-emails"]
     assert [e["detail"] for e in audit] == ["0 adresse(s)", "1 adresse(s)"]
+    write_env(env, "ALERT_EMAIL=Admin@example.org\n")
+    service.save_alert_emails("admin@example.org", actor="test")
+    assert settings.alert_status()["env_ignored"]
+    write_env(env, "ALERT_EMAIL=admin@example.org\n")
+    assert not settings.alert_status()["env_ignored"]  # même adresse : rien d'ignoré
     assert "admin@example.org" not in json.dumps(audit)
 
 
@@ -112,30 +116,67 @@ def test_send_test_alert(env, mails, monkeypatch):
 
 
 # ----------------------------------------------------------------- chien de garde (hôte)
-@pytest.mark.parametrize("env_text,ui", [
-    ("", None),
-    ("BREVO_SENDER_EMAIL=sender@example.org\n", None),
-    ("BREVO_SENDER_EMAIL=sender@example.org\nALERT_EMAIL=ops@example.org\n", None),
-    ("ALERT_EMAIL=ops@example.org\n", "admin@example.org\nrssi@example.org"),
-    ("ALERT_EMAIL=ops@example.org\n", "{corrompu"),
+ORIGINS = {"ui": "interface", "env": ".env", "sender": "expéditeur Brevo", None: None}
+MALFORMED = ['"admin@example.org"', "5", "[1, null]", "[]", '["sans-arobase"]', '{"x@example.org": 1}', "{corrompu"]
+
+
+@pytest.mark.parametrize("env_text,ui,raw", [
+    ("", None, None),
+    ("BREVO_SENDER_EMAIL=sender@example.org\n", None, None),
+    ("BREVO_SENDER_EMAIL=sender@example.org\nALERT_EMAIL=ops@example.org\n", None, None),
+    ("ALERT_EMAIL='ops@example.org , dsi@example.org'\n", None, None),
+    ("ALERT_EMAIL=ops@example.org\n", "admin@example.org\nrssi@example.org", None),
+    *[("ALERT_EMAIL=ops@example.org\n", None, '{"alert_emails": ' + p + "}") for p in MALFORMED],
+    ("ALERT_EMAIL=ops@example.org\n", None, "{corrompu"),
 ])
-def test_watchdog_resolves_like_the_interface(env, env_text, ui):
+def test_watchdog_resolves_like_the_interface(env, env_text, ui, raw):
     """Même source de vérité des deux côtés : l'interface affiche ce que le chien de garde utilisera."""
     write_env(env, env_text)
-    if ui == "{corrompu":
+    if raw:
         settings.path().parent.mkdir(parents=True, exist_ok=True)
-        settings.path().write_text(ui)
+        settings.path().write_text(raw)
     elif ui:
         service.save_alert_emails(ui, actor="test")
-    to, _ = watchdog.alert_recipients(str(env), watchdog.load_env(str(env / ".env")))
-    assert (to.split(",") if to else []) == settings.alert_status()["effective"]
+    to, origin = watchdog.alert_recipients(str(env), watchdog.load_env(str(env / ".env")))
+    st = settings.alert_status()
+    assert (to.split(",") if to else []) == st["effective"] and origin == ORIGINS[st["origin"]]
 
 
-@pytest.mark.parametrize("payload", ['"admin@example.org"', "[1, null]", "[]", '{"alert_emails": "a@b.fr"}'])
-def test_watchdog_ignores_malformed_settings(tmp_path, payload):
-    (tmp_path / "veilles").mkdir()
-    (tmp_path / "veilles" / ".settings.json").write_text(payload)
-    assert watchdog.alert_recipients(str(tmp_path), {"ALERT_EMAIL": "ops@example.org"}) == ("ops@example.org", ".env")
+@pytest.mark.parametrize("payload", MALFORMED)
+def test_malformed_settings_page_and_save(client, env, payload):  # noqa: F811
+    """Fichier édité à la main : la page s'affiche (repli .env), un enregistrement le remplace."""
+    write_env(env, "ALERT_EMAIL=ops@example.org\n")
+    settings.path().parent.mkdir(parents=True, exist_ok=True)
+    settings.path().write_text('{"alert_emails": ' + payload + "}")
+    csrf = login(client)
+    r = client.get("/settings")
+    assert r.status_code == 200 and "ops@example.org" in r.text and "repli .env" in r.text
+    assert service.save_alert_emails("admin@example.org", actor="test")
+    assert settings.alert_status()["saved"] == ["admin@example.org"] and csrf
+
+
+def test_watchdog_signals_recipient_change_to_old_and_new(env, tmp_path, capsys):
+    """Le fichier des paramètres est sur le volume (accessible au conteneur) : pas de détournement silencieux."""
+    write_env(env, "ALERT_EMAIL=ops@example.org\n")
+    state = tmp_path / "state.json"
+
+    def check(*extra):
+        watchdog.main(["--volume", str(env), "--skip-container", "--env-file", str(env / ".env"),
+                       "--state-file", str(state), "--brevo-script", "/nonexistent", *extra])
+        return capsys.readouterr().out
+
+    assert "changement de destinataires" not in check("--dry-run")  # premier contrôle : rien à comparer
+    watchdog.save_state(str(state), {"alert_to": "ops@example.org"})
+    service.save_alert_emails("pirate@example.org", actor="test")
+    out = check("--dry-run")
+    assert "destinataires des alertes modifiés" in out and "À      : ops@example.org,pirate@example.org" in out
+    assert "Auparavant : ops@example.org" in out
+    out = check()  # envoi en échec (script absent) : l'ancien destinataire est conservé, nouvel essai
+    assert "changement de destinataires signalé : False" in out
+    assert json.loads(state.read_text())["alert_to"] == "ops@example.org"
+    watchdog.save_state(str(state), {"alert_to": "pirate@example.org"})
+    assert "changement de destinataires" not in check("--dry-run")  # inchangé : silence
+    assert "changement de destinataires" not in check("--dry-run", "--to", "x@example.org")  # --to : ignoré
 
 
 def test_watchdog_main_uses_interface_address(env, tmp_path, capsys):
@@ -190,4 +231,5 @@ def test_not_exposed_to_mcp(env):
     """Telegram / MCP ne doivent pas pouvoir détourner les alertes de panne."""
     names = " ".join(tools(build_server()))
     assert "alert" not in names and "setting" not in names
-    assert "settings" not in sys.modules["veille_mcp.server"].__dict__
+    source = (REPO / "veille_mcp" / "server.py").read_text(encoding="utf-8")
+    assert not re.search(r"alert_status|save_alert_emails|send_test_alert|\bsettings\b", source)

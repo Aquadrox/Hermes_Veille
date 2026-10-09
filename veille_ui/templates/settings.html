@@ -16,7 +16,7 @@
 
   <p class="small">Utilisée(s) actuellement :
     {% if alert.effective %}<strong>{{ alert.effective|join(", ") }}</strong>
-      {% if alert.origin == "env" %}<span class="muted">— ALERT_EMAIL du .env du serveur ; enregistrer ici le remplace.</span>
+      {% if alert.origin == "env" %}<span class="muted">— ALERT_EMAIL du .env du serveur (valeur au démarrage du conteneur) ; enregistrer ici le remplace.</span>
       {% elif alert.origin == "sender" %}<span class="muted">— expéditeur Brevo, faute d'adresse d'alerte.</span>{% endif %}
     {% else %}<span class="err">aucune : le chien de garde ne peut prévenir personne.</span>{% endif %}
     {% if alert.env_ignored %}<br><span class="muted">ALERT_EMAIL du .env est ignoré : l'interface fait foi.</span>{% endif %}
@@ -39,5 +39,6 @@
 
 <p class="small muted">Les destinataires des rapports se règlent dans chaque veille (« Modifier »).
   L'expéditeur (BREVO_SENDER_EMAIL), lié au compte Brevo, reste dans le .env du serveur.
-  Modifiable depuis cette interface uniquement (ni Telegram ni MCP) ; chaque changement est tracé dans le journal d'audit.</p>
+  Modifiable depuis cette interface uniquement (ni Telegram ni MCP) ; chaque changement est tracé dans le journal d'audit
+  et le chien de garde prévient l'ancienne et la nouvelle adresse.</p>
 {% endblock %}
