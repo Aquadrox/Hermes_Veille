@@ -1,12 +1,14 @@
 """Fichiers d'une veille sur le volume.
 
     veilles/<slug>/
-        veille.json      métadonnées (nom, sujet, fréquence, PDF, lien vers le job)
+        veille.json      métadonnées (nom, sujet, fréquence, PDF, lien vers le job, type)
         config.md        brief de mission (éditable)
         recipients.txt   destinataires, un par ligne
         job-prompt.md    prompt RENDU depuis le gabarit (ne pas éditer à la main)
         rapports/        AAAA-MM-JJ-veille.{md,pdf}, -charts.json
         runs/            journaux des lancements manuels
+        components.json  veille composants : références suivies (voir components.py)
+        notices.json     veille composants : avis PCN / EOL détectés
 
 JSON plutôt que YAML : le chien de garde lit ces fichiers depuis l'hôte avec la
 seule bibliothèque standard.
@@ -27,6 +29,7 @@ SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$")
 EMAIL_RE = re.compile(r"^[^@\s,;<>\"]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 REPORT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-veille\.(pdf|md)$")
 RUN_LOG_RE = re.compile(r"^\d{8}-\d{6}\.log$")
+KINDS = ("veille", "composants")
 
 
 class StoreError(ValueError):
@@ -54,6 +57,9 @@ class Veille:
     model: str | None = None
     provider: str | None = None
     pdf: PdfOptions = field(default_factory=PdfOptions)
+    kind: str = "veille"              # « composants » : surveillance PCN / fins de vie
+    components: str | None = None     # veille : slug de la veille composants incluse en chapitre
+    batch_size: int = 40              # composants : recherches web par exécution (lot tournant)
     created_at: str = ""
     updated_at: str = ""
 

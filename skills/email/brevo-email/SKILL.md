@@ -58,6 +58,9 @@ python3 "$SCRIPT" --to someone@example.com --subject "Weekly report" \
 python3 "$SCRIPT" --to a@b.com --cc c@d.com --subject "X" \
   --html "<h1>Hi</h1>" --from-name "Alerts"
 
+# Large HTML body from a file (no command-line size limit), with a text fallback
+python3 "$SCRIPT" --bcc-file recipients.txt --subject "Digest" --html-file digest.html --text "Body"
+
 # Recipients read from a file (one address per line, `#` comments allowed)
 python3 "$SCRIPT" --to-file recipients.txt --subject "Digest" --text "Body"
 

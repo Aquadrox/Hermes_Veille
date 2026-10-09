@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/macros.html" import run_confirm %}
 {% block title %}{{ v.name }} — Veilles{% endblock %}
 {% block content %}
 {% set st = row.status %}{% set cls = status_class(row) %}
@@ -10,14 +11,18 @@
       <form method="post" action="/veilles/{{ v.slug }}/resume" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Reprendre</button></form>
       {% else %}
       <form method="post" action="/veilles/{{ v.slug }}/pause" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Pause</button></form>
-      <form method="post" action="/veilles/{{ v.slug }}/run" class="inline" data-confirm="Lancer maintenant ? Un rapport sera envoyé aux destinataires."><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary"{% if row.running %} disabled{% endif %}>Lancer maintenant</button></form>
+      <form method="post" action="/veilles/{{ v.slug }}/run" class="inline" data-confirm="{{ run_confirm(row) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary"{% if row.running %} disabled{% endif %}>{{ "Lancer l'analyse" if v.kind == "composants" else "Lancer maintenant" }}</button></form>
       {% endif %}
+    {% endif %}
+    {% if v.kind == "composants" %}
+    <form method="post" action="/veilles/{{ v.slug }}/check-status" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button title="Statut Digi-Key de toutes les références, sans LLM ni e-mail"{% if row.running %} disabled{% endif %}>Vérifier les statuts Digi-Key</button></form>
     {% endif %}
     <form method="post" action="/veilles/{{ v.slug }}/test-email" class="inline" data-confirm="Envoyer un e-mail de test à {{ row.recipients|length }} destinataire(s) ?"><input type="hidden" name="csrf" value="{{ csrf }}"><button>E-mail de test</button></form>
     <a class="button" href="/veilles/{{ v.slug }}/edit">Modifier</a>
   </div>
 </div>
-<p class="muted">{{ v.subject }}</p>
+<p class="muted">{% if v.kind == "composants" %}<span class="badge kind">composants</span> {% endif %}{{ v.subject }}</p>
 
 <section class="card">
   <dl class="grid2">
@@ -27,9 +32,12 @@
     <div><dt>Destinataires</dt><dd>{{ row.recipients|join(", ") or "—" }}</dd></div>
     <div><dt>Seuil d'alerte (chien de garde)</dt><dd>{{ (v.max_age_hours / 24)|round(1) }} jours sans rapport</dd></div>
     <div><dt>Job Hermes</dt><dd><code>{{ v.job_id or "—" }}</code></dd></div>
+    {% if v.components %}<div><dt>Chapitre composants</dt><dd><a href="/veilles/{{ v.components }}">{{ v.components }}</a></dd></div>{% endif %}
   </dl>
   {% if st.last_error %}<p class="err small">Dernière erreur : {{ st.last_error }}</p>{% endif %}
 </section>
+
+{% if v.kind == "composants" %}{% include "partials/components.html" %}{% endif %}
 
 <section class="card" id="rapports">
   <h2>Rapports{% if reports %} <span class="muted small">({{ reports|length }})</span>{% endif %}</h2>

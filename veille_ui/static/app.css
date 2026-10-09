@@ -77,6 +77,18 @@ td.actions { white-space: nowrap; }
 .badge.bad { color: var(--bad); }
 .badge.paused { color: var(--warn); }
 .badge.run { color: var(--run); }
+.badge.kind { color: var(--run); font-weight: 500; }
+/* Avis composants : la fin de vie est l'information la plus critique, d'où le fond plein. */
+.badge.eol { background: var(--bad); border-color: var(--bad); color: var(--card); text-decoration: none; }
+.badge.ltb { color: var(--bad); }
+.badge.nrnd { color: var(--warn); }
+.badge.pcn, .badge.autre { color: var(--run); }
+.card.alert-eol { border: 2px solid var(--bad); background: color-mix(in srgb, var(--bad) 7%, var(--card)); }
+.card.alert-eol h2 { color: var(--bad); }
+tr.crit td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
+.filters a, td.nowrap, .badge { white-space: nowrap; }
+h2.inline { display: inline; }
+details > summary h2 { margin: 0; }
 
 footer.foot { text-align: center; padding: 0 16px 2rem; }
 pre.log { max-height: 420px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
@@ -90,4 +102,6 @@ pre.log { max-height: 420px; overflow: auto; background: var(--bg); border: 1px 
   table.list tr { display: block; border-bottom: 1px solid var(--line); padding: .5rem 0; }
   table.list td { display: block; border: 0; padding: .2rem .6rem; }
   table.list td[data-label]:not([data-label="Veille"])::before { content: attr(data-label) " : "; color: var(--muted); font-size: .8rem; }
+  tr.crit { box-shadow: inset 3px 0 0 var(--bad); }
+  tr.crit td:first-child { box-shadow: none; }
 }

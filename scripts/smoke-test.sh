@@ -36,6 +36,8 @@ docker run --rm --entrypoint /bin/bash "$REF" -lc '
              /opt/hermes/skills/productivity/styled-pdf-report/scripts/build_report.py \
              /opt/hermes/skills/productivity/styled-pdf-report/assets/report.css \
              /opt/hermes/veille-defaults/job-prompt.tmpl.md \
+             /opt/hermes/veille-defaults/job-prompt-composants.tmpl.md \
+             /opt/hermes/veille-defaults/templates/composants.md \
              /opt/hermes/veille-defaults/pricing.json \
              /opt/hermes/veille-defaults/templates/industrie-4-0.md \
              /opt/hermes/veille-defaults/templates/vierge.md \
@@ -118,6 +120,30 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h "$REF" -lc '
 ' || { fail "veillectl en échec contre la CLI Hermes"; exit 1; }
 ok "veillectl fonctionnel"
 
+# --- 5 bis. Veille composants : scan, enregistrement, PDF réel, chapitre (sans Digi-Key ni e-mail) ---
+log "veille composants : scan, enregistrement, PDF, chapitre"
+docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h \
+    -e BUILD_REPORT=/opt/hermes/skills/productivity/styled-pdf-report/scripts/build_report.py "$REF" -lc '
+    set -e
+    mkdir -p /tmp/h && cd /tmp/h
+    printf "LM317T;Texas Instruments;R-1\nNE555P;Texas Instruments\n" > bom.csv
+    veillectl create --kind composants --name "Smoke composants" --schedule "0 23 * * 0" \
+        --recipients smoke@example.org --components-file bom.csv
+    veillectl create --name "Smoke veille" --schedule "0 8 * * 1" --recipients smoke@example.org \
+        --template vierge --include-components smoke-composants
+    grep -q "veillectl components chapter smoke-composants --for smoke-veille" /tmp/h/veilles/smoke-veille/job-prompt.md
+    veillectl components scan smoke-composants | grep -q "\"configured\": false"
+    D=$(date +%F); R=/tmp/h/veilles/smoke-composants/rapports
+    echo "{\"notices\":[{\"mpns\":[\"LM317T\"],\"type\":\"EOL\",\"title\":\"Fin de vie\",\"sources\":[{\"url\":\"https://www.ti.com/eol/1\",\"label\":\"TI\"}]}]}" > "$R/$D-pcn.json"
+    veillectl components finalize smoke-composants "$R/$D-pcn.json" | grep -q "OK: veille composants — 1 nouvel"
+    size=$(stat -c%s "$R/$D-veille.pdf"); test "$size" -gt 20000
+    M=/tmp/h/veilles/smoke-veille/rapports/$D-veille.md; echo "# Rapport" > "$M"
+    veillectl components chapter smoke-composants --for smoke-veille --append "$M" | grep -q "PREFIXE_SUJET=\[EOL"
+    grep -q "Nouvelles fins de vie" "$M"
+    echo "  veille composants : OK (PDF $size octets)"
+' || { fail "veille composants en échec"; exit 1; }
+ok "veille composants fonctionnelle"
+
 # --- 6. Interface web : démarre et exige une session ---
 log "interface web"
 docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h \
@@ -152,8 +178,8 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h "$REF" -lc '
     $H config set mcp_servers.veilles.command veille-mcp >/dev/null
     $H config set mcp_servers.veilles.trust untrusted >/dev/null
     out=$(timeout 120 $H mcp test veilles 2>&1)
-    echo "$out" | grep -q "Tools discovered: 23" || { echo "$out"; exit 1; }
-    echo "  Hermes : connexion OK, 23 outils découverts"
+    echo "$out" | grep -q "Tools discovered: 28" || { echo "$out"; exit 1; }
+    echo "  Hermes : connexion OK, 28 outils découverts"
 ' || { fail "serveur MCP en échec"; exit 1; }
 ok "serveur MCP fonctionnel"
 

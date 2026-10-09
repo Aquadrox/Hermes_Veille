@@ -1,8 +1,13 @@
-{% set v = row.veille %}{% set st = row.status %}
+{% from "partials/macros.html" import run_confirm %}{% set v = row.veille %}{% set st = row.status %}
 <tr id="row-{{ v.slug }}">
   <td data-label="Veille">
     <a href="/veilles/{{ v.slug }}"><strong>{{ v.name }}</strong></a>
+    {% if v.kind == "composants" %} <span class="badge kind">composants</span>{% endif %}
     <div class="muted small">{{ v.subject }} · {{ row.recipients|length }} destinataire{{ 's' if row.recipients|length > 1 }}</div>
+    {% set c = row.components %}{% if c %}
+    <div class="small">{% if c.error %}<span class="err">{{ c.error }}</span>{% else %}{{ c.components }} composant{{ 's' if c.components > 1 }} · {{ c.notices }} avis
+      {% if c.critical %}· <a class="badge eol" href="/veilles/{{ v.slug }}#fins-de-vie">{{ c.critical }} en fin de vie</a>{% endif %}{% endif %}</div>
+    {% endif %}
     {% if error %}<div class="err small">{{ error }}</div>{% endif %}
   </td>
   <td data-label="Fréquence">{{ row.schedule_human }}</td>
@@ -27,7 +32,7 @@
       {% else %}
       <button hx-post="/veilles/{{ v.slug }}/pause" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML">Pause</button>
       <button hx-post="/veilles/{{ v.slug }}/run" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML"
-              hx-confirm="Lancer « {{ v.name }} » maintenant ? Un rapport sera envoyé aux destinataires."
+              hx-confirm="{{ run_confirm(row) }}"
               {% if row.running %}disabled{% endif %}>Lancer</button>
       {% endif %}
     {% endif %}

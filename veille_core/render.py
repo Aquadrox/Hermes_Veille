@@ -12,6 +12,7 @@ from . import paths, schedule
 from .store import Veille, atomic_write
 
 TEMPLATE_NAME = "job-prompt.tmpl.md"
+TEMPLATES = {"veille": TEMPLATE_NAME, "composants": "job-prompt-composants.tmpl.md"}
 
 
 def short_prompt(v: Veille) -> str:
@@ -37,6 +38,7 @@ def variables(v: Veille) -> dict[str, str]:
         "pdf_footer": pdf.footer,
         "pdf_audience": pdf.audience,
         "pdf_accent": pdf.accent,
+        "batch_size": str(v.batch_size),
     }
 
 
@@ -45,10 +47,28 @@ def _quote_safe(value: str) -> str:
     return value.replace('"', "'").replace("`", "'").replace("$", "").replace("\\", "/").replace("\n", " ")
 
 
+def components_step(v: Veille) -> str:
+    """Étape « chapitre composants » d'une veille qui en inclut un (vide sinon : prompt inchangé).
+
+    Construite hors de _quote_safe (elle contient des retours à la ligne) à partir de valeurs
+    sûres : slugs validés par SLUG_RE et chemin du volume.
+    """
+    if v.kind != "veille" or not v.components:
+        return ""
+    return (
+        "\n\n6 bis. CHAPITRE COMPOSANTS (PCN / fins de vie) — exécute :\n"
+        f"   veillectl components chapter {v.components} --for {v.slug} --append {v.dir}/rapports/D-veille.md\n"
+        "   La commande ajoute elle-même le chapitre à la fin du rapport : ne le modifie pas, ne le résume pas.\n"
+        "   Si elle affiche une ligne « PREFIXE_SUJET=… », place ce préfixe AU DÉBUT de l'objet de l'e-mail "
+        "(étape 8) et ajoute au texte de l'e-mail une ligne sur les fins de vie détectées."
+    )
+
+
 def render(v: Veille) -> str:
-    tpl_path = paths.defaults_dir() / TEMPLATE_NAME
+    tpl_path = paths.defaults_dir() / TEMPLATES.get(v.kind, TEMPLATE_NAME)
     tpl = Template(tpl_path.read_text(encoding="utf-8"))
-    return tpl.substitute({k: _quote_safe(val) for k, val in variables(v).items()})
+    values = {k: _quote_safe(val) for k, val in variables(v).items()}
+    return tpl.substitute(values, components_step=components_step(v))
 
 
 def write(v: Veille) -> bool:

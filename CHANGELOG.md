@@ -7,6 +7,69 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.3.0] — 2026-10-09
+
+Veille composants : détection des avis PCN et des fins de vie (EOL) d'une nomenclature.
+
+### Ajouté
+
+- **Veille composants** (`kind: composants`) : une liste de références « MPN ; Fabricant ; Réf.
+  interne » (collage tableur accepté, plus de 300 références prévues), surveillée chaque semaine
+  (dimanche 23h par défaut, en heures creuses DeepSeek). Elle réutilise tout le cycle de vie d'une
+  veille : job Hermes, pause, lancement, archivage, coûts, rapports PDF, chien de garde.
+  - **Statut Digi-Key** (API Product Information v4, OAuth 2-legged, `DIGIKEY_CLIENT_ID` /
+    `DIGIKEY_CLIENT_SECRET`) vérifié pour TOUS les composants à chaque exécution : un passage en
+    Obsolete, Last Time Buy ou Not For New Designs devient un avis. Débit limité, budget de 900
+    appels et 15 minutes par passage ; facultatif.
+  - **Recherche web** par l'agent, en **lot tournant** (`batch_size`, 40 par défaut) : jamais
+    vérifiés d'abord, puis les références dont le statut Digi-Key a changé, puis les plus anciennes.
+  - **Incrémental** : chaque référence garde ses dates de vérification ; un avis déjà connu (même
+    référence et même numéro d'avis ou même lien) n'est jamais signalé deux fois, ses nouvelles
+    sources sont fusionnées.
+  - Le LLM ne fait que chercher et écrire un JSON ; validation, dédoublonnage, persistance
+    (`components.json`, `notices.json`), rapport PDF et e-mail sont déterministes
+    (`veillectl components scan|finalize`).
+- **Chapitre « Composants — PCN & fins de vie »** dans l'e-mail d'une veille thématique
+  (`include_components`) : nouveaux avis depuis le précédent envoi, fins de vie en tête dans un
+  encadré rouge, rappel de toutes les fins de vie actives, objet préfixé « [EOL ×N] ». Sans
+  rattachement, la veille composants envoie son propre e-mail (HTML + PDF).
+- Interface : bouton « + Veille composants », formulaire avec la liste des références, page de
+  détail avec bandeau **Fins de vie et dernières commandes**, avis filtrables par type (sans
+  JavaScript), liens sources, état de chaque référence ; badge et compteur EOL sur le tableau de
+  bord.
+- MCP : `list_components`, `list_notices` (lecture), `add_components`, `remove_components`,
+  `check_component_statuses` (modification) ; `create_veille(kind=…, components_list=…,
+  include_components=…)`, `update_veille(include_components=…, batch_size=…)`. 28 outils (13 en
+  lecture).
+- **Lancement à la demande** : « Lancer l'analyse » d'une veille composants (interface,
+  `run_veille_now`) et **« Vérifier les statuts Digi-Key »** (interface, `check_component_statuses`,
+  `veillectl components scan --status-only`) : statut de toutes les références en arrière-plan, sans
+  LLM ni e-mail, sans toucher au lot de la prochaine exécution planifiée. Les confirmations disent
+  ce qui sera réellement envoyé (aucun e-mail pour une veille composants rattachée).
+- CLI : `veillectl components list|notices|add|remove|scan [--status-only]|finalize|chapter`,
+  `create --kind composants --components-file`, `edit --include-components / --batch-size`.
+- **Page « Sources »** de l'interface : saisie des clés d'API Digi-Key avec un test de connexion.
+  Les valeurs ne sont jamais réaffichées (aperçu masqué). Stockage dans `veilles/.credentials.json`
+  (0600, écriture atomique, exclu de `make backup`), audit sans les valeurs. Les clés du `.env`
+  restent prioritaires (lecture seule dans l'interface). Aucune saisie possible par
+  Telegram / MCP : `health` indique seulement si une source est configurée.
+- Skill `brevo-email` : `--html-file` (corps HTML sans limite de taille de ligne de commande).
+- Tests : `tests/test_components.py`, `tests/test_digikey.py` et `tests/test_credentials.py` ; smoke test de la veille
+  composants sur l'image (PDF réel, chapitre).
+
+### Modifié
+
+- `veille_core/envfile.py` : lecture unique des secrets (environnement, puis `.env` du volume),
+  partagée par DeepSeek, Brevo et Digi-Key (trois copies auparavant).
+
+### Sécurité
+
+- Les avis trouvés sur le web sont des données non fiables : schéma strict, liens `http(s)`
+  uniquement (ni `javascript:`, ni identifiants dans l'URL), tailles bornées, échappement
+  systématique dans le Markdown du PDF (pas de HTML brut transmis à pandoc / WeasyPrint), dans
+  l'e-mail HTML et dans l'interface. Les secrets Digi-Key ne figurent jamais dans les journaux.
+- Sauvegardes : les clés saisies dans l'interface en sont exclues, comme le `.env`.
+
 ## [0.2.7] — 2026-10-09
 
 Données persistantes à travers les mises à jour, garanties et vérifiées.

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 import urllib.request
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -15,13 +14,14 @@ from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from veille_core import deepseek, hermes, paths, pricing, schedule, service, store, version
+from veille_core import components, credentials, deepseek, envfile, hermes, pricing, schedule, service, store, version
 from veille_core.store import StoreError
 
 from . import auth
 
 HERE = Path(__file__).resolve().parent
 ACTOR = "ui"
+NOTICES_SHOWN = 100  # page de détail (mobile) : au-delà, filtrer par type
 USER_ERRORS = (StoreError, schedule.ScheduleError, service.ServiceError, hermes.HermesError)
 
 # Messages affichés après redirection : codes en liste blanche (aucun texte réfléchi).
@@ -31,8 +31,12 @@ FLASH = {
     "paused": "Veille mise en pause.",
     "resumed": "Veille reprise.",
     "run": "Lancement démarré : le journal s'affiche ci-dessous.",
+    "checking": "Vérification des statuts Digi-Key démarrée : le journal s'affiche ci-dessous.",
     "archived": "Veille archivée.",
     "mail": "E-mail de test envoyé.",
+    "creds-saved": "Clés enregistrées. Utilise « Tester la connexion » pour les vérifier.",
+    "creds-unchanged": "Aucune modification : les champs laissés vides conservent leur valeur.",
+    "creds-deleted": "Clés supprimées.",
 }
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
        "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
@@ -91,25 +95,35 @@ templates.env.filters["usd"] = fmt_usd
 templates.env.filters["num"] = fmt_int
 templates.env.globals["status_class"] = status_class
 templates.env.globals["DAYS"] = schedule.DAYS
+templates.env.globals["NOTICE_TYPES"] = components.TYPES
+templates.env.globals["CRITICAL"] = components.CRITICAL
 templates.env.globals["VERSION"] = version()
 
 
 # --------------------------------------------------------------------------
 # Formulaire veille <-> champs
 # --------------------------------------------------------------------------
-def form_defaults(v: store.Veille | None = None, template: str = "vierge") -> dict:
+def form_defaults(v: store.Veille | None = None, template: str = "vierge", kind: str = "veille") -> dict:
     if v is None:
         briefs = store.brief_templates()
-        return {"name": "", "slug": "", "subject": "", "recipients": "",
-                "brief": briefs.get(template, ""), "freq": {"kind": "weekly", "dow": 1, "hour": 8, "minute": 0},
+        composants = kind == "composants"
+        return {"name": "", "slug": "", "subject": "", "recipients": "", "kind": kind,
+                "brief": briefs.get(service.COMPONENTS_TEMPLATE if composants else template, ""),
+                "freq": schedule.from_cron(service.COMPONENTS_SCHEDULE) if composants
+                else {"kind": "weekly", "dow": 1, "hour": 8, "minute": 0},
                 "cron_expr": "", "pdf_title": "", "pdf_header": "", "pdf_footer": "Document interne",
-                "pdf_audience": "direction & ingénierie", "pdf_accent": "#0f766e", "model": ""}
+                "pdf_audience": "achats, méthodes & ingénierie" if composants else "direction & ingénierie",
+                "pdf_accent": "#0f766e", "model": "", "components": "", "include_components": "",
+                "batch_size": store.Veille.batch_size}
     freq = schedule.from_cron(v.schedule)
-    return {"name": v.name, "slug": v.slug, "subject": v.subject,
+    comps = components.load_components(v.slug)["components"] if v.kind == "composants" else []
+    return {"name": v.name, "slug": v.slug, "subject": v.subject, "kind": v.kind,
             "recipients": "\n".join(store.read_recipients(v.slug)), "brief": store.read_brief(v.slug),
             "freq": freq, "cron_expr": v.schedule if freq["kind"] == "cron" else "",
             "pdf_title": v.pdf.title, "pdf_header": v.pdf.header, "pdf_footer": v.pdf.footer,
-            "pdf_audience": v.pdf.audience, "pdf_accent": v.pdf.accent, "model": v.model or ""}
+            "pdf_audience": v.pdf.audience, "pdf_accent": v.pdf.accent, "model": v.model or "",
+            "components": components.format_components(comps), "include_components": v.components or "",
+            "batch_size": v.batch_size}
 
 
 def freq_from_form(form) -> dict:
@@ -123,12 +137,28 @@ def freq_from_form(form) -> dict:
 
 def values_from_form(form) -> dict:
     freq = freq_from_form(form)
+    kind = form.get("kind", "veille")
     return {"name": form.get("name", "").strip(), "slug": form.get("slug", "").strip(),
             "subject": form.get("subject", "").strip(), "recipients": form.get("recipients", ""),
+            "kind": kind if kind in store.KINDS else "veille",
             "brief": form.get("brief", ""), "freq": freq, "cron_expr": form.get("cron_expr", ""),
             "pdf_title": form.get("pdf_title", ""), "pdf_header": form.get("pdf_header", ""),
             "pdf_footer": form.get("pdf_footer", ""), "pdf_audience": form.get("pdf_audience", ""),
-            "pdf_accent": form.get("pdf_accent", "#0f766e"), "model": form.get("model", "").strip()}
+            "pdf_accent": form.get("pdf_accent", "#0f766e"), "model": form.get("model", "").strip(),
+            "components": form.get("components", ""), "include_components": form.get("include_components", ""),
+            "batch_size": form.get("batch_size", "") or store.Veille.batch_size}
+
+
+def kind_fields(values: dict) -> dict:
+    """Champs propres au type de veille, pour service.create_veille / update_veille."""
+    if values["kind"] == "composants":
+        return {"components": components.parse_components(values["components"]),
+                "batch_size": values["batch_size"]}
+    return {"include_components": values["include_components"]}
+
+
+def component_watches() -> list[store.Veille]:
+    return [x for x in store.list_all() if x.kind == "composants"]
 
 
 def pdf_from_values(values: dict) -> dict:
@@ -139,15 +169,7 @@ def pdf_from_values(values: dict) -> dict:
 # Santé
 # --------------------------------------------------------------------------
 def brevo_account() -> dict:
-    env = {}
-    try:
-        for line in (paths.hermes_home() / ".env").read_text(encoding="utf-8").splitlines():
-            if "=" in line and not line.lstrip().startswith("#"):
-                k, v = line.split("=", 1)
-                env[k.strip()] = v.strip().strip("'\"")
-    except OSError:
-        pass
-    key = os.environ.get("BREVO_API_KEY") or env.get("BREVO_API_KEY")
+    key = envfile.get("BREVO_API_KEY")
     if not key:
         return {"error": "BREVO_API_KEY absente"}
     req = urllib.request.Request("https://api.brevo.com/v3/account",
@@ -248,11 +270,15 @@ def create_app() -> FastAPI:
         return render(request, "partials/row.html", 400 if error else 200, row=row, error=error)
 
     # -------------------------------------------------------------- création / édition
+    def form_page(request: Request, values: dict, status_code: int = 200, /, **ctx):
+        briefs = [t for t in store.brief_templates() if t != service.COMPONENTS_TEMPLATE]
+        return render(request, "veille_form.html", status_code, values=values, watches=component_watches(),
+                      templates_=briefs if values["kind"] == "veille" else [], **ctx)
+
     @app.get("/veilles/new", response_class=HTMLResponse)
-    def new_form(request: Request, template: str = "vierge"):
-        templates_ = list(store.brief_templates())
-        return render(request, "veille_form.html", values=form_defaults(template=template),
-                      creating=True, templates_=templates_, template=template)
+    def new_form(request: Request, template: str = "vierge", kind: str = "veille"):
+        kind = kind if kind in store.KINDS else "veille"
+        return form_page(request, form_defaults(template=template, kind=kind), creating=True, template=template)
 
     @app.post("/veilles/new")
     async def create(request: Request):
@@ -263,13 +289,13 @@ def create_app() -> FastAPI:
                 name=values["name"], slug=values["slug"] or None, subject=values["subject"],
                 schedule_expr=schedule.to_cron(values["freq"]),
                 recipients=store.parse_recipients(values["recipients"]), brief=values["brief"],
-                pdf=pdf_from_values(values), model=values["model"] or None, actor=ACTOR)
+                pdf=pdf_from_values(values), model=values["model"] or None, kind=values["kind"],
+                actor=ACTOR, **kind_fields(values))
         except USER_ERRORS as exc:
-            return render(request, "veille_form.html", 400, values=values, creating=True,
-                          templates_=list(store.brief_templates()), error=str(exc))
+            return form_page(request, values, 400, creating=True, error=str(exc))
         return RedirectResponse(f"/veilles/{v.slug}?ok=created", status_code=303)
 
-    def detail_ctx(slug: str) -> dict:
+    def detail_ctx(slug: str, ntype: str = "") -> dict:
         v = store.load(slug)
         row = service.describe(v)
         logs = store.list_run_logs(slug)
@@ -277,12 +303,29 @@ def create_app() -> FastAPI:
         nxt = schedule.next_runs(v.schedule, 3)
         return {"row": row, "v": v, "reports": store.list_reports(slug), "logs": logs, "runs": runs,
                 "next_runs": nxt, "next_peak": bool(nxt) and pricing.is_peak(nxt[0]),
-                "costs": service.costs(slug)}
+                "costs": service.costs(slug), **components_ctx(v, ntype)}
+
+    def components_ctx(v: store.Veille, ntype: str = "") -> dict:
+        if v.kind != "composants":
+            return {}
+        comps = components.load_components(v.slug)["components"]
+        notices = components.load_notices(v.slug)
+        worst = components.worst_by_key(notices)
+        ntype = ntype if ntype in components.TYPES else ""
+        shown = components.for_display(notices, ntype or None)
+        return {"digikey_configured": credentials.status("digikey")["configured"],
+                "comps": [{**c, "worst": worst.get(components.key_of(c["mpn"], c["manufacturer"]))} for c in comps],
+                "notices": shown[:NOTICES_SHOWN], "notices_hidden": max(0, len(shown) - NOTICES_SHOWN),
+                "notice_total": len(notices), "ntype": ntype,
+                "critical": components.digest(comps, notices, [])["reminder"],
+                "linked": [x.slug for x in service._linked_veilles(v.slug)]}
 
     @app.get("/veilles/{slug}", response_class=HTMLResponse)
     def detail(request: Request, slug: str):
         try:
-            ctx = detail_ctx(slug)
+            ctx = detail_ctx(slug, request.query_params.get("type", ""))
+        except components.ComponentsError as exc:  # fichier corrompu : le dire, pas « introuvable »
+            return render(request, "error.html", 500, error=str(exc))
         except StoreError:
             return render(request, "error.html", 404, error="Veille introuvable.")
         return render(request, "veille_detail.html", **ctx)
@@ -291,9 +334,12 @@ def create_app() -> FastAPI:
     def edit_form(request: Request, slug: str):
         try:
             v = store.load(slug)
+            values = form_defaults(v)
+        except components.ComponentsError as exc:
+            return render(request, "error.html", 500, error=str(exc))
         except StoreError:
             return render(request, "error.html", 404, error="Veille introuvable.")
-        return render(request, "veille_form.html", values=form_defaults(v), creating=False, v=v)
+        return form_page(request, values, creating=False, v=v)
 
     @app.post("/veilles/{slug}/edit")
     async def update(request: Request, slug: str):
@@ -301,15 +347,15 @@ def create_app() -> FastAPI:
         values = values_from_form(form)
         try:
             v = store.load(slug)
+            values["kind"] = v.kind  # le type ne change pas après la création
             service.update_veille(
                 slug, name=values["name"], subject=values["subject"],
                 schedule_expr=schedule.to_cron(values["freq"]),
                 recipients=store.parse_recipients(values["recipients"]), brief=values["brief"],
-                pdf=pdf_from_values(values), model=values["model"], actor=ACTOR)
+                pdf=pdf_from_values(values), model=values["model"], actor=ACTOR, **kind_fields(values))
         except USER_ERRORS as exc:
             values["slug"] = slug
-            return render(request, "veille_form.html", 400, values=values, creating=False,
-                          v=store.load(slug), error=str(exc))
+            return form_page(request, values, 400, creating=False, v=store.load(slug), error=str(exc))
         return RedirectResponse(f"/veilles/{v.slug}?ok=updated", status_code=303)
 
     # -------------------------------------------------------------- fragments HTMX
@@ -353,6 +399,30 @@ def create_app() -> FastAPI:
         return FileResponse(path, media_type="text/plain; charset=utf-8", filename=name,
                             content_disposition_type="inline")
 
+    # -------------------------------------------------------------- sources (clés d'API)
+    @app.get("/sources", response_class=HTMLResponse)
+    def sources(request: Request):
+        return render(request, "sources.html", sources=service.sources_status())
+
+    @app.post("/sources/{provider}/{op}")
+    async def source_action(request: Request, provider: str, op: str):
+        form = await request.form()
+        try:
+            if op == "save":
+                changed = service.save_credentials(
+                    provider, {k: str(form.get(k, "")) for k in credentials.PROVIDERS.get(provider, {}).get("fields", {})},
+                    actor=ACTOR)
+                return RedirectResponse(f"/sources?ok={'creds-saved' if changed else 'creds-unchanged'}", 303)
+            if op == "delete":
+                service.delete_credentials(provider, actor=ACTOR)
+                return RedirectResponse("/sources?ok=creds-deleted", 303)
+            if op == "test":
+                result = service.check_credentials(provider, actor=ACTOR)
+                return render(request, "sources.html", sources=service.sources_status(), result=result)
+        except USER_ERRORS as exc:
+            return render(request, "sources.html", 400, sources=service.sources_status(), error=str(exc))
+        return PlainTextResponse("action inconnue", status_code=404)
+
     # -------------------------------------------------------------- santé
     @app.get("/health", response_class=HTMLResponse)
     def health(request: Request):
@@ -366,7 +436,8 @@ def create_app() -> FastAPI:
     def action(request: Request, slug: str, action: str):
         ops = {"pause": (service.pause, "paused"), "resume": (service.resume, "resumed"),
                "run": (service.run_now, "run"), "test-email": (service.send_test_email, "mail"),
-               "archive": (service.archive, "archived")}
+               "archive": (service.archive, "archived"),
+               "check-status": (service.check_statuses_now, "checking")}
         if action not in ops:
             return PlainTextResponse("action inconnue", status_code=404)
         func, code = ops[action]

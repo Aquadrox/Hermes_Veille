@@ -23,7 +23,7 @@ RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 
 5. RÉDIGE le corps du rapport en Markdown enrichi, EXACTEMENT selon les conventions du brief (blocs `::: {.keyfigures}` avec `.fig`, `::: {.card}` avec badges, `::: {.callout}`, `::: {.timeline}`, `::: {.glossary}`, `::: {.sources}`, tableaux pipe, et UN `<div class="chart-slot"></div>`). Rédige en FRANÇAIS. Écris-le dans `${dir}/rapports/D-veille.md` (D = date du jour AAAA-MM-JJ).
 
-6. DONNÉES DU GRAPHIQUE : écris `${dir}/rapports/D-charts.json` au format {"charts":[{"title":"...","source":"...","bars":[{"label":"...","value":N,"value_label":"..."}]}]}.
+6. DONNÉES DU GRAPHIQUE : écris `${dir}/rapports/D-charts.json` au format {"charts":[{"title":"...","source":"...","bars":[{"label":"...","value":N,"value_label":"..."}]}]}.${components_step}
 
 7. GÉNÈRE le PDF :
    python3 /opt/data/skills/productivity/styled-pdf-report/scripts/build_report.py --md ${dir}/rapports/D-veille.md --out ${dir}/rapports/D-veille.pdf --data ${dir}/rapports/D-charts.json --title "${pdf_title}" --subtitle "<période couverte, ex. Semaine NN · JJ–JJ mois AAAA>" --meta "Période : <période> | Temps de lecture : ~N min | Public : ${pdf_audience}" --header "${pdf_header}" --footer "${pdf_footer}" --accent "${pdf_accent}"

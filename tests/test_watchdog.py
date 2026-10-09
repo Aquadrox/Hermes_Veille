@@ -11,13 +11,13 @@ watchdog = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(watchdog)
 
 
-def volume(tmp_path, *, last_status="ok", report_days_ago=2, paused=False, max_age=192, size=30000):
+def volume(tmp_path, *, last_status="ok", report_days_ago=2, paused=False, max_age=192, size=30000, kind=None):
     vol = tmp_path / "data"
     d = vol / "veilles" / "demo"
     (d / "rapports").mkdir(parents=True)
     (d / "veille.json").write_text(json.dumps({
         "slug": "demo", "name": "Démo", "job_id": "j1", "max_age_hours": max_age,
-        "created_at": "2026-01-01T00:00:00+01:00"}))
+        "created_at": "2026-01-01T00:00:00+01:00", **({"kind": kind} if kind else {})}))
     if report_days_ago is not None:
         date = (dt.datetime.now() - dt.timedelta(days=report_days_ago)).strftime("%Y-%m-%d")
         (d / "rapports" / f"{date}-veille.pdf").write_bytes(b"x" * size)
@@ -49,6 +49,14 @@ def test_problems(tmp_path, capsys, kwargs, needle):
     assert run(volume(tmp_path, **kwargs), tmp_path, "--dry-run") == 1
     out = capsys.readouterr().out
     assert needle in out and "[dry-run] e-mail NON envoyé" in out
+
+
+def test_components_report_size_threshold(tmp_path, capsys):
+    # rapport composants sans avis : court (≈ 19 Ko), mais plausible ; une veille thématique non
+    assert run(volume(tmp_path, size=15000, kind="composants"), tmp_path, "--dry-run") == 0
+    assert run(volume(tmp_path / "b", size=15000), tmp_path, "--dry-run") == 1
+    assert run(volume(tmp_path / "c", size=2000, kind="composants"), tmp_path, "--dry-run") == 1
+    assert "suspicieusement petit" in capsys.readouterr().out
 
 
 def test_paused_veille_ignored(tmp_path):

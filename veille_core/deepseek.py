@@ -3,30 +3,16 @@ l'API expose (pas de coût par requête ni d'historique)."""
 from __future__ import annotations
 
 import json
-import os
 import urllib.request
 
-from . import paths
+from . import envfile
 
 BALANCE_URL = "https://api.deepseek.com/user/balance"
 
 
-def _api_key() -> str | None:
-    key = os.environ.get("DEEPSEEK_API_KEY")
-    if key:
-        return key
-    try:
-        for line in (paths.hermes_home() / ".env").read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("DEEPSEEK_API_KEY="):
-                return line.split("=", 1)[1].strip().strip("'\"") or None
-    except OSError:
-        pass
-    return None
-
-
 def balance(timeout: float = 10) -> dict:
     """{'available': bool, 'balances': [{'currency', 'total', 'granted', 'topped_up'}]} ou {'error'}."""
-    key = _api_key()
+    key = envfile.get("DEEPSEEK_API_KEY")
     if not key:
         return {"error": "DEEPSEEK_API_KEY absente"}
     req = urllib.request.Request(BALANCE_URL, headers={"Authorization": f"Bearer {key}",

@@ -14,7 +14,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from veille_core import deepseek, hermes, paths, pricing, schedule, service, store, version
+from veille_core import components, deepseek, hermes, paths, pricing, schedule, service, store, version
 from veille_core.store import StoreError
 
 USER_ERRORS = (StoreError, schedule.ScheduleError, service.ServiceError, hermes.HermesError)
@@ -24,6 +24,8 @@ SEND = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_
 DESTROY = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=False)
 
 Frequency = Literal["daily", "weekdays", "weekly", "monthly", "cron"]
+Kind = Literal["veille", "composants"]
+NoticeType = Literal["EOL", "PDN", "OBSOLETE", "LTB", "NRND", "PCN", "AUTRE"]
 DAY_NAMES = {
     "dimanche": 0, "lundi": 1, "mardi": 2, "mercredi": 3, "jeudi": 4, "vendredi": 5, "samedi": 6,
     "sunday": 0, "monday": 1, "tuesday": 2, "wednesday": 3, "thursday": 4, "friday": 5, "saturday": 6,
@@ -36,12 +38,21 @@ Gestion des veilles technologiques automatisées (rapports PDF envoyés par e-ma
 - Chaque veille a un identifiant `slug` : commence par `list_veilles` pour le trouver.
 - Une veille = un sujet, un brief de mission (le prompt éditable du rapport), une fréquence,
   des destinataires (envoi en copie cachée) et des rapports datés.
+- `check_component_statuses` (veille composants) vérifie le statut Digi-Key sans LLM ni e-mail.
 - `run_veille_now` et `send_test_email` envoient de VRAIS e-mails aux destinataires :
   confirme avec l'utilisateur avant de les appeler.
 - Pour modifier une partie du brief, préfère `edit_brief` (remplacement ciblé) à
   `update_brief` (remplacement complet).
 - `archive_veille` retire la veille du planning (rien n'est effacé) ; il exige de répéter le slug.
 - Heures exprimées à l'heure de Paris.
+- Veilles COMPOSANTS (`kind` = composants) : surveillance des avis PCN et des fins de vie (EOL,
+  PDN, obsolescence, dernière commande LTB, NRND) d'une liste de références « MPN ; Fabricant ;
+  Réf. interne ». `list_notices` donne les avis détectés (fins de vie en tête, avec leurs liens
+  sources) ; `list_components` l'état de chaque référence. Les FINS DE VIE sont l'information la
+  plus critique : présente-les toujours en premier. `include_components` (sur une veille
+  thématique) ajoute ces avis en chapitre de son e-mail.
+- Clés d'API des distributeurs (Digi-Key) : JAMAIS par la conversation. Elles se saisissent dans
+  l'interface web, page « Sources » ; `health` indique seulement si elles sont configurées.
 - Coûts : `get_costs` donne les tokens et le coût en USD de chaque exécution. DeepSeek facture
   le double en heures pleines (lun–ven 01h–04h et 06h–10h UTC) ; `preview_schedule` le signale.
 """
@@ -109,6 +120,9 @@ def _summary(row: dict) -> dict:
         "last_status": st.get("last_status"),
         "recipients_count": len(row["recipients"]),
         "last_report": row["last_report"]["date"] if row["last_report"] else None,
+        "kind": v.kind,
+        **({"components": row["components"]} if row["components"] else {}),
+        **({"include_components": v.components} if v.components else {}),
     }
 
 
@@ -149,7 +163,8 @@ def get_brief(slug: str) -> str:
 
 
 def list_brief_templates() -> list[str]:
-    """Modèles de brief disponibles pour créer une veille (ex. « vierge », « industrie-4-0»)."""
+    """Modèles de brief disponibles pour créer une veille (ex. « vierge », « industrie-4-0 » ;
+    « composants » : brief de recherche d'une veille composants)."""
     return sorted(store.brief_templates())
 
 
@@ -219,6 +234,40 @@ def preview_schedule(frequency: Frequency = "weekly", time: str = "08:00",
                      "ou le week-end)") if peak else "heure creuse DeepSeek"}
 
 
+def list_components(slug: str) -> list[dict]:
+    """Références suivies par une veille composants : MPN, fabricant, réf. interne, statut
+    Digi-Key, avis le plus critique, dates des dernières vérifications (Digi-Key et web)."""
+    v = _guard(service._components_veille, slug)
+    comps = _guard(components.load_components, v.slug)["components"]
+    worst = components.worst_by_key(_guard(components.load_notices, v.slug))
+    out = []
+    for c in comps:
+        dk, w = c.get("dk") or {}, worst.get(components.key_of(c["mpn"], c["manufacturer"]))
+        out.append({"mpn": c["mpn"], "manufacturer": c["manufacturer"], "ref": c.get("ref", ""),
+                    "digikey_status": dk.get("status"), "digikey_error": dk.get("error"),
+                    "digikey_checked_at": dk.get("checked_at"), "web_checked_at": c.get("web_checked_at"),
+                    "worst_notice": w["type"] if w else None})
+    return out
+
+
+def list_notices(slug: str | None = None, type: NoticeType | None = None, since: str | None = None,
+                 limit: int = 50) -> list[dict]:
+    """Avis PCN / fin de vie détectés, FINS DE VIE EN TÊTE puis les plus récents : type, référence,
+    intitulé, numéro, dates (publication, dernière commande, fin de vie), résumé et liens sources.
+    `slug` omis : toutes les veilles composants. `since` (AAAA-MM-JJ) : détectés depuis cette date."""
+    slugs = [slug] if slug else [v.slug for v in store.list_all() if v.kind == "composants"]
+    rows = []
+    for s in slugs:
+        rows += [{**n, "veille": s} for n in _guard(service.notices, s, type, since)]
+    rows = components.for_display(rows)[: max(1, min(limit, 500))]
+    return [{"veille": n["veille"], "type": n["type"], "type_label": components.TYPES[n["type"]][0],
+             "critical": n["type"] in components.CRITICAL, "mpn": n["mpn"], "manufacturer": n["manufacturer"],
+             "title": n["title"], "number": n.get("number"), "scope": n.get("scope"),
+             "published": n.get("published"), "ltb_date": n.get("ltb_date"), "eol_date": n.get("eol_date"),
+             "summary": n.get("summary"), "sources": n["sources"], "origin": n.get("origin"),
+             "found_at": n["found_at"]} for n in rows]
+
+
 def _cost_run(r: dict) -> dict:
     return {"date": _iso(r["started_at"]), "duration_min": r["duration_min"], "models": r["models"],
             "input_tokens": r["input_tokens"] + r["cache_read_tokens"],
@@ -254,6 +303,8 @@ def health() -> dict:
     return {"version": version(), "veilles": len(rows),
             "actives": sum(1 for r in rows if r["status"]["exists"] and not r["status"]["paused"]),
             "problems": problems, "deepseek_balance": deepseek.balance(),
+            "sources": [{"name": s["name"], "configured": s["configured"], "from_env": s["env"]}
+                        for s in service.sources_status()],
             "cost_month_usd": service.costs_overview()["total_month_usd"],
             "audit": service.read_audit(15)}
 
@@ -261,18 +312,30 @@ def health() -> dict:
 # --------------------------------------------------------------------------
 # Écriture
 # --------------------------------------------------------------------------
-def create_veille(name: str, subject: str, recipients: list[str], frequency: Frequency = "weekly",
-                  time: str = "08:00", day_of_week: str | int | None = "lundi",
+def create_veille(name: str, subject: str, recipients: list[str], frequency: Frequency | None = None,
+                  time: str | None = None, day_of_week: str | int | None = None,
                   day_of_month: int | None = None, cron: str | None = None,
                   template: str = "vierge", brief: str | None = None, slug: str | None = None,
                   paused: bool = False, pdf_title: str | None = None, pdf_footer: str | None = None,
-                  model: str | None = None) -> dict:
+                  model: str | None = None, kind: Kind = "veille", components_list: list[str] | None = None,
+                  include_components: str | None = None) -> dict:
     """Crée une veille. Le brief vient de `brief` (Markdown complet) ou du modèle `template`
     (les champs <NOM DE LA VEILLE> et <DOMAINE> du modèle « vierge » sont remplis avec `name`
     et `subject` ; complète ensuite la section « Couverture » avec `edit_brief`).
+    Fréquence par défaut : chaque lundi à 8h (veille composants : dimanche 23h, heures creuses).
+    `kind="composants"` : veille PCN / fins de vie ; `components_list` = lignes « MPN ; Fabricant ;
+    Réf. interne » (le modèle de brief « composants » est appliqué). `include_components` : slug
+    d'une veille composants dont les avis seront ajoutés en chapitre de l'e-mail de cette veille.
     `paused=True` crée la veille sans la planifier."""
-    expr = _guard(_schedule_expr, frequency, time, day_of_week, day_of_month, cron)
+    if kind == "composants" and frequency is None and cron is None and time is None and day_of_week is None:
+        expr = service.COMPONENTS_SCHEDULE
+    else:
+        expr = _guard(_schedule_expr, frequency or (None if cron else "weekly"), time or "08:00",
+                      "lundi" if day_of_week is None else day_of_week, day_of_month, cron)
     addresses = _guard(store.parse_recipients, "\n".join(recipients))
+    if kind == "composants" and brief is None and template == "vierge":
+        template = service.COMPONENTS_TEMPLATE
+    parsed = _guard(components.parse_components, "\n".join(components_list or []))
     if brief is None:
         templates = store.brief_templates()
         if template not in templates:
@@ -281,7 +344,8 @@ def create_veille(name: str, subject: str, recipients: list[str], frequency: Fre
     pdf = {k: val for k, val in (("title", pdf_title), ("footer", pdf_footer)) if val}
     v = _guard(service.create_veille, name=name, subject=subject, schedule_expr=expr,
                recipients=addresses, brief=brief, pdf=pdf, slug=slug, model=model,
-               paused=paused, actor=_actor())
+               paused=paused, kind=kind, components=parsed if kind == "composants" else None,
+               include_components=include_components, actor=_actor())
     return get_veille(v.slug)
 
 
@@ -290,15 +354,19 @@ def update_veille(slug: str, name: str | None = None, subject: str | None = None
                   day_of_week: str | int | None = None, day_of_month: int | None = None,
                   cron: str | None = None, pdf_title: str | None = None, pdf_header: str | None = None,
                   pdf_footer: str | None = None, pdf_audience: str | None = None,
-                  model: str | None = None) -> dict:
+                  model: str | None = None, include_components: str | None = None,
+                  batch_size: int | None = None) -> dict:
     """Modifie une veille : seuls les champs fournis changent. Pour la fréquence, fournir
-    `frequency` (et `time`, `day_of_week` ou `day_of_month` selon le cas) ou `cron`."""
+    `frequency` (et `time`, `day_of_week` ou `day_of_month` selon le cas) ou `cron`.
+    `include_components` : slug d'une veille composants à inclure en chapitre ("" pour retirer).
+    `batch_size` (veille composants) : nombre de recherches web par exécution."""
     _guard(store.load, slug)
     expr = _guard(_schedule_expr, frequency, time, day_of_week, day_of_month, cron)
     pdf = {k: val for k, val in (("title", pdf_title), ("header", pdf_header), ("footer", pdf_footer),
                                  ("audience", pdf_audience)) if val is not None}
     _guard(service.update_veille, slug, name=name, subject=subject, schedule_expr=expr,
-           pdf=pdf or None, model=model, actor=_actor())
+           pdf=pdf or None, model=model, include_components=include_components,
+           batch_size=batch_size, actor=_actor())
     return get_veille(slug)
 
 
@@ -350,6 +418,20 @@ def edit_brief(slug: str, find: str, replace: str) -> dict:
     return {"slug": slug, "chars": len(store.read_brief(slug))}
 
 
+def add_components(slug: str, components_list: list[str]) -> dict:
+    """Ajoute des références à une veille composants : lignes « MPN ; Fabricant ; Réf. interne »
+    (réf. facultative). Les doublons sont ignorés."""
+    items = _guard(components.parse_components, "\n".join(components_list))
+    added = _guard(service.add_components, slug, items, actor=_actor())
+    return {"slug": slug, "added": added, "total": len(components.load_components(slug)["components"])}
+
+
+def remove_components(slug: str, mpns: list[str]) -> dict:
+    """Retire des références (par MPN) d'une veille composants ; l'historique des avis est conservé."""
+    removed = _guard(service.remove_components, slug, mpns, actor=_actor())
+    return {"slug": slug, "removed": removed, "total": len(components.load_components(slug)["components"])}
+
+
 def pause_veille(slug: str) -> dict:
     """Met une veille en pause : elle n'est plus exécutée ni surveillée jusqu'à sa reprise."""
     _guard(service.pause, slug, actor=_actor())
@@ -364,10 +446,23 @@ def resume_veille(slug: str) -> dict:
 
 def run_veille_now(slug: str) -> dict:
     """Lance la veille immédiatement, en arrière-plan : recherche, rapport PDF et ENVOI aux
-    destinataires (quelques minutes). Suivre l'avancement avec `get_run_log`."""
+    destinataires (quelques minutes). Veille composants : analyse complète (statut Digi-Key,
+    recherche web, rapport) ; si elle est rattachée à une veille (`include_components`), AUCUN
+    e-mail : ses nouveaux avis partiront dans le prochain e-mail de cette veille. Suivre
+    l'avancement avec `get_run_log`."""
     log = _guard(service.run_now, slug, actor=_actor())
     return {"slug": slug, "started": True, "log": log,
             "hint": "appeler get_run_log dans quelques minutes pour suivre l'exécution"}
+
+
+def check_component_statuses(slug: str) -> dict:
+    """Veille composants : vérifie TOUT DE SUITE le statut de cycle de vie Digi-Key de toutes les
+    références (Active, Last Time Buy, NRND, Obsolete…), en arrière-plan, sans LLM, sans coût en
+    tokens et sans e-mail. Utile après un ajout de composants. Les fins de vie détectées
+    apparaissent ensuite dans `list_notices` ; suivre l'avancement avec `get_run_log`."""
+    log = _guard(service.check_statuses_now, slug, actor=_actor())
+    return {"slug": slug, "started": True, "log": log,
+            "hint": "quelques minutes pour 300 références ; puis list_notices"}
 
 
 def send_test_email(slug: str) -> dict:
@@ -386,11 +481,13 @@ def archive_veille(slug: str, confirm_slug: str) -> dict:
 
 
 READ_TOOLS = [list_veilles, get_veille, get_brief, list_brief_templates, list_reports, read_report,
-              get_run_log, run_history, preview_schedule, get_costs, health]
+              get_run_log, run_history, preview_schedule, get_costs, health, list_components, list_notices]
 WRITE_TOOLS = [(create_veille, WRITE), (update_veille, WRITE), (set_recipients, WRITE),
                (add_recipients, WRITE), (remove_recipients, WRITE), (update_brief, WRITE),
-               (edit_brief, WRITE), (pause_veille, WRITE), (resume_veille, WRITE),
-               (run_veille_now, SEND), (send_test_email, SEND), (archive_veille, DESTROY)]
+               (edit_brief, WRITE), (add_components, WRITE), (remove_components, WRITE),
+               (pause_veille, WRITE), (resume_veille, WRITE),
+               (check_component_statuses, WRITE), (run_veille_now, SEND), (send_test_email, SEND),
+               (archive_veille, DESTROY)]
 
 
 def build_server(readonly: bool = False) -> MCPServer:

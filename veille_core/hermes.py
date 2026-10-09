@@ -216,16 +216,20 @@ def run_sync(job_id: str, timeout: int = 3 * 3600) -> str:
 
 
 def run_detached(job_id: str, log_path: Path) -> int:
-    """Lance `hermes cron run` en arrière-plan, sortie dans `log_path` ; renvoie le PID.
+    """Lance `hermes cron run` en arrière-plan, sortie dans `log_path` ; renvoie le PID."""
+    return spawn_detached([paths.hermes_bin(), "cron", "run", job_id], log_path)
 
-    Nouvelle session : le run survit à un redémarrage du processus appelant (UI).
+
+def spawn_detached(cmd: list[str], log_path: Path, env: dict[str, str] | None = None) -> int:
+    """Lance `cmd` (liste d'arguments, jamais de shell) en arrière-plan, sortie dans `log_path`.
+
+    Nouvelle session : le processus survit à un redémarrage de l'appelant (UI).
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "ab") as log:
         p = subprocess.Popen(
-            [paths.hermes_bin(), "cron", "run", job_id],
-            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-            start_new_session=True, env=os.environ.copy(),
+            cmd, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            start_new_session=True, env=env or os.environ.copy(),
         )
     # Récolte le processus à sa fin (sinon il reste zombie dans l'UI).
     threading.Thread(target=p.wait, name=f"reap-{p.pid}", daemon=True).start()

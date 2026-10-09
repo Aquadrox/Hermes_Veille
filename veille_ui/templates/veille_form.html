@@ -1,8 +1,9 @@
 {% extends "base.html" %}
-{% block title %}{{ "Nouvelle veille" if creating else "Modifier " ~ values.name }} — Veilles{% endblock %}
+{% set composants = values.kind == "composants" %}
+{% block title %}{{ ("Nouvelle veille composants" if composants else "Nouvelle veille") if creating else "Modifier " ~ values.name }} — Veilles{% endblock %}
 {% block content %}
 <div class="head">
-  <h1>{{ "Nouvelle veille" if creating else "Modifier « " ~ values.name ~ " »" }}</h1>
+  <h1>{{ ("Nouvelle veille composants" if composants else "Nouvelle veille") if creating else "Modifier « " ~ values.name ~ " »" }}</h1>
   {% if not creating %}<a href="/veilles/{{ values.slug }}">← Retour</a>{% endif %}
 </div>
 
@@ -14,6 +15,7 @@
 
 <form method="post" action="{{ '/veilles/new' if creating else '/veilles/' ~ values.slug ~ '/edit' }}" class="stack">
   <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="kind" value="{{ values.kind }}">
 
   <section class="card">
     <h2>Identité</h2>
@@ -27,8 +29,31 @@
       {% endif %}
     </div>
     <label>Sujet <span class="muted small">(une ligne : sert au prompt et à l'e-mail)</span>
-      <input name="subject" value="{{ values.subject }}" maxlength="200"></label>
+      <input name="subject" value="{{ values.subject }}" maxlength="200"{% if composants %} placeholder="ex. nomenclature carte contrôleur v3"{% endif %}></label>
   </section>
+
+  {% if composants %}
+  <section class="card">
+    <h2>Composants suivis</h2>
+    <label>Un composant par ligne : <code>MPN ; Fabricant ; Réf. interne</code>
+      <span class="muted small">(réf. facultative ; collage direct depuis un tableur accepté, une ligne d'en-tête « MPN » est ignorée)</span>
+      <textarea name="components" rows="12" class="mono" spellcheck="false" autocapitalize="off"
+                placeholder="LM317T ; Texas Instruments ; R-001&#10;STM32F103C8T6 ; STMicroelectronics ; U-12">{{ values.components }}</textarea></label>
+    <div class="grid2">
+      <label>Recherches web par exécution <span class="muted small">(lot tournant ; le statut Digi-Key couvre tous les composants à chaque exécution)</span>
+        <input type="number" name="batch_size" min="1" max="500" value="{{ values.batch_size }}"></label>
+    </div>
+  </section>
+  {% elif watches %}
+  <section class="card">
+    <h2>Chapitre composants</h2>
+    <label>Inclure dans l'e-mail de cette veille les nouveaux avis PCN et fins de vie de :
+      <select name="include_components">
+        <option value="">(aucune veille composants)</option>
+        {% for w in watches %}<option value="{{ w.slug }}"{% if values.include_components == w.slug %} selected{% endif %}>{{ w.name }}</option>{% endfor %}
+      </select></label>
+  </section>
+  {% endif %}
 
   <section class="card">
     <h2>Fréquence</h2>
@@ -58,17 +83,21 @@
 
   <section class="card">
     <h2>Destinataires</h2>
+    {% if composants %}<p class="muted small">Utilisés seulement si cette veille composants n'est rattachée à aucune veille
+      (sinon, ses avis partent en chapitre dans l'e-mail de la veille).</p>{% endif %}
     <label>Une adresse par ligne <span class="muted small">(envoi en copie cachée : ils ne se voient pas)</span>
       <textarea name="recipients" rows="4" required>{{ values.recipients }}</textarea></label>
   </section>
 
   <section class="card">
-    <h2>Brief de mission</h2>
+    {% if composants %}<details><summary><h2 class="inline">Brief de recherche</h2> <span class="small">(avancé : sources et règles de l'agent)</span></summary>
+    {% else %}<h2>Brief de mission</h2>
     <p class="muted small">Le prompt éditable : périmètre, thèmes, règles de fiabilité, structure, mise en forme.
-      Relu à chaque exécution.</p>
-    <textarea name="brief" rows="22" class="mono" required>{{ values.brief }}</textarea>
+      Relu à chaque exécution.</p>{% endif %}
+    <textarea name="brief" rows="22" class="mono"{% if not composants %} required{% endif %}>{{ values.brief }}</textarea>
     <p><button type="button" hx-post="/fragments/brief" hx-include="[name=brief]" hx-target="#brief-preview">Aperçu</button></p>
     <div id="brief-preview"></div>
+    {% if composants %}</details>{% endif %}
   </section>
 
   <section class="card">
