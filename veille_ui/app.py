@@ -319,6 +319,8 @@ def create_app() -> FastAPI:
     def detail(request: Request, slug: str):
         try:
             ctx = detail_ctx(slug, request.query_params.get("type", ""))
+        except components.ComponentsError as exc:  # fichier corrompu : le dire, pas « introuvable »
+            return render(request, "error.html", 500, error=str(exc))
         except StoreError:
             return render(request, "error.html", 404, error="Veille introuvable.")
         return render(request, "veille_detail.html", **ctx)
@@ -327,9 +329,12 @@ def create_app() -> FastAPI:
     def edit_form(request: Request, slug: str):
         try:
             v = store.load(slug)
+            values = form_defaults(v)
+        except components.ComponentsError as exc:
+            return render(request, "error.html", 500, error=str(exc))
         except StoreError:
             return render(request, "error.html", 404, error="Veille introuvable.")
-        return form_page(request, form_defaults(v), creating=False, v=v)
+        return form_page(request, values, creating=False, v=v)
 
     @app.post("/veilles/{slug}/edit")
     async def update(request: Request, slug: str):

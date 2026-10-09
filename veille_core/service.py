@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from . import components as comp
 from . import digikey, hermes, paths, pricing, render, schedule, store
@@ -492,10 +493,10 @@ def _set_link(v: Veille, target: str | None) -> bool:
     if target:
         if v.kind != "veille":
             raise StoreError("seule une veille thématique peut inclure un chapitre composants")
-        if _components_veille(target).slug == v.slug:
-            raise StoreError("une veille ne peut pas s'inclure elle-même")
+        _components_veille(target)
         notices = comp.load_notices(target)
-        comp.mark_delivered(notices, {n["id"] for n in notices}, v.slug, f"rattachement {comp.today()}")
+        comp.mark_delivered(notices, {n["id"] for n in notices}, comp.chapter_channel(v.slug),
+                            f"rattachement {comp.today()}")
         comp.save_notices(target, notices)
     v.components = target
     return True
@@ -548,7 +549,7 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
                 dk.update(status=r["status"], product_url=r["product_url"])
                 if ntype:
                     url = r["product_url"] or comp.normalize_url(
-                        "https://www.digikey.com/en/products/result?keywords=" + c["mpn"].replace(" ", "+"))
+                        "https://www.digikey.com/en/products/result?keywords=" + quote_plus(c["mpn"]))
                     new += comp.merge(notices, [{
                         "key": key, "mpn": c["mpn"], "manufacturer": c["manufacturer"], "type": ntype,
                         "title": f"Statut Digi-Key : {r['status']}", "number": "", "published": "",
@@ -574,24 +575,33 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
                       for c in lot]}
 
 
+def _edit_components(slug: str, edit, actor: str, action: str) -> int:
+    """Modifie la liste SOUS le verrou (relecture comprise : aucune édition concurrente perdue)."""
+    with _locked():
+        data = comp.load_components(_components_veille(slug).slug)
+        before = len(data["components"])
+        data["components"] = comp.replace_components(data["components"], edit(data["components"]))
+        delta = abs(len(data["components"]) - before)
+        if delta:
+            comp.save_components(slug, data)
+    audit(actor, action, slug, f"{delta} composant(s)")
+    return delta
+
+
 def add_components(slug: str, items: list[dict], actor: str = "cli") -> int:
     """Ajoute des références (doublons ignorés) ; renvoie le nombre réellement ajouté."""
-    current = comp.load_components(_components_veille(slug).slug)["components"]
-    keys = {comp.key_of(c["mpn"], c["manufacturer"]) for c in current}
-    fresh = [i for i in items if comp.key_of(i["mpn"], i["manufacturer"]) not in keys]
-    if fresh:
-        update_veille(slug, components=current + fresh, actor=actor)
-    return len(fresh)
+    def edit(current):
+        keys = {comp.key_of(c["mpn"], c["manufacturer"]) for c in current}
+        fresh = {comp.key_of(i["mpn"], i["manufacturer"]): i for i in items}
+        return current + [i for k, i in fresh.items() if k not in keys]
+    return _edit_components(slug, edit, actor, "components-add")
 
 
 def remove_components(slug: str, mpns: list[str], actor: str = "cli") -> int:
     """Retire les références de ces MPN (tous fabricants) ; l'historique des avis est conservé."""
-    current = comp.load_components(_components_veille(slug).slug)["components"]
     drop = {comp.norm_mpn(m) for m in mpns}
-    kept = [c for c in current if comp.norm_mpn(c["mpn"]) not in drop]
-    if len(kept) != len(current):
-        update_veille(slug, components=kept, actor=actor)
-    return len(current) - len(kept)
+    return _edit_components(slug, lambda current: [c for c in current if comp.norm_mpn(c["mpn"]) not in drop],
+                            actor, "components-remove")
 
 
 def notices(slug: str, ntype: str | None = None, since: str | None = None) -> list[dict]:
@@ -653,7 +663,7 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         linked = [x.slug for x in _linked_veilles(slug)]
     audit(actor, "components-finalize", slug, f"{len(new)} nouvel(s) avis, {len(rejected)} rejet(s)")
 
-    report = comp.pending(notices, "report", day)
+    report = comp.pending(notices, "report", {day})
     view = comp.digest(data["components"], notices, report)
     body = comp.to_markdown(view, heading="#")
     searched = [c["mpn"] for c in data["components"] if comp.key_of(c["mpn"], c["manufacturer"]) in lot]
@@ -670,7 +680,7 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
              f"(dont {sum(1 for n in new if n['type'] in comp.CRITICAL)} fin(s) de vie / dernière(s) commande(s)), "
              f"{len(rejected)} rejet(s), PDF {pdf}"]
     lines += [f"  rejet {r}" for r in rejected[:20]]
-    mail = comp.pending(notices, "mail", day, rerun=False)
+    mail = comp.pending(notices, "mail")
     if linked:
         # Livrés par le chapitre de la veille : le canal e-mail reste à jour en cas de détachement.
         _mark(slug, {n["id"] for n in mail}, "mail", f"via {linked[0]}")
@@ -697,23 +707,31 @@ def components_chapter(slug: str, for_slug: str, report_md: Path, actor: str = "
 
     Idempotent : relancé sur le même fichier, le chapitre précédent (toujours en fin) est remplacé.
     """
-    store.load(for_slug)
+    target = store.load(for_slug)
+    rdir = store.veille_dir(for_slug) / "rapports"
     path = report_md.resolve()
-    if path.parent != (store.veille_dir(for_slug) / "rapports").resolve() \
-            or not store.REPORT_RE.match(path.name) or path.suffix != ".md" or not path.is_file():
+    if path.parent != rdir.resolve() or not store.REPORT_RE.match(path.name) \
+            or not path.name.endswith(".md") or not path.is_file():
         raise StoreError(f"rapport Markdown invalide pour la veille {for_slug} : {report_md}")
     try:
         _components_veille(slug)
     except StoreError:
         return None
-    day = comp.today()
+    if target.components != slug:
+        raise StoreError(f"la veille {for_slug} n'inclut pas la veille composants {slug}")
+    day, channel = comp.today(), comp.chapter_channel(for_slug)
     with _locked():
         data, notices = comp.load_components(slug), comp.load_notices(slug)
-        new = comp.pending(notices, for_slug, day)
+        # Livrés un jour où la veille n'a finalement produit aucun PDF (exécution en échec après
+        # l'ajout du chapitre) : pas réellement envoyés, donc réinclus.
+        failed = {d for d in comp.delivery_days(notices, channel) if not (rdir / f"{d}-veille.pdf").is_file()}
+        new = comp.pending(notices, channel, {day} | failed)
         view = comp.digest(data["components"], notices, new)
         text = path.read_text(encoding="utf-8").split(CHAPTER_MARK)[0].rstrip()
         store.atomic_write(path, f"{text}\n\n{CHAPTER_MARK}\n\n{comp.to_markdown(view)}")
-        comp.mark_delivered(notices, {n["id"] for n in new}, for_slug, day)
+        for n in new:  # nouvelle date de livraison, y compris pour les réinclus
+            n["delivered"].pop(channel, None)
+        comp.mark_delivered(notices, {n["id"] for n in new}, channel, day)
         comp.save_notices(slug, notices)
     audit(actor, "components-chapter", slug, f"{for_slug} : {len(new)} avis")
     return comp.subject_prefix(view).strip()

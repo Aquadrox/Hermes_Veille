@@ -42,6 +42,8 @@ TYPES = {
 }
 CRITICAL = frozenset(t for t, (_, sev) in TYPES.items() if sev <= 1)
 SCOPES = ("référence", "gamme")
+HEADER_WORDS = {"mpn", "référence", "reference", "ref", "partnumber", "manufacturerpartnumber", "fabricant",
+                "manufacturer", "mfr", "brand", "marque"}
 _TEXT_LIMITS = {"title": 200, "number": 64, "summary": 600, "label": 80}
 
 
@@ -71,9 +73,10 @@ def key_of(mpn: str, manufacturer: str) -> str:
 
 
 def same_manufacturer(a: str, b: str) -> bool:
-    """« Texas Instruments » ~ « Texas Instruments Inc. » ; « TI » ne correspond pas (ambigu)."""
-    na, nb = norm_mfr(a), norm_mfr(b)
-    return bool(na and nb) and (na in nb or nb in na)
+    """« Texas Instruments » ~ « Texas Instruments Inc. ». Un nom court (« TI », « ON ») doit être
+    identique : « ON » n'est pas contenu dans « Infineon »."""
+    na, nb = sorted((norm_mfr(a), norm_mfr(b)), key=len)
+    return bool(na) and (na == nb or (len(na) >= 4 and na in nb))
 
 
 def parse_components(text: str) -> list[dict]:
@@ -82,14 +85,16 @@ def parse_components(text: str) -> list[dict]:
     Le collage depuis un tableur (tabulations) fonctionne tel quel ; `#` commente une ligne ;
     une ligne d'en-tête « MPN… » est ignorée ; doublons fusionnés (même fabricant et MPN).
     """
-    out, seen, bad = [], set(), []
+    out, seen, bad, first = [], set(), [], True
     for n, raw in enumerate((text or "").splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         sep = "\t" if "\t" in line else (";" if ";" in line else ",")
         parts = [p.strip() for p in line.split(sep)]
-        if n == 1 and parts[0].lower() in ("mpn", "référence", "reference", "ref"):
+        header = first and {re.sub(r"[^a-zé]", "", p.lower()) for p in parts[:2]} & HEADER_WORDS
+        first = False
+        if header:  # ligne d'en-tête d'un export de tableur
             continue
         mpn, mfr = parts[0], parts[1] if len(parts) > 1 else ""
         ref = parts[2][:64] if len(parts) > 2 else ""
@@ -219,8 +224,12 @@ def validate_candidates(raw, components: list[dict]) -> tuple[list[dict], list[s
         if ntype not in TYPES:
             rejected.append(f"#{i} : type inconnu « {ntype[:20]} »")
             continue
+        raw_sources, mpns = item.get("sources"), item.get("mpns") or ([item["mpn"]] if item.get("mpn") else [])
+        if not isinstance(raw_sources, list) or not isinstance(mpns, list):
+            rejected.append(f"#{i} : « sources » et « mpns » doivent être des listes")
+            continue
         sources, seen_urls = [], set()
-        for s in item.get("sources") or []:
+        for s in raw_sources:
             url = normalize_url(s.get("url") if isinstance(s, dict) else s)
             if url and url not in seen_urls:
                 seen_urls.add(url)
@@ -229,10 +238,9 @@ def validate_candidates(raw, components: list[dict]) -> tuple[list[dict], list[s
         if not sources:
             rejected.append(f"#{i} : aucune source http(s) valide")
             continue
-        mpns = item.get("mpns") or ([item["mpn"]] if item.get("mpn") else [])
         manufacturer = _text(item.get("manufacturer"), "label")
         matched = []
-        for mpn in mpns if isinstance(mpns, list) else []:
+        for mpn in mpns:
             cands = by_mpn.get(norm_mpn(_text(mpn, "label")), [])
             if len(cands) > 1 and manufacturer:
                 cands = [c for c in cands if same_manufacturer(c["manufacturer"], manufacturer)]
@@ -265,7 +273,10 @@ def validate_candidates(raw, components: list[dict]) -> tuple[list[dict], list[s
 # Fusion incrémentale
 # --------------------------------------------------------------------------
 def _identities(n: dict) -> set[tuple[str, str]]:
-    ids = {(n["key"], "u:" + s["url"]) for s in n["sources"]}
+    """Identités d'un avis. Le TYPE fait partie de l'identité par lien : une même fiche produit qui
+    passe de NRND à « Obsolete » est une aggravation à signaler, pas un doublon. Un numéro
+    d'avis désigne en revanche un seul document, quel que soit le type déclaré."""
+    ids = {(n["key"], f"u:{n['type']}:{s['url']}") for s in n["sources"]}
     if n.get("number"):
         ids.add((n["key"], "n:" + norm_mpn(n["number"])))
     if n.get("origin") == "digikey":
@@ -308,15 +319,24 @@ def merge(notices: list[dict], candidates: list[dict], found_at: str | None = No
     return new
 
 
-def pending(notices: list[dict], channel: str, day: str | None = None, rerun: bool = True) -> list[dict]:
-    """Avis pas encore livrés sur ce canal.
+def chapter_channel(veille_slug: str) -> str:
+    """Canal de livraison du chapitre d'une veille (préfixé : un slug « mail » ou « report » ne
+    peut pas se confondre avec ces canaux)."""
+    return "veille:" + veille_slug
 
-    `rerun` : ceux livrés AUJOURD'HUI sont réinclus (le rapport du jour est régénéré en entier lors
-    d'une relance) ; False pour un envoi qui s'ajoute aux précédents (e-mail dédié).
+
+def pending(notices: list[dict], channel: str, redo: set[str] | frozenset[str] = frozenset()) -> list[dict]:
+    """Avis pas encore livrés sur ce canal, plus ceux livrés à l'une des dates `redo`.
+
+    `redo` contient en général le jour même (rapport régénéré lors d'une relance) et, pour un
+    chapitre, les jours où la veille n'a finalement produit aucun rapport (exécution en échec).
     """
-    day = day or today()
-    ok = (None, day) if rerun else (None,)
-    return [n for n in notices if n.get("delivered", {}).get(channel) in ok]
+    return [n for n in notices if n.get("delivered", {}).get(channel) in (None, *redo)]
+
+
+def delivery_days(notices: list[dict], channel: str) -> set[str]:
+    """Dates (AAAA-MM-JJ) de livraison sur ce canal (hors marqueurs « rattachement … »)."""
+    return {d for n in notices if DATE_RE.match(d := n.get("delivered", {}).get(channel) or "")}
 
 
 def mark_delivered(notices: list[dict], ids: set[str], channel: str, day: str | None = None) -> None:

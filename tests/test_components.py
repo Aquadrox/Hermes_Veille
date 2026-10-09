@@ -122,12 +122,13 @@ def test_pending_and_mark_delivered():
     notices = []
     comp.merge(notices, _valid(), "2026-10-01")
     ids = {n["id"] for n in notices}
-    assert comp.pending(notices, "veille-a", "2026-10-05") == notices
+    assert comp.pending(notices, "veille-a") == notices
     comp.mark_delivered(notices, ids, "veille-a", "2026-10-05")
-    assert comp.pending(notices, "veille-a", "2026-10-05") == notices  # relance du même jour
-    assert comp.pending(notices, "veille-a", "2026-10-12") == []
-    assert comp.pending(notices, "veille-b", "2026-10-12") == notices
-    assert comp.pending(notices, "veille-a", "2026-10-05", rerun=False) == []
+    assert comp.pending(notices, "veille-a", {"2026-10-05"}) == notices  # relance du même jour
+    assert comp.pending(notices, "veille-a", {"2026-10-12"}) == []
+    assert comp.pending(notices, "veille-b", {"2026-10-12"}) == notices
+    assert comp.pending(notices, "veille-a") == []
+    assert comp.delivery_days(notices, "veille-a") == {"2026-10-05"}
     comp.mark_delivered(notices, ids, "veille-a", "2026-10-12")
     assert notices[0]["delivered"]["veille-a"] == "2026-10-05"  # première livraison conservée
 
@@ -286,7 +287,8 @@ def test_link_veille_to_components(watch):
     assert (f"veillectl components chapter {watch.slug} --for {v.slug} --append {v.dir}/rapports/D-veille.md"
             in prompt)
     # les avis antérieurs au rattachement ne sont pas réexpédiés
-    assert comp.pending(comp.load_notices(watch.slug), v.slug) == []
+    assert comp.pending(comp.load_notices(watch.slug), comp.chapter_channel(v.slug)) == []
+    assert comp.delivery_days(comp.load_notices(watch.slug), comp.chapter_channel(v.slug)) == set()
     with pytest.raises(store.StoreError, match="seule une veille thématique"):
         service.update_veille(watch.slug, include_components=watch.slug)
     with pytest.raises(service.ServiceError, match="n'est pas une veille composants"):
@@ -437,6 +439,7 @@ def test_chapter(watch, tools):
     text = md.read_text()
     assert text.count(service.CHAPTER_MARK) == 1 and text.startswith("# Rapport\n\nTexte.")
     assert text.index("Nouvelles fins de vie") < text.index("Autres nouveaux avis")
+    (v.dir / "rapports" / f"{comp.today()}-veille.pdf").write_bytes(b"%PDF")  # exécution réussie
     # le lendemain : plus rien de nouveau, mais le rappel des fins de vie reste
     import veille_core.components as c_mod
     orig = c_mod.today
@@ -673,3 +676,101 @@ def test_digikey_answers_are_not_trusted_for_links(watch):
     url = comp.load_notices(watch.slug)[0]["sources"][0]["url"]
     assert re.match(r"^https://www\.digikey\.com/en/products/result\?keywords=LM317T$", url)
 
+
+
+# --------------------------------------------------------------------------
+# Correctifs issus de la revue
+# --------------------------------------------------------------------------
+def test_escalation_on_same_link_is_reported(watch):
+    """NRND puis « Obsolete » sur la même fiche Digi-Key : l'aggravation est signalée."""
+    url = "https://www.digikey.com/p/1"
+    service.components_scan(watch.slug, client=FakeClient({"LM317T": {"status": "Not For New Designs",
+                                                                      "product_url": url}}))
+    import veille_core.components as c_mod
+    orig = c_mod.today
+    try:
+        c_mod.today = lambda: "2099-01-01"
+        out = service.components_scan(watch.slug, client=FakeClient({"LM317T": {"status": "Obsolete",
+                                                                                "product_url": url}}))
+    finally:
+        c_mod.today = orig
+    assert out["new_digikey_notices"] == 1
+    assert [n["type"] for n in comp.load_notices(watch.slug)] == ["NRND", "OBSOLETE"]
+    # même chose pour le web : PCN puis EOL citant la même fiche distributeur
+    notices = []
+    comp.merge(notices, _valid(ntype="PCN", url="https://mouser.com/p/LM317T"))
+    assert len(comp.merge(notices, _valid(ntype="EOL", url="https://mouser.com/p/LM317T"))) == 1
+
+
+@pytest.mark.parametrize("bad", [{"sources": 5}, {"sources": "https://x.org"}, {"mpns": 5}, {"mpns": "LM317T"}])
+def test_malformed_candidate_is_rejected_not_crashing(bad):
+    comps = comp.replace_components([], comp.parse_components("LM317T;TI"))
+    valid, rejected = comp.validate_candidates([{**cand(["LM317T"]), **bad}, cand(["LM317T"])], comps)
+    assert len(valid) == 1 and "doivent être des listes" in rejected[0]
+
+
+def test_chapter_reincludes_notices_of_failed_run(watch, tools):
+    import veille_core.components as c_mod
+    v = service.create_veille(name="Veille Indus", subject="s", schedule_expr="30 6 * * 1",
+                              recipients=["a@example.org"], brief="# b\n", include_components=watch.slug)
+    finalize(watch, [cand(["NE555P"], ntype="PCN", url="https://a.org/p")])
+    rdir = v.dir / "rapports"
+    orig = c_mod.today
+    try:
+        c_mod.today = lambda: "2099-01-05"
+        md = rdir / "2099-01-05-veille.md"
+        md.write_text("# r\n")
+        service.components_chapter(watch.slug, v.slug, md)  # puis l'exécution échoue : pas de PDF
+        c_mod.today = lambda: "2099-01-12"
+        md2 = rdir / "2099-01-12-veille.md"
+        md2.write_text("# r\n")
+        service.components_chapter(watch.slug, v.slug, md2)
+        assert "Autres nouveaux avis" in md2.read_text()  # réinclus
+        (rdir / "2099-01-12-veille.pdf").write_bytes(b"%PDF")  # cette fois le rapport est produit
+        c_mod.today = lambda: "2099-01-19"
+        md3 = rdir / "2099-01-19-veille.md"
+        md3.write_text("# r\n")
+        service.components_chapter(watch.slug, v.slug, md3)
+        assert "Aucun nouvel avis" in md3.read_text()
+    finally:
+        c_mod.today = orig
+
+
+def test_chapter_requires_link_and_channel_namespace(watch, tools):
+    report = service.create_veille(name="Report", slug="report", subject="s", schedule_expr="30 6 * * 1",
+                                   recipients=["a@example.org"], brief="# b\n")
+    md = report.dir / "rapports" / "2026-10-12-veille.md"
+    md.write_text("# r\n")
+    with pytest.raises(store.StoreError, match="n'inclut pas"):
+        service.components_chapter(watch.slug, "report", md)
+    finalize(watch, [cand(["LM317T"])])  # livré sur le canal « report » de la veille composants
+    service.update_veille("report", include_components=watch.slug)
+    comp.save_notices(watch.slug, [{**n, "delivered": {"report": "2026-01-01"}}
+                                   for n in comp.load_notices(watch.slug)])
+    assert service.components_chapter(watch.slug, "report", md) == "[EOL ×1]"  # pas de collision
+
+
+def test_header_and_short_manufacturer_names():
+    assert comp.parse_components("# export\nPart Number;Manufacturer\nLM317T;TI") == [
+        {"mpn": "LM317T", "manufacturer": "TI", "ref": ""}]
+    assert comp.same_manufacturer("TI", "ti") and not comp.same_manufacturer("ON", "Infineon")
+    assert comp.same_manufacturer("onsemi", "ON Semiconductor onsemi")
+
+
+def test_digikey_fallback_link_keeps_special_characters(tools):
+    v = service.create_veille(name="BOM", subject="", schedule_expr=service.COMPONENTS_SCHEDULE,
+                              recipients=["a@example.org"], brief="# b\n", kind="composants",
+                              components=comp.parse_components("LM317T#PBF;TI\nAD8+X;Analog Devices"))
+    service.components_scan(v.slug, client=FakeClient({m: {"status": "Obsolete", "product_url": None}
+                                                       for m in ("LM317T#PBF", "AD8+X")}))
+    urls = sorted(n["sources"][0]["url"] for n in comp.load_notices(v.slug))
+    assert urls == ["https://www.digikey.com/en/products/result?keywords=AD8%2BX",
+                    "https://www.digikey.com/en/products/result?keywords=LM317T%23PBF"]
+
+
+def test_ui_corrupted_components_file(ui, watch):
+    client, _ = ui
+    (watch.dir / "components.json").write_text("{oups")
+    for url in (f"/veilles/{watch.slug}", f"/veilles/{watch.slug}/edit"):
+        r = client.get(url)
+        assert r.status_code == 500 and "components.json illisible" in r.text
