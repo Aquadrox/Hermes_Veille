@@ -16,11 +16,12 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 from pathlib import Path
 from urllib.parse import quote_plus
 
 from . import components as comp
-from . import credentials, digikey, hermes, paths, pricing, render, schedule, settings, store
+from . import credentials, digikey, hermes, paths, pricing, progress, render, schedule, settings, store
 from .store import PdfOptions, StoreError, Veille
 
 LEGACY_JOB_NAME = "Veille technologique hebdomadaire"
@@ -118,6 +119,7 @@ def describe(v: Veille, jobs: list[dict] | None = None) -> dict:
     jobs = _safe_jobs() if jobs is None else jobs
     status = hermes.job_status(hermes.get_job(v.job_id, jobs))
     reports = store.list_reports(v.slug)
+    running = running_pid(v.slug) is not None
     return {
         "veille": v,
         "status": status,
@@ -125,7 +127,8 @@ def describe(v: Veille, jobs: list[dict] | None = None) -> dict:
         "recipients": store.read_recipients(v.slug),
         "last_report": reports[0] if reports else None,
         "report_count": len(reports),
-        "running": running_pid(v.slug) is not None,
+        "running": running,
+        "progress": run_progress(v.slug, running=True) if running else None,
         "components": _components_summary(v),
     }
 
@@ -377,6 +380,26 @@ def running_pid(slug: str) -> int | None:
     return pid
 
 
+def run_progress(slug: str, log: str | None = None, running: bool | None = None) -> dict | None:
+    """Avancement du dernier lancement manuel (vue commune interface / MCP) ; None s'il n'est pas suivi.
+    `log` : seulement si c'est ce journal-là ; `running` : déjà connu de l'appelant."""
+    state = progress.read(slug)
+    latest = store.list_run_logs(slug, 1)
+    if not state or not latest or state.get("log") != latest[0] or log not in (None, latest[0]):
+        return None
+    return progress.view(state, running_pid(slug) is not None if running is None else running)
+
+
+def _tracker(slug: str, kind: str) -> progress.Tracker | None:
+    """Suivi du lancement manuel EN COURS de ce type (interface, Telegram), sinon None : une exécution
+    planifiée ou une commande tapée à la main n'écrit rien, personne ne la regarde."""
+    state = progress.read(slug)
+    if not state or state.get("kind") != kind or state.get("log") not in store.list_run_logs(slug, 1) \
+            or running_pid(slug) is None:
+        return None
+    return progress.Tracker(slug, state)
+
+
 def _check_runnable(v: Veille) -> str:
     job_id = _job_id_or_fail(v)
     if hermes.is_paused(hermes.get_job(job_id)):
@@ -389,10 +412,13 @@ def _check_runnable(v: Veille) -> str:
     return job_id
 
 
-def _start(slug: str, launch, actor: str, action: str) -> str:
-    """Démarre un traitement en arrière-plan (journal dans runs/, PID suivi) ; renvoie le journal."""
+def _start(slug: str, launch, actor: str, action: str, track: str | None = None) -> str:
+    """Démarre un traitement en arrière-plan (journal dans runs/, PID suivi) ; renvoie le journal.
+    `track` : type de lancement dont l'avancement est suivi (progress.STEPS), écrit avant le départ."""
     log_name = dt.datetime.now().strftime("%Y%m%d-%H%M%S") + ".log"
     store.runs_dir(slug).mkdir(parents=True, exist_ok=True)
+    if track:
+        progress.start(slug, log_name, track)
     pid = launch(store.runs_dir(slug) / log_name)
     _pid_file(slug).write_text(str(pid))
     audit(actor, action, slug, log_name)
@@ -401,8 +427,10 @@ def _start(slug: str, launch, actor: str, action: str) -> str:
 
 def run_now(slug: str, actor: str = "cli") -> str:
     """Lance la veille en arrière-plan ; renvoie le nom du journal."""
-    job_id = _check_runnable(store.load(slug))
-    return _start(slug, lambda log: hermes.run_detached(job_id, log), actor, "run")
+    v = store.load(slug)
+    job_id = _check_runnable(v)
+    return _start(slug, lambda log: hermes.run_detached(job_id, log), actor, "run",
+                  "analyse" if v.kind == "composants" else None)
 
 
 def check_statuses_now(slug: str, actor: str = "cli") -> str:
@@ -419,7 +447,7 @@ def check_statuses_now(slug: str, actor: str = "cli") -> str:
     app_dir = str(Path(__file__).resolve().parent.parent)
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (app_dir, os.environ.get("PYTHONPATH"))))}
     cmd = [sys.executable, "-m", "veille_core", "components", "scan", slug, "--status-only"]
-    return _start(slug, lambda log: hermes.spawn_detached(cmd, log, env), actor, "components-check")
+    return _start(slug, lambda log: hermes.spawn_detached(cmd, log, env), actor, "components-check", "statuts")
 
 
 def run_wait(slug: str, actor: str = "cli") -> str:
@@ -535,28 +563,37 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
 
     Les appels réseau (plusieurs minutes pour 300 composants) se font HORS verrou ; les résultats
     sont ensuite appliqués par clé à la liste relue sous verrou (éditions concurrentes préservées).
+
+    Lancement manuel suivi : avancement publié (référence en cours, puis lot) ; `track_progress` dit
+    à l'agent de signaler ses groupes de recherche web (`components_progress`).
     """
     _components_veille(slug)
+    track = _tracker(slug, "analyse" if plan_batch else "statuts")
     day = comp.today()
     creds = digikey.credentials()
     info: dict = {"configured": bool(creds or client), "checked": 0, "errors": 0}
     results: dict[str, dict] = {}
+    dk_progress: dict = {"skipped": True}
     if creds or client:
         client = client or digikey.Client(*creds)
         start = time.monotonic()
-        todo = sorted(comp.load_components(slug)["components"],
-                      key=lambda c: (c.get("dk") or {}).get("checked_at") or "")
-        for c in todo:
-            if ((c.get("dk") or {}).get("checked_at") or "") == day:
-                continue  # déjà vérifié aujourd'hui (relance du même jour)
+        # Sauf ceux déjà vérifiés aujourd'hui (relance du même jour).
+        todo = [c for c in sorted(comp.load_components(slug)["components"],
+                                  key=lambda c: (c.get("dk") or {}).get("checked_at") or "")
+                if ((c.get("dk") or {}).get("checked_at") or "") != day]
+        for i, c in enumerate(todo):
             if client.calls >= digikey.MAX_CALLS or time.monotonic() - start > budget_s:
                 info["stopped"] = "budget de temps ou d'appels atteint : suite au prochain passage"
                 break
+            if track:
+                track.update(throttle=True, step="digikey",
+                             digikey={"done": i, "total": len(todo), "current": c["mpn"]})
             try:
                 results[comp.key_of(c["mpn"], c["manufacturer"])] = client.status(c["mpn"], c["manufacturer"])
             except digikey.DigiKeyError as exc:
                 info["error"] = str(exc)
                 break
+        dk_progress = {"done": len(results), "total": len(todo)}
     with _locked():
         v = _components_veille(slug)
         data, notices = comp.load_components(slug), comp.load_notices(slug)
@@ -591,16 +628,34 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
         comp.save_components(slug, data)
         if new:
             comp.save_notices(slug, notices)
+    if track:
+        if plan_batch:
+            track.update(step="web", digikey=dk_progress, batch=[
+                {"mpn": c["mpn"], "manufacturer": c["manufacturer"], "state": "pending"} for c in lot])
+        else:
+            track.update(step="done", digikey=dk_progress)
     known: dict[str, list[str]] = {}
     for n in notices:
         known.setdefault(n["key"], []).append(n.get("number") or n["title"])
     audit(actor, "components-scan", slug,
           f"Digi-Key {info['checked']} vérifié(s), {len(new)} avis ; lot web {len(lot)}")
-    return {"slug": slug, "date": day, "digikey": info, "new_digikey_notices": len(new),
+    return {"slug": slug, "date": day, "track_progress": track is not None and plan_batch,
+            "digikey": info, "new_digikey_notices": len(new),
             "batch": [{"mpn": c["mpn"], "manufacturer": c["manufacturer"], "ref": c.get("ref", ""),
                        "since": comp.search_since(c), "digikey_status": (c.get("dk") or {}).get("status"),
                        "known": known.get(comp.key_of(c["mpn"], c["manufacturer"]), [])[:20]}
                       for c in lot]}
+
+
+def components_progress(slug: str, mpns: list[str]) -> bool:
+    """Signal de l'agent pendant la recherche web d'un lancement manuel suivi : ces MPN sont en cours de
+    recherche, ceux du groupe précédent sont faits. Hors lancement suivi : rien, et jamais d'erreur
+    (le job ne doit pas échouer pour un affichage). Renvoie True si l'avancement a été noté."""
+    track = _tracker(slug, "analyse")
+    if track is None:
+        return False
+    track.searching(mpns)
+    return True
 
 
 def _edit_components(slug: str, edit, actor: str, action: str) -> int:
@@ -774,6 +829,9 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
     qu'après succès (un échec les ré-inclut à l'envoi suivant, rien n'est perdu).
     """
     v = _components_veille(slug)
+    track = _tracker(slug, "analyse")
+    if track:
+        track.update(step="finalize", phase="notices")
     try:
         if candidates.stat().st_size > comp.MAX_CANDIDATES_BYTES:
             raise comp.ComponentsError("fichier des avis trop volumineux")
@@ -797,6 +855,12 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         comp.save_notices(slug, notices)
         linked = [x.slug for x in _linked_veilles(slug)]
     audit(actor, "components-finalize", slug, f"{len(new)} nouvel(s) avis, {len(rejected)} rejet(s)")
+    critical = sum(1 for n in new if n["type"] in comp.CRITICAL)
+    if track:
+        found = Counter(n["key"] for n in new)
+        for b in track.state.get("batch", []):
+            b.update(state="done", notices=found[comp.key_of(b["mpn"], b["manufacturer"])])
+        track.update(phase="pdf", result={"new": len(new), "critical": critical, "rejected": len(rejected)})
 
     report = comp.pending(notices, "report", {day})
     view = comp.digest(data["components"], notices, report)
@@ -812,7 +876,7 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
                meta=f"Composants suivis : {view['components']} | Recherche web du jour : {len(lot)}")
     _mark(slug, {n["id"] for n in report}, "report", day)
     lines = [f"OK: veille composants — {len(new)} nouvel(s) avis "
-             f"(dont {sum(1 for n in new if n['type'] in comp.CRITICAL)} fin(s) de vie / dernière(s) commande(s)), "
+             f"(dont {critical} fin(s) de vie / dernière(s) commande(s)), "
              f"{len(rejected)} rejet(s), PDF {pdf}"]
     lines += [f"  rejet {r}" for r in rejected[:20]]
     mail = comp.pending(notices, "mail")
@@ -820,7 +884,11 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         # Livrés par le chapitre de la veille : le canal e-mail reste à jour en cas de détachement.
         _mark(slug, {n["id"] for n in mail}, "mail", f"via {linked[0]}")
         lines.append(f"e-mail : inclus dans la veille {', '.join(linked)} (chapitre composants)")
+        if track:
+            track.update(step="done")
         return "\n".join(lines)
+    if track:
+        track.update(phase="mail")
     view = comp.digest(data["components"], notices, mail)
     xlsx = _write_xlsx(pdf.parent, slug, data, notices, stamp, actor)
     hint = "Liste complète des composants dans le fichier Excel joint." if xlsx else ""
@@ -836,6 +904,8 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         os.unlink(fh.name)
     _mark(slug, {n["id"] for n in mail}, "mail", day)
     audit(actor, "components-mail", slug, f"{len(mail)} avis")
+    if track:
+        track.update(step="done")
     return "\n".join([*lines, out])
 
 

@@ -6,7 +6,7 @@
         recipients.txt   destinataires, un par ligne
         job-prompt.md    prompt RENDU depuis le gabarit (ne pas éditer à la main)
         rapports/        AAAA-MM-JJ-HHhMM-veille.{md,pdf}, -charts.json (avant la v0.3.2 : AAAA-MM-JJ-veille)
-        runs/            journaux des lancements manuels
+        runs/            journaux des lancements manuels (.progress.json : avancement du dernier)
         components.json  veille composants : références suivies (voir components.py)
         notices.json     veille composants : avis PCN / EOL détectés
 

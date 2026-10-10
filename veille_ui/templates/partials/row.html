@@ -1,5 +1,6 @@
 {% from "partials/macros.html" import run_confirm %}{% set v = row.veille %}{% set st = row.status %}
-<tr id="row-{{ v.slug }}">
+{# Pendant un lancement, la ligne se ré-interroge toutes les 10 s (avancement, puis état final) ; plus après. #}
+<tr id="row-{{ v.slug }}"{% if row.running %} hx-get="/veilles/{{ v.slug }}/row" hx-trigger="every 10s" hx-swap="outerHTML"{% endif %}>
   <td data-label="Veille">
     <a href="/veilles/{{ v.slug }}"><strong>{{ v.name }}</strong></a>
     {% if v.kind == "composants" %} <span class="badge kind">composants</span>{% endif %}
@@ -16,6 +17,10 @@
     <span class="badge {{ cls }}">
       {% if not st.exists %}job absent{% elif row.running %}en cours{% elif st.paused %}en pause{% elif cls == 'bad' %}en échec{% else %}actif{% endif %}
     </span>
+    {% set p = row.progress %}{% if p %}
+    <div class="small">{{ p.summary }}</div>
+    {% if p.max %}<progress value="{{ p.value }}" max="{{ p.max }}">{{ p.value }} / {{ p.max }}</progress>{% endif %}
+    {% endif %}
   </td>
   <td data-label="Prochain run">{{ st.next_run_at|dt }}</td>
   <td data-label="Dernier run">{{ st.last_run_at|dt }}{% if st.last_status %} <span class="muted small">({{ st.last_status }})</span>{% endif %}</td>

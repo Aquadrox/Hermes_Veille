@@ -42,6 +42,9 @@ Gestion des veilles technologiques automatisées (rapports PDF envoyés par e-ma
 - `check_component_statuses` (veille composants) vérifie le statut Digi-Key sans LLM ni e-mail.
 - `run_veille_now` et `send_test_email` envoient de VRAIS e-mails aux destinataires :
   confirme avec l'utilisateur avant de les appeler.
+- Suivi d'un lancement de veille composants (« où en est l'analyse ? ») : `get_run_log` renvoie
+  `progress` (étape, composant en cours, MPN du lot par état : pending = à rechercher,
+  searching = en cours, done = fait) ; cite son `summary`. `list_veilles` le donne aussi (`progress`) pour chaque veille en cours.
 - Pour modifier une partie du brief, préfère `edit_brief` (remplacement ciblé) à
   `update_brief` (remplacement complet).
 - `archive_veille` retire la veille du planning (rien n'est effacé) ; il exige de répéter le slug.
@@ -112,6 +115,19 @@ def _schedule_expr(frequency: Frequency | None, time: str | None, day_of_week: s
                              "day": day_of_month if day_of_month is not None else 1})
 
 
+def _progress(p: dict | None) -> dict | None:
+    """Avancement compact pour le LLM : MPN du lot regroupés par état (nombre d'avis trouvés entre
+    parenthèses), sans le détail des étapes que `summary` résume déjà (≈ 3 fois moins de tokens)."""
+    if not p:
+        return None
+    lot: dict[str, list[str]] = {}
+    for b in p["batch"]:
+        lot.setdefault(b["state"], []).append(b["mpn"] + (f" ({b['notices']} avis)" if b.get("notices") else ""))
+    return {"summary": p["summary"], "step": p["step"], "running": p["running"], "finished": p["finished"],
+            "interrupted": p["interrupted"], "current": p["current"], "minutes": p["minutes"],
+            **({"result": p["result"]} if p["result"] else {}), **({"batch": lot} if lot else {})}
+
+
 def _summary(row: dict) -> dict:
     v, st = row["veille"], row["status"]
     return {
@@ -129,6 +145,7 @@ def _summary(row: dict) -> dict:
         "kind": v.kind,
         **({"components": row["components"]} if row["components"] else {}),
         **({"include_components": v.components} if v.components else {}),
+        **({"progress": row["progress"]["summary"]} if row["progress"] else {}),
     }
 
 
@@ -206,7 +223,8 @@ def read_report(slug: str, date: str | None = None, max_chars: int = MAX_TEXT) -
 
 def get_run_log(slug: str, name: str | None = None, max_chars: int = 6000) -> dict:
     """Journal d'un lancement manuel (le plus récent si `name` est omis) et indique s'il est
-    encore en cours."""
+    encore en cours. Veille composants : `progress` donne l'avancement (`summary` à citer, étape,
+    composant en cours, MPN du lot par état : pending / searching / done)."""
     _guard(store.load, slug)
     logs = store.list_run_logs(slug, 20)
     name = name or (logs[0] if logs else None)
@@ -215,7 +233,8 @@ def get_run_log(slug: str, name: str | None = None, max_chars: int = 6000) -> di
     path = _guard(store.run_log_path, slug, name)
     text = path.read_text(encoding="utf-8", errors="replace")
     running = bool(logs) and name == logs[0] and service.running_pid(slug) is not None
-    return {"name": name, "running": running, "log": text[-max(500, min(max_chars, 50_000)):]}
+    return {"name": name, "running": running, "log": text[-max(500, min(max_chars, 50_000)):],
+            "progress": _progress(service.run_progress(slug, name, running))}
 
 
 def run_history(slug: str, limit: int = 10) -> list[dict]:
@@ -506,10 +525,11 @@ def run_veille_now(slug: str) -> dict:
     destinataires (quelques minutes). Veille composants : analyse complète (statut Digi-Key,
     recherche web, rapport) ; si elle est rattachée à une veille (`include_components`), AUCUN
     e-mail : ses nouveaux avis partiront dans le prochain e-mail de cette veille. Suivre
-    l'avancement avec `get_run_log`."""
+    l'avancement avec `get_run_log` (veille composants : étape et composant en cours)."""
     log = _guard(service.run_now, slug, actor=_actor())
     return {"slug": slug, "started": True, "log": log,
-            "hint": "appeler get_run_log dans quelques minutes pour suivre l'exécution"}
+            "hint": "appeler get_run_log pour suivre l'exécution (veille composants : `progress.summary` "
+                    "donne l'étape et le composant en cours)"}
 
 
 def check_component_statuses(slug: str) -> dict:
@@ -519,7 +539,7 @@ def check_component_statuses(slug: str) -> dict:
     apparaissent ensuite dans `list_notices` ; suivre l'avancement avec `get_run_log`."""
     log = _guard(service.check_statuses_now, slug, actor=_actor())
     return {"slug": slug, "started": True, "log": log,
-            "hint": "quelques minutes pour 300 références ; puis list_notices"}
+            "hint": "quelques minutes pour 300 références (get_run_log : `progress.summary`) ; puis list_notices"}
 
 
 def send_test_email(slug: str) -> dict:

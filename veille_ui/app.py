@@ -48,8 +48,8 @@ FLASH = {
     "updated": "Veille enregistrée.",
     "paused": "Veille mise en pause.",
     "resumed": "Veille reprise.",
-    "run": "Lancement démarré : le journal s'affiche ci-dessous.",
-    "checking": "Vérification des statuts Digi-Key démarrée : le journal s'affiche ci-dessous.",
+    "run": "Lancement démarré : son suivi s'affiche ci-dessous.",
+    "checking": "Vérification des statuts Digi-Key démarrée : l'avancement s'affiche ci-dessous.",
     "archived": "Veille archivée.",
     "mail": "E-mail de test envoyé.",
     "creds-saved": "Clés enregistrées. Utilise « Tester la connexion » pour les vérifier.",
@@ -324,6 +324,14 @@ def create_app() -> FastAPI:
         row = service.describe(store.load(slug))
         return render(request, "partials/row.html", 400 if error else 200, row=row, error=error)
 
+    @app.get("/veilles/{slug}/row", response_class=HTMLResponse)
+    def dashboard_row(request: Request, slug: str):
+        """Ligne du tableau de bord, ré-interrogée pendant un lancement (avancement, puis état final)."""
+        try:
+            return row_response(request, slug)
+        except StoreError:  # veille archivée entre-temps : 286, htmx arrête d'interroger
+            return PlainTextResponse("veille introuvable", status_code=286)
+
     # -------------------------------------------------------------- création / édition
     def form_page(request: Request, values: dict, status_code: int = 200, /, **ctx):
         briefs = [t for t in store.brief_templates() if t != service.COMPONENTS_TEMPLATE]
@@ -528,8 +536,9 @@ def create_app() -> FastAPI:
 
     @app.get("/veilles/{slug}/runs/{name}", response_class=HTMLResponse)
     def run_log(request: Request, slug: str, name: str, poll: bool = False):
-        """Journal d'un lancement. `poll` (suivi depuis la page de la veille) : à la fin, l'en-tête (état,
-        boutons) part avec le journal ; journal disparu (veille archivée) : 286, htmx arrête le suivi."""
+        """Journal d'un lancement, précédé de son avancement s'il est suivi. `poll` (suivi depuis la page de la
+        veille) : à la fin, l'en-tête (état, boutons) part avec le journal ; journal disparu (veille archivée) :
+        286, htmx arrête le suivi."""
         try:
             path = store.run_log_path(slug, name)
             text = path.read_text(encoding="utf-8", errors="replace")[-20000:]
@@ -544,7 +553,8 @@ def create_app() -> FastAPI:
                 head = {"v": v, "row": service.describe(v)}
             except StoreError:  # veille archivée entre-temps : le journal seul
                 pass
-        return render(request, "partials/run_log.html", slug=slug, name=name, text=text, running=running, **head)
+        return render(request, "partials/run_log.html", slug=slug, name=name, text=text, running=running,
+                      progress=service.run_progress(slug, name, running), **head)
 
     @app.get("/veilles/{slug}/components.xlsx")
     def components_export(slug: str):

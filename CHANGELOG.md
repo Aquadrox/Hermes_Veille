@@ -7,6 +7,40 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.3.7] — 2026-10-10
+
+Avancement d'une analyse composants visible en direct, dans l'interface et sur Telegram.
+
+### Ajouté
+
+- **Avancement d'un lancement manuel de veille composants** (« Lancer l'analyse » et « Vérifier les
+  statuts Digi-Key », depuis l'interface ou Telegram) : jusqu'ici, rien ne s'affichait avant la fin.
+  - Étapes 1/3 « Statut Digi-Key » (référence en cours, `124 / 310`), 2/3 « Recherche web » (composants
+    du lot faits, en cours, à rechercher), 3/3 « Rapport et envoi » (enregistrement des avis, PDF,
+    e-mail) ; à la fin, nombre de nouveaux avis par composant, ou étape où le lancement s'est arrêté.
+  - **Page de la veille** : panneau au-dessus du journal, rafraîchi avec lui (toutes les 5 s) : étapes,
+    barre de progression, une pastille par composant du lot (○ à rechercher, … en cours, ✓ fait).
+  - **Tableau de bord** : résumé et barre sur la ligne de la veille en cours ; seule cette ligne se
+    ré-interroge (toutes les 10 s), et plus du tout une fois le lancement fini (état final sans
+    recharger, pour toute veille lancée).
+  - **Telegram** : `get_run_log` renvoie `progress` (synthèse, étape, composant en cours, MPN du lot par
+    état) ; `list_veilles` et `get_veille` donnent la synthèse des veilles en cours. Aucun nouvel outil.
+  - Étape 2 : l'agent signale chaque groupe de recherches (`veillectl components progress <slug> MPN…`)
+    **uniquement lors d'un lancement manuel** (`track_progress` dans la sortie du scan). Une exécution
+    planifiée n'écrit rien et ne coûte aucun appel de plus. Le prompt des veilles composants est re-rendu
+    au prochain démarrage du conteneur (réconciliation), sans action manuelle.
+  - État dans `runs/.progress.json` (écriture atomique, une par seconde au plus pendant le passage
+    Digi-Key). Confort d'affichage : une écriture qui échoue est ignorée, l'analyse continue.
+
+### Mesures
+
+- Passage Digi-Key de 300 références : 2 à 3 écritures de l'état (≈ 0,4 ms chacune), durée inchangée
+  (1,57 s avec un faux Digi-Key à 5 ms par appel, avant comme après).
+- Suivi du journal toutes les 5 s : 4,6 → 4,7 ms côté serveur, 230 → 631 octets compressés (lot de 40).
+- Ligne du tableau de bord : 6,6 ms, 1,4 Ko, toutes les 10 s pendant un lancement seulement.
+- Telegram : réponse de `get_run_log` compacte (1,1 Ko pour un lot de 40, au lieu de 3,5 Ko en détail).
+- Signal de l'agent : commande de ≈ 0,15 s, un appel par groupe de recherches (fabricant).
+
 ## [0.3.6] — 2026-10-10
 
 Interface plus réactive, notamment par tunnel SSH.

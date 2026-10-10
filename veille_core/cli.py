@@ -18,6 +18,7 @@ Veille composants (PCN / fins de vie) :
   veillectl components import <slug> bom.xlsx [--dry-run] [--replace] [--mpn COL] [--manufacturer COL] …
   veillectl components scan <slug>                                  (étape 1 du job)
   veillectl components scan <slug> --status-only                    (statut Digi-Key seul, à la demande)
+  veillectl components progress <slug> MPN …                        (étape 3 du job, lancement suivi)
   veillectl components finalize <slug> <avis.json>                  (étape 5 du job)
   veillectl components chapter <slug> --for <veille> --append <rapport.md>
 """
@@ -145,6 +146,10 @@ def _components(args) -> int:
             print("  clés Digi-Key absentes : les saisir dans l'interface, page Sources")
     elif args.action == "scan":
         print(json.dumps(service.components_scan(slug), ensure_ascii=False, indent=1))
+    elif args.action == "progress":
+        # Toujours un succès : un affichage ne doit jamais faire échouer le job.
+        noted = service.components_progress(slug, args.items)
+        print("✓ avancement noté" if noted else "(aucun lancement suivi : rien à noter)")
     elif args.action == "finalize":
         if not args.items:
             raise store.StoreError("chemin du fichier JSON des avis manquant")
@@ -243,10 +248,10 @@ def main(argv: list[str] | None = None) -> int:
     p_edit.add_argument("--batch-size", type=int)
 
     p_comp = sub.add_parser("components", help="veille composants : PCN et fins de vie")
-    p_comp.add_argument("action", choices=("list", "notices", "add", "remove", "import", "scan", "finalize",
-                                           "chapter"))
+    p_comp.add_argument("action", choices=("list", "notices", "add", "remove", "import", "scan", "progress",
+                                           "finalize", "chapter"))
     p_comp.add_argument("slug")
-    p_comp.add_argument("items", nargs="*", help="add : lignes « MPN;Fabricant;Réf » ; remove : MPN ; "
+    p_comp.add_argument("items", nargs="*", help="add : lignes « MPN;Fabricant;Réf » ; remove, progress : MPN ; "
                                                   "finalize : fichier JSON")
     p_comp.add_argument("--file", help="add : fichier « MPN ; Fabricant ; Réf » (collage tableur accepté)")
     p_comp.add_argument("--type", choices=tuple(components.TYPES), help="notices : filtre par type")
