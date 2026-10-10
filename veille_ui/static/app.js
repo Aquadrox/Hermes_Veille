@@ -3,9 +3,22 @@
   "use strict";
 
   // Confirmation des formulaires sensibles : <form data-confirm="…">.
+  // Puis bouton marqué « en cours » : certaines actions passent par la CLI Hermes (~1 s) ; le
+  // retour est immédiat et un second clic ne renvoie pas le formulaire.
   document.addEventListener("submit", function (e) {
     var msg = e.target.getAttribute("data-confirm");
-    if (msg && !window.confirm(msg)) e.preventDefault();
+    if (msg && !window.confirm(msg)) { e.preventDefault(); return; }
+    var btn = e.submitter;
+    if (!btn || e.defaultPrevented) return;
+    btn.classList.add("busy");
+    // Désactivé au tour suivant : le formulaire est déjà parti avec la valeur du bouton.
+    setTimeout(function () { btn.disabled = true; }, 0);
+    setTimeout(function () { btn.disabled = false; btn.classList.remove("busy"); }, 15000);  // filet
+  });
+  // Retour arrière (page restaurée depuis le cache) : boutons réactivés.
+  window.addEventListener("pageshow", function (e) {
+    if (!e.persisted) return;
+    document.querySelectorAll("button.busy").forEach(function (b) { b.disabled = false; b.classList.remove("busy"); });
   });
 
   // Affiche seulement les champs utiles au rythme choisi : <label data-show="weekly monthly">.

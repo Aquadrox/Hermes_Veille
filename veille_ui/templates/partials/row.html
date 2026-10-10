@@ -28,10 +28,10 @@
   <td class="actions">
     {% if st.exists %}
       {% if st.paused %}
-      <button hx-post="/veilles/{{ v.slug }}/resume" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML">Reprendre</button>
+      <button hx-post="/veilles/{{ v.slug }}/resume" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML" hx-disabled-elt="this">Reprendre</button>
       {% else %}
-      <button hx-post="/veilles/{{ v.slug }}/pause" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML">Pause</button>
-      <button hx-post="/veilles/{{ v.slug }}/run" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML"
+      <button hx-post="/veilles/{{ v.slug }}/pause" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML" hx-disabled-elt="this">Pause</button>
+      <button hx-post="/veilles/{{ v.slug }}/run" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML" hx-disabled-elt="this"
               hx-confirm="{{ run_confirm(row) }}"
               {% if row.running %}disabled{% endif %}>Lancer</button>
       {% endif %}

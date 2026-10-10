@@ -7,6 +7,28 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.3.6] — 2026-10-10
+
+Interface plus réactive, notamment par tunnel SSH.
+
+### Modifié
+
+- **Interface plus réactive, notamment par tunnel SSH.** Chaque appel à la CLI Hermes
+  (`hermes cron …`) relance tout Hermes Agent (≈ 0,7 s d'imports mesurés sur la v2026.9.24) :
+  - page d'une veille : l'historique d'exécution Hermes (`hermes cron runs`) est chargé après la
+    page (`/veilles/<slug>/history`) ; la page s'affiche sans l'attendre (0,77 s → 0,03 s
+    côté serveur) et « Pause » / « Reprendre » depuis cette page ne paient plus qu'un appel à la
+    CLI au lieu de deux (1,5 s → 0,75 s) ;
+  - boutons d'action : marqués « en cours » dès le clic (curseur d'attente, bouton désactivé),
+    ce qui évite aussi les doubles envois ;
+  - fichiers statiques (`htmx.min.js`, CSS, JS) : URL versionnées par empreinte du contenu et mis
+    en cache par le navigateur, au lieu d'être retéléchargés à chaque page ; réponses compressées
+    (gzip, sauf PDF et Excel) ;
+  - formulaire d'une veille : aperçu de la fréquence rendu avec la page (une requête de moins au
+    chargement) ;
+  - coûts : lecture de `state.db` en une requête indexée au lieu d'une par exécution ;
+  - page « Santé » : comptes Brevo et DeepSeek interrogés en parallèle.
+
 ## [0.3.5] — 2026-10-09
 
 Interface pleine largeur sur grand écran.

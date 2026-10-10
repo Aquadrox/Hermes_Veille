@@ -85,7 +85,7 @@
       <label data-show="cron">Expression cron
         <input name="cron_expr" id="cron_expr" data-freq value="{{ values.cron_expr }}" placeholder="0 8 * * 1"></label>
     </div>
-    <div id="schedule-preview" hx-get="/fragments/schedule" hx-trigger="load" hx-include="[data-freq]"></div>
+    <div id="schedule-preview">{% with error=preview.error, expr=preview.expr, human=preview.human, runs=preview.runs, peak=preview.peak %}{% include "partials/schedule_preview.html" %}{% endwith %}</div>
     <p class="muted small">Heure de Paris. La période couverte par le rapport suit le rythme (24 h, semaine, mois).</p>
   </section>
 

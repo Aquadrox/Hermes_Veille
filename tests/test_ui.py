@@ -99,6 +99,46 @@ def test_create_edit_pause_flow(client):
     assert [e["actor"] for e in service.read_audit()][0] == "ui"
 
 
+def test_static_assets_versioned_cached_and_compressed(client):
+    login(client)
+    page = client.get("/")
+    assert page.headers["Cache-Control"] == "no-store"  # les pages, elles, ne sont jamais mises en cache
+    url = re.search(r'src="(/static/app\.js\?v=[0-9a-f]{12})"', page.text).group(1)
+    r = client.get(url, headers={"Accept-Encoding": "gzip"})
+    assert r.status_code == 200 and "immutable" in r.headers["Cache-Control"]
+    assert r.headers["Content-Encoding"] == "gzip" and "use strict" in r.text
+    assert client.get("/static/absent.js").headers["Cache-Control"] == "no-store"
+
+
+def test_detail_page_does_not_wait_for_hermes_runs(client, monkeypatch):
+    login(client)
+    v = service.create_veille(name="Veille Rapide", subject="s", schedule_expr="30 6 * * 1",
+                              recipients=["a@example.org"], brief="# Brief\n")
+    real_runs = hermes.runs
+
+    def no_cli(*a, **kw):
+        raise AssertionError("`hermes cron runs` appelé au rendu de la page")
+
+    monkeypatch.setattr(hermes, "runs", no_cli)
+    r = client.get(f"/veilles/{v.slug}")
+    assert r.status_code == 200 and f'hx-get="/veilles/{v.slug}/history"' in r.text
+    monkeypatch.setattr(hermes, "runs", real_runs)
+    r = client.get(f"/veilles/{v.slug}/history", headers={"HX-Request": "true"})
+    assert r.status_code == 200 and "Historique d'exécution" in r.text and "manual" in r.text
+    assert client.get("/veilles/absente/history").status_code == 404
+
+
+def test_edit_form_renders_schedule_preview_inline(client):
+    csrf = login(client)
+    client.post("/veilles/new", data=create_form(csrf), follow_redirects=False)
+    t = client.get("/veilles/veille-cyber/edit").text
+    preview = t[t.index('id="schedule-preview"'):]
+    assert "chaque mardi à 7h30" in preview[:400] and 'hx-trigger="load"' not in t
+    # erreur de formulaire : distincte de l'aperçu (toujours valide)
+    r = client.post("/veilles/veille-cyber/edit", data=create_form(csrf, recipients="pas-une-adresse"))
+    assert r.status_code == 400 and r.text.count("adresse(s) invalide(s)") == 1
+
+
 def test_create_validation_errors_keep_values(client):
     csrf = login(client)
     r = client.post("/veilles/new", data=create_form(csrf, recipients="pas-une-adresse"))
