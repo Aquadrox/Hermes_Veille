@@ -90,6 +90,18 @@
 <div hx-get="/veilles/{{ v.slug }}/history" hx-trigger="load" hx-swap="outerHTML"></div>
 {% endif %}
 
+{% if v.kind == "composants" %}
+<section class="card danger" id="reinitialiser">
+  <h2>Réinitialiser la recherche</h2>
+  <p class="small muted">Efface les avis détectés, les statuts Digi-Key et web et les dates de recherche, pour
+    relancer l'analyse de zéro : les avis retrouvés seront de nouveau signalés comme nouveaux. La liste des
+    composants, les rapports et les destinataires sont conservés ; une copie est gardée dans <code>veilles/.archive/</code>.</p>
+  <form method="post" action="/veilles/{{ v.slug }}/reset-search" data-confirm="Réinitialiser la recherche de « {{ v.name }} » ? Avis détectés ({{ notice_total }}), statuts et dates de recherche seront effacés (copie archivée).">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger"{% if row.running %} disabled{% endif %}>Réinitialiser la recherche</button>
+  </form>
+</section>
+{% endif %}
+
 <section class="card danger">
   <h2>Archiver</h2>
   <p class="small muted">Supprime le job planifié et déplace la veille (brief, rapports, destinataires) dans

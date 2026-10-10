@@ -1115,11 +1115,11 @@ def test_xlsx_full_list_critical_first_and_safe_cells(watch, tools):
     assert rows[0][:4] == ("Composant", "Fabricant", "Réf. interne", "Critique")
     assert [r[0] for r in rows[1:]] == ["LM317T", "NE555P", "STM32F103C8T6"]
     lm, ne, stm = rows[1:]
-    assert lm[3] == "Oui" and lm[8] == "Last Time Buy" and lm[12] is None and lm[2] == "R-001"
-    assert ne[3] is None and ne[12] == "retiré"
+    assert lm[3] == "Oui" and lm[8] == "Last Time Buy" and lm[13] is None and lm[2] == "R-001"
+    assert ne[3] is None and ne[13] == "retiré" and rows[0][10] == "Statut web" and lm[10] is None
     assert stm[5] == '=HYPERLINK("http://evil/x","clic")' and stm[6] == as_read(2027, 3, 31)
     assert ws.cell(4, 6).data_type == "s" and "<f>" not in _sheet_xml(data)  # texte, jamais formule
-    assert ws.cell(4, 12).hyperlink.target == "https://st.com/pcn/1"
+    assert ws.cell(4, 13).hyperlink.target == "https://st.com/pcn/1"
     assert ws.cell(2, 1).fill.fgColor.rgb.endswith("FEF2F2") and ws.freeze_panes == "A2" and ws.auto_filter.ref
     assert ws.page_setup.orientation == "landscape" and ws.sheet_properties.pageSetUpPr.fitToPage
 
@@ -1134,8 +1134,8 @@ def test_xlsx_unsafe_link_illegal_chars_and_odd_values():
     ws = _sheet(data)  # relu sans erreur : fichier bien formé
     assert [c.value for c in ws[2]][:3] == ["2026-01-01", "X", "42"] and ws.cell(2, 1).data_type == "s"
     assert ws.cell(2, 9).value == "Obsolete" and ws.cell(2, 10).value == "2026-13-45"  # date invalide : texte
-    assert ws.cell(2, 11).value == "2026-10-01\n" and ws.cell(2, 11).data_type == "s"
-    assert ws.cell(2, 12).value is None and ws.cell(2, 12).hyperlink is None
+    assert ws.cell(2, 12).value == "2026-10-01\n" and ws.cell(2, 12).data_type == "s"
+    assert ws.cell(2, 13).value is None and ws.cell(2, 13).hyperlink is None
     assert _sheet(comp.to_xlsx([], [])).max_row == 1  # liste vide : en-tête seul
 
 

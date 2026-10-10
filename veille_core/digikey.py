@@ -4,6 +4,10 @@ OAuth « 2-legged » (identifiants client, sans intervention humaine) : DIGIKEY_
 DIGIKEY_CLIENT_SECRET, saisis dans l'interface (page Sources) ou définis dans le `.env`. Le jeton reste en mémoire le temps d'un passage.
 Les avis PCN de Digi-Key exigent l'OAuth « 3-legged » (connexion interactive) : non utilisés.
 
+Recherche d'une référence : fiche produit exacte (un appel), puis, si Digi-Key ne la reconnaît pas,
+recherche par mot-clé (un appel de plus). Une référence encore introuvable part à la recherche web
+de l'agent, qui établit lui-même son statut (`components.WEB_STATUSES`).
+
 Bibliothèque standard uniquement ; débit limité (l'offre gratuite plafonne à 120 requêtes
 par minute et environ 1000 par jour). Les secrets ne figurent jamais dans les erreurs.
 """
@@ -21,6 +25,8 @@ from . import credentials as creds
 API = "https://api.digikey.com"
 TOKEN_PATH = "/v1/oauth2/token"
 DETAILS_PATH = "/products/v4/search/{}/productdetails"
+KEYWORD_PATH = "/products/v4/search/keyword"
+KEYWORD_LIMIT = 50  # maximum de l'API : une référence courante (1N4148) a beaucoup de variantes
 MIN_INTERVAL = 0.6  # secondes entre deux requêtes (< 120/min)
 MAX_CALLS = 900     # par passage (quota journalier de l'offre gratuite)
 
@@ -59,7 +65,8 @@ class Client:
         self._last = self._clock()
         self.calls += 1
         with self._urlopen(req, timeout=20) as r:
-            return json.loads(r.read().decode() or "{}")
+            data = json.loads(r.read().decode() or "{}")
+        return data if isinstance(data, dict) else {}
 
     def _auth(self) -> str:
         body = urllib.parse.urlencode({"client_id": self._id, "client_secret": self._secret,
@@ -80,15 +87,20 @@ class Client:
         """Vérifie les identifiants (obtention d'un jeton) ; lève DigiKeyError sinon."""
         self._token = self._auth()
 
-    def _details(self, mpn: str) -> dict | None:
-        """Fiche produit, ou None si la référence est inconnue ou ambiguë chez Digi-Key."""
-        url = self._base + DETAILS_PATH.format(urllib.parse.quote(mpn, safe=""))
+    def _call(self, path: str, body: dict | None = None) -> dict | None:
+        """Réponse de l'API (GET, ou POST JSON si `body`) ; None si Digi-Key ne trouve rien : 404, ou 400 d'une
+        fiche produit (référence inconnue, ou ambiguë). Un 400 de la recherche est une requête mal formée :
+        une erreur, jamais « introuvable » pour toute la liste."""
+        data = None if body is None else json.dumps(body).encode()
         for attempt in (1, 2):
             if self._token is None:
                 self._token = self._auth()
-            req = urllib.request.Request(url, headers={
-                "Authorization": f"Bearer {self._token}", "X-DIGIKEY-Client-Id": self._id,
-                "X-DIGIKEY-Locale-Language": "en", "Accept": "application/json"})
+            headers = {"Authorization": f"Bearer {self._token}", "X-DIGIKEY-Client-Id": self._id,
+                       "X-DIGIKEY-Locale-Language": "en", "Accept": "application/json"}
+            if data is not None:
+                headers["Content-Type"] = "application/json"
+            req = urllib.request.Request(self._base + path, data=data, headers=headers,
+                                         method="GET" if data is None else "POST")
             try:
                 return self._send(req)
             except urllib.error.HTTPError as exc:
@@ -99,26 +111,55 @@ class Client:
                     retry = str((exc.headers or {}).get("Retry-After") or "")
                     self._sleep(min(int(retry), 60) if retry.isdigit() else 10)
                     continue
-                if exc.code in (400, 404):
+                if exc.code == 404 or (exc.code == 400 and body is None):
                     return None
                 raise DigiKeyError(f"API Digi-Key : HTTP {exc.code}") from None
             except (urllib.error.URLError, OSError, ValueError) as exc:
                 raise DigiKeyError(f"API Digi-Key injoignable ({type(exc).__name__})") from None
         raise DigiKeyError("API Digi-Key : jeton refusé deux fois")
 
+    def _search(self, mpn: str, manufacturer: str) -> dict | None:
+        """Fiche trouvée par la recherche par mot-clé : MPN identique d'abord (« MAX232CPE+ » avant
+        « MAX232CPE »), puis à la ponctuation près, toujours du même fabricant."""
+        res = self._call(KEYWORD_PATH, {"Keywords": mpn, "Limit": KEYWORD_LIMIT, "Offset": 0}) or {}
+        ok = [p for k in ("ExactMatches", "Products") if isinstance(res.get(k), list) for p in res[k]
+              if not _mismatch(p, mpn, manufacturer)]
+        exact = components.norm_mpn(mpn)
+        return next((p for p in ok if components.norm_mpn(_field(p, "ManufacturerProductNumber")) == exact),
+                    ok[0] if ok else None)
+
     def status(self, mpn: str, manufacturer: str) -> dict:
         """{'status', 'product_url'} ou {'error'} (référence introuvable, fabricant différent)."""
-        product = (self._details(mpn) or {}).get("Product")
-        if not isinstance(product, dict):
-            return {"error": "introuvable chez Digi-Key"}
-        got_mpn = product.get("ManufacturerProductNumber") or ""
-        got_mfr = (product.get("Manufacturer") or {}).get("Name") or ""
-        if components.norm_mpn(got_mpn) != components.norm_mpn(mpn):
-            return {"error": f"référence différente chez Digi-Key ({got_mpn[:64]})"}
-        if not components.same_manufacturer(got_mfr, manufacturer):
-            return {"error": f"fabricant différent chez Digi-Key ({got_mfr[:80]})"}
-        status = str((product.get("ProductStatus") or {}).get("Status") or "").strip()
+        product = (self._call(DETAILS_PATH.format(urllib.parse.quote(mpn, safe=""))) or {}).get("Product")
+        error = _mismatch(product, mpn, manufacturer)
+        if error:
+            # Référence de plusieurs fabricants (la fiche exige alors l'identifiant du fabricant), ou écrite sans
+            # sa ponctuation (« 2N7002215 » pour « 2N7002,215 ») : la recherche par mot-clé la retrouve.
+            product = self._search(mpn, manufacturer)
+            if product is None:
+                return {"error": error}
+        status = _field(product, "ProductStatus", "Status").strip()
         if not status and product.get("EndOfLife"):
             status = "Obsolete"
         url = components.normalize_url(product.get("ProductUrl") or "")
         return {"status": status[:40] or "Inconnu", "product_url": url}
+
+
+def _field(product: dict, *keys: str) -> str:
+    """Texte d'un champ imbriqué de la fiche (« Manufacturer » / « Name »…), vide s'il manque ou est mal formé."""
+    value = product
+    for k in keys:
+        value = value.get(k) if isinstance(value, dict) else None
+    return str(value or "")
+
+
+def _mismatch(product, mpn: str, manufacturer: str) -> str:
+    """Motif du refus d'une fiche Digi-Key ; vide si c'est bien la référence suivie (ponctuation ignorée)."""
+    if not isinstance(product, dict):
+        return "introuvable chez Digi-Key"
+    got_mpn, got_mfr = _field(product, "ManufacturerProductNumber"), _field(product, "Manufacturer", "Name")
+    if components.loose_mpn(got_mpn) != components.loose_mpn(mpn):
+        return f"référence différente chez Digi-Key ({got_mpn[:64]})"
+    if not components.same_manufacturer(got_mfr, manufacturer):
+        return f"fabricant différent chez Digi-Key ({got_mfr[:80]})"
+    return ""

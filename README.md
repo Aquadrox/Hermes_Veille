@@ -125,8 +125,18 @@ lundi 6h30 — job de la veille thématique rattachée
   la recherche web ne remonte qu'à cette date (moins 30 jours de marge) et un avis déjà connu
   n'est jamais signalé à nouveau. Avis et dates sont conservés dans `components.json` et
   `notices.json`, avec leurs liens sources.
+- **Référence introuvable chez Digi-Key** : la fiche produit exacte ne reconnaît ni une référence
+  vendue par plusieurs fabricants (1N4148, LM358DR…), ni une référence saisie sans sa ponctuation
+  (« 2N7002215 » pour « 2N7002,215 » chez Nexperia). Dans ce cas, une **recherche par mot-clé** Digi-Key
+  (un appel de plus) retrouve la fiche du bon fabricant, à la ponctuation près (le « + » d'une
+  version sans plomb reste significatif). Encore introuvable (référence de base comme
+  ESP32-WROOM-32E, fabricant non distribué par Digi-Key), la référence passe **en priorité** dans le
+  lot de recherche web : l'agent trouve lui-même sa fiche (fabricant, Mouser, Farnell, LCSC…) et
+  établit son **statut web** (actif, NRND, dernière commande, obsolète, ou introuvable), avec la fiche
+  en source. Ce statut s'affiche dans le détail du composant et dans l'export Excel (colonne
+  « Statut web ») ; NRND, dernière commande et obsolète créent l'avis correspondant.
 - **Volume** : le statut Digi-Key couvre toutes les références à chaque exécution (≈ 0,6 s par
-  référence, 900 au plus) ; la recherche web, coûteuse en tokens, tourne par **lots**
+  référence, une recherche par mot-clé de plus pour une référence introuvable, 900 appels au plus) ; la recherche web, coûteuse en tokens, tourne par **lots**
   (`batch_size`). Avec 300 références et des lots de 40, chacune est recherchée sur le web toutes les
   8 semaines environ, et **en priorité** dès que son statut Digi-Key change.
 - **À la demande** (interface ou Telegram) : « Lancer l'analyse » / `run_veille_now` exécute tout de
@@ -134,6 +144,13 @@ lundi 6h30 — job de la veille thématique rattachée
   `veillectl components scan <slug> --status-only`) relit en arrière-plan le statut de toutes les
   références, sans LLM, sans coût en tokens et sans e-mail — utile juste après un import de
   nomenclature. Le lot de la prochaine exécution planifiée n'est pas modifié.
+- **Réinitialiser la recherche** (page de la veille, carte « Réinitialiser la recherche », avec
+  confirmation ; `veillectl components reset <slug>` ; Telegram : `reset_component_search`, qui exige
+  de répéter le slug) : avis détectés, statuts Digi-Key et web et dates de recherche sont effacés ;
+  la prochaine analyse repart de zéro et re-signale comme nouveaux les avis retrouvés. La liste des
+  composants, les rapports et les destinataires restent ; une copie de `components.json` et
+  `notices.json` est gardée dans `veilles/.archive/<slug>-reinit-…/`. Refusé pendant un lancement
+  manuel.
 - **Avancement en direct** de ces lancements manuels : étape 1/3 « Statut Digi-Key » (référence en
   cours, `124 / 310`), 2/3 « Recherche web » (une pastille par composant du lot : à rechercher, en
   cours, fait), 3/3 « Rapport et envoi » ; à la fin, les nouveaux avis par composant, ou l'étape où le
@@ -149,8 +166,8 @@ lundi 6h30 — job de la veille thématique rattachée
   (dernier export conservé à côté du rapport, dans `rapports/` ; s'il échoue, l'e-mail part sans lui).
 - **Export Excel** : bouton « Exporter (Excel) » de la liste des composants. Une ligne par
   référence (y compris sans avis, et celles retirées qui ont des avis), fins de vie et dernières
-  commandes en tête et en rouge, filtre automatique : statut Digi-Key, avis, échéance, dates de
-  vérification et lien de l'avis le plus critique. Les textes venus du web restent du texte (jamais
+  commandes en tête et en rouge, filtre automatique : statut Digi-Key, statut web, avis, échéance,
+  dates de vérification et lien de l'avis le plus critique (sinon de la fiche Digi-Key ou web). Les textes venus du web restent du texte (jamais
   une formule Excel).
 - **Digi-Key** (facultatif mais recommandé) : créer une application « Production » sur
   [developer.digikey.com](https://developer.digikey.com) avec l'API *Product Information v4*, puis
@@ -186,9 +203,10 @@ industriel, chaque lundi à 8h, pour moi@exemple.fr », « Quelles fins de vie o
 ce mois-ci ? », « Où en est l'analyse de la veille composants ? »…
 
 - **Transport stdio via `docker exec -i`** : aucun port réseau n'est ouvert.
-- **`trust: untrusted`** : les 14 outils de lecture s'exécutent directement ; les 16 outils de
+- **`trust: untrusted`** : les 14 outils de lecture s'exécutent directement ; les 17 outils de
   modification demandent ton **approbation dans Telegram**. `run_veille_now` et
-  `send_test_email` envoient de vrais e-mails ; `archive_veille` exige en plus de répéter le slug.
+  `send_test_email` envoient de vrais e-mails ; `archive_veille` et `reset_component_search`
+  exigent en plus de répéter le slug.
 - Chaque action est tracée dans le journal d'audit avec l'origine « telegram ».
 - Variante prudente : `./scripts/install-mcp-host.sh --readonly` (lecture seule) ;
   `--print` affiche la configuration YAML sans rien modifier ; `--uninstall` la retire.
@@ -200,7 +218,7 @@ Outils : `list_veilles`, `get_veille`, `get_brief`, `list_brief_templates`, `lis
 `update_brief`, `edit_brief`, `add_components`, `remove_components`, `import_components`,
 `check_component_statuses`,
 `pause_veille`, `resume_veille`, `run_veille_now`,
-`send_test_email`, `archive_veille` (modification).
+`send_test_email`, `archive_veille`, `reset_component_search` (modification).
 
 ## Consommation et coût
 
@@ -291,11 +309,11 @@ veilles/<slug>/
                       horodatés : deux exécutions le même jour ne s'écrasent plus (anciens
                       noms AAAA-MM-JJ-veille toujours lus)
     runs/             journaux des lancements manuels (.progress.json : avancement du dernier)
-    components.json   veille composants : références, statut Digi-Key, dates de vérification
+    components.json   veille composants : références, statuts Digi-Key et web, dates de vérification
     notices.json      veille composants : avis PCN / EOL détectés, sources, livraisons
 imports/            nomenclatures déposées pour import (Telegram / CLI), analyses en cours de
                     l'interface (supprimées après 1 h) ; exclu des sauvegardes
-veilles/.archive/   veilles archivées
+veilles/.archive/   veilles archivées, copies des remises à zéro (`<slug>-reinit-…`)
 veilles/.audit.log  journal d'audit (interface, CLI, amorçage)
 veilles/.settings.json  paramètres de l'interface (adresses d'alerte), lus aussi par le chien de garde
 cron/jobs.json      jobs Hermes (état, prochain et dernier run)

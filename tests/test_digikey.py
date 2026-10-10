@@ -47,26 +47,67 @@ TOKEN = {"access_token": "tok", "expires_in": 600}
 
 
 def test_status_ok_and_headers():
-    f = Fake(TOKEN, product(), product(mpn="AB/C-1", status="Active", url=None))
+    f = Fake(TOKEN, product(), product(mpn="AB/C-1", status="Active", url=None), {})
     c = f.client()
     assert c.status("LM317T", "Texas Instruments Inc.") == {"status": "Last Time Buy",
                                                              "product_url": "https://www.digikey.com/p/1"}
     auth, details = f.requests[0], f.requests[1]
     assert auth.full_url.endswith("/v1/oauth2/token") and b"grant_type=client_credentials" in auth.data
-    assert details.full_url.endswith("/products/v4/search/LM317T/productdetails")
+    assert details.full_url.endswith("/products/v4/search/LM317T/productdetails") and details.get_method() == "GET"
     assert details.headers["Authorization"] == "Bearer tok" and details.headers["X-digikey-client-id"] == "cid"
+    assert c.calls == 2  # fiche trouvée : aucune recherche de plus
     assert c.status("AB/C-1", "Analog Devices")["error"].startswith("fabricant différent")
     assert f.requests[2].full_url.endswith("/search/AB%2FC-1/productdetails")  # le « / » ne change pas de route
-    assert c.calls == 3 and f.sleeps == [digikey.MIN_INTERVAL, digikey.MIN_INTERVAL]  # débit limité
+    assert c.calls == 4 and f.sleeps == [digikey.MIN_INTERVAL] * 3  # débit limité, recherche comprise
 
 
 def test_mismatch_and_not_found():
-    f = Fake(TOKEN, product(mpn="LM317T-DG"), product(mfr="STMicroelectronics"), http_error(404), {})
+    # chaque refus de la fiche est suivi d'une recherche par mot-clé, ici sans résultat : motif de la fiche gardé
+    f = Fake(TOKEN, product(mpn="LM317T-DG"), {}, product(mfr="STMicroelectronics"), {"Products": []},
+             http_error(404), http_error(404), {}, {"ExactMatches": "x", "Products": None})
     c = f.client(min_interval=0)
     assert c.status("LM317T", "Texas Instruments")["error"].startswith("référence différente")
     assert c.status("LM317T", "Texas Instruments")["error"].startswith("fabricant différent")
     assert c.status("LM317T", "Texas Instruments") == {"error": "introuvable chez Digi-Key"}
     assert c.status("LM317T", "Texas Instruments") == {"error": "introuvable chez Digi-Key"}
+    assert c.calls == 9 and not f.answers
+
+
+def search_result(*products, key="ExactMatches"):
+    return {key: [p["Product"] for p in products], "ProductsCount": len(products)}
+
+
+def test_ambiguous_reference_found_by_keyword_search():
+    """« 1N4148 » existe chez plusieurs fabricants : la fiche répond 400 sans identifiant de fabricant."""
+    f = Fake(TOKEN, http_error(400), search_result(product("1N4148", "Vishay", status="Active"),
+                                                   product("1N4148", "onsemi", status="Obsolete", url="https://dk/o")))
+    c = f.client(min_interval=0)
+    assert c.status("1N4148", "onsemi") == {"status": "Obsolete", "product_url": "https://dk/o"}
+    search = f.requests[-1]
+    assert search.full_url == "https://api.digikey.com/products/v4/search/keyword" and search.get_method() == "POST"
+    assert json.loads(search.data) == {"Keywords": "1N4148", "Limit": 50, "Offset": 0}
+    assert search.headers["Content-type"] == "application/json" and search.headers["Authorization"] == "Bearer tok"
+
+
+def test_punctuation_and_exact_reference_preferred():
+    # Nexperia : « 2N7002215 » saisi, « 2N7002,215 » chez Digi-Key (fabricant « Nexperia USA Inc. »)
+    f = Fake(TOKEN, http_error(404), search_result(product("2N7002,215", "Nexperia USA Inc.", status="Active"),
+                                                   key="Products"))
+    assert f.client(min_interval=0).status("2N7002215", "Nexperia")["status"] == "Active"
+    # deux fiches à la ponctuation près : celle au MPN identique l'emporte, même placée après
+    f = Fake(TOKEN, http_error(404), search_result(product("BAV99,215", "Nexperia", status="Obsolete"),
+                                                   product("BAV99215", "Nexperia", status="Active")))
+    assert f.client(min_interval=0).status("BAV99215", "Nexperia")["status"] == "Active"
+    # le « + » (sans plomb) n'est pas une ponctuation : jamais confondu avec la version au plomb
+    f = Fake(TOKEN, http_error(404), search_result(product("MAX232CPE", "Analog Devices", status="Obsolete")))
+    assert f.client(min_interval=0).status("MAX232CPE+", "Analog Devices") == {"error": "introuvable chez Digi-Key"}
+
+
+def test_malformed_product_fields_never_crash():
+    p = {"Product": {"ManufacturerProductNumber": "LM317T", "Manufacturer": "Texas Instruments",
+                     "ProductStatus": ["Active"]}}
+    f = Fake(TOKEN, p, ["pas", "un", "objet"])
+    assert f.client(min_interval=0).status("LM317T", "Texas Instruments")["error"].startswith("fabricant différent")
 
 
 def test_end_of_life_flag_and_unsafe_url():
@@ -97,6 +138,7 @@ def test_rate_limited_waits_retry_after():
     (({},), "jeton absent"),
     ((urllib.error.URLError("dns"),), "injoignable"),
     ((TOKEN, http_error(500)), "HTTP 500"),
+    ((TOKEN, http_error(404), http_error(400)), "HTTP 400"),  # recherche mal formée : erreur, pas « introuvable »
     ((TOKEN, OSError("reset")), "injoignable"),
 ])
 def test_errors_never_leak_secrets(answers, match):

@@ -1,4 +1,5 @@
-{# Détail d'un composant (ligne dépliée de la liste) : identité, statut Digi-Key, avis complets. #}
+{# Détail d'un composant (ligne dépliée de la liste) : identité, statut Digi-Key (ou établi par la
+   recherche web si Digi-Key ne connaît pas la référence), avis complets. #}
 {% from "partials/macros.html" import badge, source_link %}
 <div class="comp-detail">
   <p><strong>{{ r.mpn }}</strong> — {{ r.manufacturer }}{% if r.ref %} · réf. {{ r.ref }}{% endif %}
@@ -7,6 +8,11 @@
     {% if r.dk.product_url %}{{ source_link({"url": r.dk.product_url, "label": r.dk.status or "fiche"}) }}{% else %}{{ r.dk.status or "—" }}{% endif %}
     · vérifié {{ r.dk.checked_at or "jamais" }} · recherche web {{ r.web_checked_at or "jamais" }}
     {% if r.dk.error %}<span class="err">· {{ r.dk.error }}</span>{% endif %}</p>
+  {% if r.web.status %}{% set label = WEB_STATUSES.get(r.web.status, r.web.status) %}
+  <p class="small muted">Statut constaté sur le web :
+    {% if r.web.url %}{{ source_link({"url": r.web.url, "label": label}) }}{% else %}{{ label }}{% endif %}
+    · {{ r.web.checked_at }}</p>
+  {% endif %}
   {% if r.notices %}
   <ul class="notices">
     {% for n in r.notices %}

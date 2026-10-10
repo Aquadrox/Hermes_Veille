@@ -41,6 +41,10 @@ TYPES = {
     "AUTRE": ("Autre", 4),
 }
 CRITICAL = frozenset(t for t, (_, sev) in TYPES.items() if sev <= 1)
+# Statut de cycle de vie qu'établit la recherche web pour une référence inconnue de Digi-Key -> libellé.
+# Un statut qui est aussi un type d'avis (NRND, LTB, OBSOLETE) crée l'avis correspondant.
+WEB_STATUSES = {"ACTIVE": "Actif", "NRND": TYPES["NRND"][0], "LTB": TYPES["LTB"][0],
+                "OBSOLETE": TYPES["OBSOLETE"][0], "UNKNOWN": "Introuvable"}
 SCOPES = ("référence", "gamme")
 HEADER_WORDS = {"mpn", "référence", "reference", "ref", "partnumber", "manufacturerpartnumber", "fabricant",
                 "manufacturer", "mfr", "brand", "marque"}
@@ -62,6 +66,12 @@ def today() -> str:
 # --------------------------------------------------------------------------
 def norm_mpn(mpn: str) -> str:
     return re.sub(r"\s+", "", mpn or "").upper()
+
+
+def loose_mpn(mpn: str) -> str:
+    """MPN sans ponctuation, pour reconnaître une référence chez un distributeur : « 2N7002,215 » (Nexperia)
+    ~ « 2N7002215 ». Le « + » reste significatif (« MAX232CPE+ » sans plomb ≠ « MAX232CPE »)."""
+    return re.sub(r"[^A-Z0-9+]", "", (mpn or "").upper())
 
 
 def norm_mfr(name: str) -> str:
@@ -151,6 +161,12 @@ def combine(current: list[dict], items: list[dict], mode: str = "add") -> tuple[
     return unique(current + [i for i in items if key_of(i["mpn"], i["manufacturer"]) not in have]), stats
 
 
+def _fresh(c: dict, added_at: str | None = None) -> dict:
+    """Référence sans aucun état de veille (ni vérification, ni statut)."""
+    return {"mpn": c["mpn"], "manufacturer": c["manufacturer"], "ref": c.get("ref", ""),
+            "added_at": added_at or today(), "web_checked_at": None, "dk": None}
+
+
 def replace_components(current: list[dict], wanted: list[dict]) -> list[dict]:
     """Nouvelle liste ; l'état (vérifications, statut Digi-Key) des références conservées est gardé."""
     by_key = {key_of(c["mpn"], c["manufacturer"]): c for c in current}
@@ -160,9 +176,13 @@ def replace_components(current: list[dict], wanted: list[dict]) -> list[dict]:
         if old:
             out.append({**old, "mpn": w["mpn"], "manufacturer": w["manufacturer"], "ref": w.get("ref", "")})
         else:
-            out.append({"mpn": w["mpn"], "manufacturer": w["manufacturer"], "ref": w.get("ref", ""),
-                        "added_at": today(), "web_checked_at": None, "dk": None})
+            out.append(_fresh(w))
     return out
+
+
+def reset_state(components: list[dict]) -> list[dict]:
+    """Même liste (références, réf. internes, dates d'ajout), sans aucun état : tout sera revérifié."""
+    return [_fresh(c, c.get("added_at")) for c in components]
 
 
 # --------------------------------------------------------------------------
@@ -240,14 +260,27 @@ def _date(value) -> str:
     return value
 
 
+def _matcher(components: list[dict]):
+    """Fonction (MPN cité par l'agent, fabricant cité) -> composant suivi, ou None : inconnu, ou MPN suivi chez
+    plusieurs fabricants sans fabricant pour trancher."""
+    by_mpn: dict[str, list[dict]] = {}
+    for c in components:
+        by_mpn.setdefault(norm_mpn(c["mpn"]), []).append(c)
+
+    def match(mpn, manufacturer: str) -> dict | None:
+        cands = by_mpn.get(norm_mpn(_text(mpn, "label")), [])
+        if len(cands) > 1 and manufacturer:
+            cands = [c for c in cands if same_manufacturer(c["manufacturer"], manufacturer)]
+        return cands[0] if len(cands) == 1 else None
+    return match
+
+
 def validate_candidates(raw, components: list[dict]) -> tuple[list[dict], list[str]]:
     """{"notices": [...]} de l'agent -> (avis valides, un par composant suivi touché ; rejets)."""
     items = raw.get("notices") if isinstance(raw, dict) else raw
     if not isinstance(items, list):
         raise ComponentsError("format attendu : {\"notices\": [...]}")
-    by_mpn: dict[str, list[dict]] = {}
-    for c in components:
-        by_mpn.setdefault(norm_mpn(c["mpn"]), []).append(c)
+    match = _matcher(components)
     valid, rejected = [], []
     for i, item in enumerate(items[:MAX_CANDIDATES], 1):
         if not isinstance(item, dict):
@@ -274,11 +307,9 @@ def validate_candidates(raw, components: list[dict]) -> tuple[list[dict], list[s
         manufacturer = _text(item.get("manufacturer"), "label")
         matched = []
         for mpn in mpns:
-            cands = by_mpn.get(norm_mpn(_text(mpn, "label")), [])
-            if len(cands) > 1 and manufacturer:
-                cands = [c for c in cands if same_manufacturer(c["manufacturer"], manufacturer)]
-            if len(cands) == 1 and cands[0] not in matched:
-                matched.append(cands[0])
+            c = match(mpn, manufacturer)
+            if c is not None and c not in matched:
+                matched.append(c)
         if not matched:
             rejected.append(f"#{i} : aucune référence suivie ({', '.join(map(str, mpns))[:80] or 'mpns vide'})")
             continue
@@ -300,6 +331,57 @@ def validate_candidates(raw, components: list[dict]) -> tuple[list[dict], list[s
     if len(items) > MAX_CANDIDATES:
         rejected.append(f"{len(items) - MAX_CANDIDATES} avis au-delà de la limite de {MAX_CANDIDATES}")
     return valid, rejected
+
+
+def validate_statuses(raw, components: list[dict]) -> tuple[dict[str, dict], list[str]]:
+    """{"statuses": [...]} de l'agent (cycle de vie des références inconnues de Digi-Key) -> ({clé: {"status",
+    "url"}}, rejets). Même rigueur que les avis : référence suivie, statut connu, fiche http(s) obligatoire
+    sauf pour UNKNOWN (aucune fiche trouvée). Champ facultatif : absent, rien à valider."""
+    items = raw.get("statuses") if isinstance(raw, dict) else None
+    if items is None:
+        return {}, []
+    if not isinstance(items, list):
+        raise ComponentsError("format attendu : « statuses » est une liste")
+    match = _matcher(components)
+    found, rejected = {}, []
+    for i, item in enumerate(items[:MAX_CANDIDATES], 1):
+        if not isinstance(item, dict):
+            rejected.append(f"statut #{i} : objet attendu")
+            continue
+        status = _text(item.get("status"), "label").upper()
+        url = normalize_url(item.get("url")) if item.get("url") else None
+        c = match(item.get("mpn"), _text(item.get("manufacturer"), "label"))
+        if status not in WEB_STATUSES:
+            rejected.append(f"statut #{i} : statut inconnu « {status[:20]} »")
+        elif not url and status != "UNKNOWN":
+            rejected.append(f"statut #{i} : aucune fiche http(s) valide")
+        elif c is None:
+            rejected.append(f"statut #{i} : aucune référence suivie ({_text(item.get('mpn'), 'label')[:64]})")
+        else:
+            found[key_of(c["mpn"], c["manufacturer"])] = {"status": status, "url": url}
+    return found, rejected
+
+
+def status_notice(c: dict, ntype: str, title: str, url: str, label: str, origin: str) -> dict:
+    """Avis tiré d'un statut de cycle de vie (fiche Digi-Key, ou fiche trouvée par la recherche web)."""
+    return {"key": key_of(c["mpn"], c["manufacturer"]), "mpn": c["mpn"], "manufacturer": c["manufacturer"],
+            "type": ntype, "title": title, "number": "", "published": "", "ltb_date": "", "eol_date": "",
+            "scope": "référence", "summary": "", "sources": [{"url": url, "label": label}], "origin": origin}
+
+
+def apply_statuses(components: list[dict], statuses: dict[str, dict], day: str) -> list[dict]:
+    """Enregistre (en place) le statut web de chaque composant ; renvoie les avis à fusionner pour ceux
+    déconseillés, en dernière commande ou obsolètes (comme un statut Digi-Key)."""
+    out = []
+    for c in components:
+        s = statuses.get(key_of(c["mpn"], c["manufacturer"]))
+        if s is None:
+            continue
+        c["web_status"] = {**s, "checked_at": day}
+        if s["status"] in TYPES:
+            out.append(status_notice(c, s["status"], f"Statut constaté sur le web : {WEB_STATUSES[s['status']]}",
+                                     s["url"], urlsplit(s["url"]).hostname, "web"))
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -383,13 +465,16 @@ def mark_delivered(notices: list[dict], ids: set[str], channel: str, day: str | 
 # Lot tournant de recherche web
 # --------------------------------------------------------------------------
 def batch(components: list[dict], size: int) -> list[dict]:
-    """Jamais vérifiés, puis statut Digi-Key changé depuis la dernière recherche, puis les plus anciens."""
+    """Jamais vérifiés ; puis inconnus de Digi-Key sans statut web encore établi, ou statut Digi-Key changé
+    depuis la dernière recherche ; puis les plus anciens."""
     def rank(c):
         web = c.get("web_checked_at")
-        changed = (c.get("dk") or {}).get("changed_at")
+        dk = c.get("dk") or {}
         if not web:
             return (0, "")
-        return (1 if changed and changed > web else 2, web)
+        changed = dk.get("changed_at")
+        urgent = (dk.get("error") and not c.get("web_status")) or (changed and changed > web)
+        return (1 if urgent else 2, web)
     return sorted(components, key=rank)[: max(1, size)]
 
 
@@ -439,6 +524,15 @@ def anchor(key: str) -> str:
     return "c-" + hashlib.sha1(key.encode()).hexdigest()[:10]
 
 
+def _status_link(dk: dict, web: dict) -> dict | None:
+    """Lien d'un composant sans avis : sa fiche Digi-Key, sinon la fiche trouvée par la recherche web."""
+    if dk.get("product_url"):
+        return {"url": dk["product_url"], "label": "Digi-Key"}
+    if web.get("url"):
+        return {"url": web["url"], "label": urlsplit(web["url"]).hostname}
+    return None
+
+
 def group(notices: list[dict], components: list[dict], include_quiet: bool = False) -> list[dict]:
     """Une ligne par composant : ses avis (le plus critique puis le plus récent d'abord), ses types,
     l'échéance et le lien de son avis le plus critique.
@@ -455,12 +549,11 @@ def group(notices: list[dict], components: list[dict], include_quiet: bool = Fal
     for key, ns in buckets.items():
         ns = sorted(sorted(ns, key=lambda n: n["found_at"], reverse=True), key=lambda n: severity(n["type"]))
         c = by_key.get(key) or {}
-        dk = c.get("dk") or {}
+        dk, web = c.get("dk") or {}, c.get("web_status") or {}
         worst = ns[0] if ns else None
-        link = worst["sources"][0] if worst else (
-            {"url": dk["product_url"], "label": "Digi-Key"} if dk.get("product_url") else None)
+        link = worst["sources"][0] if worst else _status_link(dk, web)
         rows.append({
-            "key": key, "anchor": anchor(key), "tracked": bool(c), "dk": dk,
+            "key": key, "anchor": anchor(key), "tracked": bool(c), "dk": dk, "web": web,
             "mpn": c.get("mpn") or worst["mpn"], "manufacturer": c.get("manufacturer") or worst["manufacturer"],
             "ref": c.get("ref") or "", "web_checked_at": c.get("web_checked_at"), "notices": ns, "worst": worst, "link": link,
             "types": list(dict.fromkeys(n["type"] for n in ns)),
@@ -678,7 +771,7 @@ XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _XLSX_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
 _XLSX_COLUMNS = (("Composant", 24), ("Fabricant", 22), ("Réf. interne", 14), ("Critique", 9), ("Avis", 28),
                  ("Avis principal", 48), ("Échéance", 12), ("Détecté", 12), ("Statut Digi-Key", 20),
-                 ("Vérifié Digi-Key", 15), ("Recherche web", 15), ("Lien", 48), ("Suivi", 9))
+                 ("Vérifié Digi-Key", 15), ("Statut web", 18), ("Recherche web", 15), ("Lien", 48), ("Suivi", 9))
 _XLSX_DATES = frozenset(i for i, (name, _) in enumerate(_XLSX_COLUMNS, 1)
                         if name in ("Échéance", "Détecté", "Vérifié Digi-Key", "Recherche web"))
 _XLSX_LINK = next(i for i, (name, _) in enumerate(_XLSX_COLUMNS, 1) if name == "Lien")
@@ -730,7 +823,8 @@ def to_xlsx(components: list[dict], notices: list[dict]) -> bytes:
         values = (r["mpn"], r["manufacturer"], r["ref"], "Oui" if r["critical"] else "",
                   ", ".join(TYPES[t][0] for t in r["types"]), r["worst"]["title"] if r["worst"] else "",
                   r["deadline"], r["found"], dk.get("status") or dk.get("error"), dk.get("checked_at"),
-                  r["web_checked_at"], url, "" if r["tracked"] else "retiré")
+                  WEB_STATUSES.get(r["web"].get("status"), ""), r["web_checked_at"], url,
+                  "" if r["tracked"] else "retiré")
         for col, value in enumerate(values, 1):
             cell = ws.cell(n, col, _xlsx_cell(value, col in _XLSX_DATES))
             if cell.data_type == "f":  # « =… » venu du web : texte, jamais formule
