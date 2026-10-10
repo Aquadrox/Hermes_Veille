@@ -13,6 +13,8 @@
 #      s'il a disparu) — c'est ce qui propage une mise à jour de l'image.
 #   6. oublie les lancements manuels du démarrage précédent (`runs/.running`) :
 #      leurs processus n'existent plus, et leur PID pourrait être réattribué.
+#   7. contrôle la base SQLite (mise de côté si corrompue) et reconstruit l'index
+#      des composants depuis les fichiers des veilles (base créée ici, par hermes).
 #
 # IMPORTANT : tout est exécuté EN TANT QUE hermes (sinon les fichiers créés
 # appartiennent à root et les écritures suivantes échouent en permission).
@@ -73,6 +75,9 @@ as_hermes "$VEILLECTL" reconcile 2>&1 | sed 's/^/[seed-veille] reconcile: /'
 
 # --- 6. Lancements manuels interrompus par le redémarrage ---
 find "$VEILLES_DIR" -mindepth 3 -maxdepth 3 -path '*/runs/.running' -type f -delete 2>/dev/null || true
+
+# --- 7. Base des composants (index reconstructible) ---
+as_hermes "$VEILLECTL" catalog rebuild 2>&1 | sed 's/^/[seed-veille] catalog: /'
 
 log "veilles :"
 as_hermes "$VEILLECTL" list 2>&1 | sed 's/^/  /'

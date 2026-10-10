@@ -37,7 +37,7 @@
       {# au-delà de la limite : masquées dès le rendu (mise en page légère), app.js gère ensuite #}
       <tr class="comp{% if r.critical %} crit{% endif %}"{% if loop.index > COMP_ROWS_SHOWN %} hidden{% endif %}
           data-types="{{ r.types|join(' ') }}" data-detail="/veilles/{{ v.slug }}/components/{{ r.anchor }}"
-          data-q="{{ r.ref }} {{ r.dk.status or '' }}{% if r.web %} {{ WEB_STATUSES.get(r.web.status, '') }}{% endif %}{% for n in r.notices %} {{ NOTICE_TYPES[n.type][0] }} {{ n.title }} {{ n.number }} {{ n.summary }}{% endfor %}">
+          data-q="{{ r.ref }} {{ r.dk.status or '' }}{% if r.web %} {{ web_status_label(r.web) }}{% endif %}{% for n in r.notices %} {{ NOTICE_TYPES[n.type][0] }} {{ n.title }} {{ n.number }} {{ n.summary }}{% endfor %}">
         <td class="c-mpn"><button type="button" class="link comp-toggle" aria-expanded="false" aria-controls="d-{{ r.anchor }}"><strong>{{ r.mpn }}</strong></button>{% if not r.tracked %} <span class="muted small">(retiré)</span>{% endif %}</td>
         <td class="opt">{{ r.manufacturer }}</td>
         <td class="opt">{{ r.ref or "—" }}</td>

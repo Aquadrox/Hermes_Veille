@@ -407,7 +407,7 @@ def test_scan_concurrent_edit_is_preserved(watch):
     def edit(mpn):
         if mpn == "LM317T":  # pendant le passage Digi-Key (hors verrou), l'interface modifie la liste
             service.remove_components(watch.slug, ["NE555P"])
-            service.add_components(watch.slug, comp.parse_components("BC547;onsemi"))
+            service.import_components(watch.slug, comp.parse_components("BC547;onsemi"))
     service.components_scan(watch.slug, client=FakeClient({}, on_call=edit))
     mpns = [c["mpn"] for c in comp.load_components(watch.slug)["components"]]
     assert mpns == ["LM317T", "STM32F103C8T6", "BC547"]
@@ -560,7 +560,7 @@ def test_archive_components_unlinks_veilles(watch):
 
 
 def test_add_remove_and_notices_filter(watch):
-    assert service.add_components(watch.slug, comp.parse_components("lm317t;texas instruments\nBC547;onsemi")) == 1
+    assert service.import_components(watch.slug, comp.parse_components("lm317t;texas instruments\nBC547;onsemi"))["added"] == 1
     assert service.remove_components(watch.slug, ["bc547", "ABSENT"]) == 1
     assert service.remove_components(watch.slug, ["ABSENT"]) == 0
     with pytest.raises(store.StoreError, match="type d'avis inconnu"):
@@ -726,7 +726,7 @@ def test_ui_component_detail_other_veilles_and_login(ui, watch):
 def test_ui_lists_every_component_without_cap(ui, watch):
     """Filtrage côté navigateur : la liste doit être complète (plus de plafond à 100 avis)."""
     client, _ = ui
-    service.add_components(watch.slug, [{"mpn": f"R{i:03d}", "manufacturer": "Yageo", "ref": ""} for i in range(150)])
+    service.import_components(watch.slug, [{"mpn": f"R{i:03d}", "manufacturer": "Yageo", "ref": ""} for i in range(150)])
     finalize(watch, [cand(["LM317T"], ntype="PCN", url=f"https://a.org/{i}") for i in range(3)])
     t = client.get(f"/veilles/{watch.slug}").text
     assert len(_rows_html(t)) == 153 and "153 / 153" in t
@@ -798,7 +798,7 @@ def test_mcp_components_tools(env, tools):
                                          "kind": "composants", "components_list": ["LM317T;Texas Instruments;R1"]}))
     assert v["kind"] == "composants" and v["cron"] == "0 23 * * 0" and v["components"]["components"] == 1
     assert data(call(srv, "add_components", {"slug": "bom-z", "components_list": ["NE555P;Texas Instruments"]})) == {
-        "slug": "bom-z", "added": 1, "total": 2}
+        "slug": "bom-z", "added": 1, "total": 2, "known": 0, "notices_known": 0}
     assert data(call(srv, "remove_components", {"slug": "bom-z", "mpns": ["NE555P"]}))["total"] == 1
     r = call(srv, "add_components", {"slug": "bom-z", "components_list": ["mauvaise ligne"]})
     assert r.is_error and "ligne 1" in r.content[0].text

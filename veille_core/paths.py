@@ -42,3 +42,8 @@ def hermes_bin() -> str:
 
 def audit_log() -> Path:
     return veilles_dir() / ".audit.log"
+
+
+def database() -> Path:
+    """Base SQLite : connaissance partagée des composants et carnet d'adresses (voir db.py)."""
+    return veilles_dir() / ".veille.db"

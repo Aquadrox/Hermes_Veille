@@ -20,14 +20,28 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import quote_plus
 
+from . import (
+    catalog,
+    contacts,
+    credentials,
+    db,
+    digikey,
+    hermes,
+    paths,
+    pricing,
+    progress,
+    render,
+    schedule,
+    settings,
+    store,
+)
 from . import components as comp
-from . import credentials, digikey, hermes, paths, pricing, progress, render, schedule, settings, store
 from .store import PdfOptions, StoreError, Veille
 
 LEGACY_JOB_NAME = "Veille technologique hebdomadaire"
 LEGACY_SLUG = "industrie-4-0"
 BOOTSTRAP_MARKER = ".bootstrapped"
-PLACEHOLDER_RECIPIENT = "destinataire@example.com"
+PLACEHOLDER_RECIPIENT = store.PLACEHOLDER_RECIPIENT
 COMPONENTS_TEMPLATE = "composants"
 COMPONENTS_SCHEDULE = "0 23 * * 0"  # dimanche 23h : heures creuses DeepSeek toute l'année
 CHAPTER_MARK = "<!-- chapitre-composants -->"
@@ -76,6 +90,18 @@ def read_audit(limit: int = 50) -> list[dict]:
         except ValueError:
             continue
     return out
+
+
+def _best_effort(what: str, fn, *args, slug: str = "", trace: bool = True):
+    """Appel à la base SQLite (index des composants, carnet d'adresses) : un échec est tracé, jamais bloquant.
+    Les fichiers de la veille font foi, et l'index se reconstruit au démarrage (`rebuild_catalog`).
+    `trace=False` : lecture pour l'affichage d'une page, qui signale elle-même la panne (journal non inondé)."""
+    try:
+        return fn(*args)
+    except db.ERRORS as exc:
+        if trace:
+            audit("system", "db-error", slug, f"{what} : {type(exc).__name__}: {exc}"[:300])
+        return None
 
 
 def job_name(v: Veille) -> str:
@@ -243,21 +269,26 @@ def create_veille(*, name: str, subject: str, schedule_expr: str, recipients: li
         _apply_schedule(v, schedule_expr)
         if batch_size is not None:
             v.batch_size = _batch_size(batch_size)
+        reprise: dict = {}
         try:
             store.save(v)
             store.write_recipients(slug, recipients)
             store.write_brief(slug, brief)
             if kind == "composants":
-                comp.save_components(slug, {"components": comp.replace_components([], components or []),
-                                            "batch": []})
+                data = {"components": [], "batch": []}
+                comp.save_components(slug, data)
+                reprise = _store_components(slug, data, components or [])
             _set_link(v, include_components)
             render.write(v)
             v.job_id = _create_job(v, paused=paused)
             store.save(v)
         except Exception:
             shutil.rmtree(v.dir, ignore_errors=True)
+            if reprise.get("changed"):  # contribution indexée d'une veille qui n'existe pas
+                _best_effort("index des composants", catalog.sync, slug, [], [], slug=slug)
             raise
-    audit(actor, "create", slug, f"{schedule_expr}; {len(recipients)} destinataire(s)")
+        _best_effort("carnet d'adresses", contacts.remember, recipients, slug=slug)
+    audit(actor, "create", slug, f"{schedule_expr}; {len(recipients)} destinataire(s)" + _reprise_note(reprise))
     return v
 
 
@@ -295,9 +326,14 @@ def update_veille(slug: str, *, name: str | None = None, subject: str | None = N
             if "modèle" not in changes:
                 changes.append("modèle")
         if recipients is not None:
-            if recipients != store.read_recipients(slug):
+            old = store.read_recipients(slug)
+            if recipients != old:
                 changes.append("destinataires")
             store.write_recipients(slug, recipients)
+            known = {a.lower() for a in old}
+            added = [a for a in recipients if a.lower() not in known]
+            if added:  # adresses nouvelles seulement : une adresse « oubliée » du carnet n'y revient pas seule
+                _best_effort("carnet d'adresses", contacts.remember, added, slug=slug)
         if brief is not None:
             if brief.replace("\r\n", "\n") != store.read_brief(slug):
                 changes.append("brief")
@@ -305,13 +341,9 @@ def update_veille(slug: str, *, name: str | None = None, subject: str | None = N
         if components is not None:
             if v.kind != "composants":
                 raise StoreError("seule une veille composants a une liste de composants")
-            data = comp.load_components(slug)
-            new_list = comp.replace_components(data["components"], components)
-            if [comp.key_of(c["mpn"], c["manufacturer"]) for c in new_list] != [
-                    comp.key_of(c["mpn"], c["manufacturer"]) for c in data["components"]]:
-                changes.append("composants")
-            data["components"] = new_list
-            comp.save_components(slug, data)
+            reprise = _store_components(slug, comp.load_components(slug), components)
+            if reprise.get("keys_changed"):
+                changes.append("composants" + _reprise_note(reprise))
         if batch_size is not None and _batch_size(batch_size) != v.batch_size:
             v.batch_size = _batch_size(batch_size)
             changes.append("taille du lot")
@@ -473,6 +505,8 @@ def archive(slug: str, actor: str = "cli") -> Path:
         dest = paths.archive_dir() / f"{slug}-{dt.datetime.now():%Y%m%d-%H%M%S}"
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(v.dir), str(dest))
+        if v.kind == "composants":  # sa connaissance reste dans la base, sous le nom de l'archive
+            _best_effort("index des composants", catalog.archive, slug, dest.name, slug=slug)
         for other in _linked_veilles(slug):  # plus de chapitre vers une veille archivée
             other.components = None
             store.save(other)
@@ -635,6 +669,7 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
         comp.save_components(slug, data)
         if new:
             comp.save_notices(slug, notices)
+        _index(slug, data["components"], notices)
     if track:
         if plan_batch:
             track.update(step="web", digikey=dk_progress, batch=[
@@ -651,9 +686,19 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
             "batch": [{"mpn": c["mpn"], "manufacturer": c["manufacturer"], "ref": c.get("ref", ""),
                        "since": comp.search_since(c), "digikey_status": (c.get("dk") or {}).get("status"),
                        # non nul : Digi-Key ne la trouve pas, l'agent établit lui-même son statut (« statuses »)
-                       "digikey_error": (c.get("dk") or {}).get("error"),
+                       "digikey_error": (c.get("dk") or {}).get("error"), **_fallback(c),
                        "known": known.get(comp.key_of(c["mpn"], c["manufacturer"]), [])[:20]}
                       for c in lot]}
+
+
+def _fallback(c: dict) -> dict:
+    """Repli d'une référence inconnue de Digi-Key, pour l'agent : sa recherche alldatasheet (dont le « Direct
+    Link » mène au fabricant), et ce qu'un passage précédent en a établi (statut web, site du fabricant)."""
+    if not (c.get("dk") or {}).get("error"):
+        return {}
+    web = c.get("web_status") or {}
+    return {"alldatasheet": comp.alldatasheet_url(c["mpn"]), "web_status": web.get("status"),
+            "maker": web.get("maker")}
 
 
 def components_progress(slug: str, mpns: list[str]) -> bool:
@@ -667,45 +712,100 @@ def components_progress(slug: str, mpns: list[str]) -> bool:
     return True
 
 
-def _edit_components(slug: str, edit, actor: str, action: str) -> int:
-    """Modifie la liste SOUS le verrou (relecture comprise : aucune édition concurrente perdue) ;
-    renvoie la différence de taille. Enregistrée dès qu'une entrée change (pas seulement le nombre)."""
+def _index(slug: str, components: list[dict], notices: list[dict]) -> None:
+    """État enregistré d'une veille composants -> sa contribution à la base des composants."""
+    _best_effort("index des composants", catalog.sync, slug, components, notices, slug=slug)
+
+
+def _reprise_note(reprise: dict) -> str:
+    return (f" ; {reprise['known']} référence(s) déjà connue(s), {reprise['notices']} avis repris"
+            if reprise.get("known") else "")
+
+
+def _adopt(slug: str, components: list[dict], notices: list[dict], keys: set[str]) -> dict:
+    """Reprend de la base ce que les AUTRES veilles savent des références `keys`, nouvelles dans `slug` :
+    statuts Digi-Key et web et date de la dernière recherche web (si la référence n'en a pas encore), avis
+    (date de détection d'origine). Modifie `components` et `notices` en place ; renvoie {"known", "notices"}
+    (références reconnues, avis repris). Les avis repris ne sont livrés sur aucun canal : ils partent dans le
+    prochain rapport et le prochain e-mail de la veille."""
+    known = (_best_effort("reprise depuis la base", catalog.knowledge, keys, slug, slug=slug) or {}) if keys else {}
+    adopted = []
+    for c in components:
+        k = known.get(comp.key_of(c["mpn"], c["manufacturer"]))
+        if not k:
+            continue
+        for field in ("dk", "web_status", "web_checked_at"):
+            if k.get(field) and not c.get(field):
+                c[field] = k[field]
+        if (c.get("dk") or {}).get("status"):  # Digi-Key la connaît : il fait foi (comme au scan), pas de statut web
+            c.pop("web_status", None)
+        adopted += [{**n, "mpn": c["mpn"], "manufacturer": c["manufacturer"]} for n in k["notices"]]
+    return {"known": len(known), "notices": len(comp.merge(notices, adopted))}
+
+
+def _store_components(slug: str, data: dict, wanted: list[dict]) -> dict:
+    """La liste de la veille devient `wanted` (appelé SOUS le verrou, `data` relu sous ce verrou) : état des
+    références conservées gardé, reprise de la base pour les nouvelles, enregistrement et indexation si une
+    entrée change (pas seulement le nombre). Renvoie la reprise, "changed" et "keys_changed" (références
+    ajoutées, retirées ou réordonnées, pas seulement une réf. interne).
+
+    `notices.json` illisible : la liste s'enregistre quand même (comme avant la base), sans reprise ni index."""
     def entries(lst):
         return [(c["mpn"], c["manufacturer"], c.get("ref", "")) for c in lst]
+    before = data["components"]
+    after = comp.replace_components(before, wanted)
+    if entries(after) == entries(before):
+        return {"changed": False}
+    had = [comp.key_of(c["mpn"], c["manufacturer"]) for c in before]
+    keys = [comp.key_of(c["mpn"], c["manufacturer"]) for c in after]
+    try:
+        notices = comp.load_notices(slug)
+    except comp.ComponentsError:
+        notices = None
+    reprise = (_adopt(slug, after, notices, set(keys) - set(had)) if notices is not None
+               else {"known": 0, "notices": 0})
+    data["components"] = after
+    comp.save_components(slug, data)
+    if reprise["notices"]:
+        comp.save_notices(slug, notices)
+    if notices is not None:
+        _index(slug, after, notices)
+    return {**reprise, "changed": True, "keys_changed": keys != had}
+
+
+def _edit_components(slug: str, edit, actor: str, action: str) -> tuple[int, dict]:
+    """Modifie la liste SOUS le verrou (relecture comprise : aucune édition concurrente perdue) ;
+    renvoie (différence de taille, reprise depuis la base)."""
     with _locked():
         data = comp.load_components(_components_veille(slug).slug)
-        before = data["components"]
-        data["components"] = comp.replace_components(before, edit(before))
-        delta = abs(len(data["components"]) - len(before))
-        if entries(data["components"]) != entries(before):
-            comp.save_components(slug, data)
-    audit(actor, action, slug, f"{delta} composant(s)")
-    return delta
+        size = len(data["components"])
+        reprise = _store_components(slug, data, edit(data["components"]))
+        delta = abs(len(data["components"]) - size)
+    audit(actor, action, slug, f"{delta} composant(s)" + _reprise_note(reprise))
+    return delta, reprise
 
 
 def import_components(slug: str, items: list[dict], mode: str = "add", actor: str = "cli") -> dict:
     """Import d'une liste (fichier analysé par bom_import) : ajout ou remplacement, sous verrou.
-    Renvoie {"added", "existing", "removed", "total"} ; l'historique des avis est conservé."""
+    Renvoie {"added", "existing", "removed", "total", "known", "notices_known"} : les deux derniers comptent
+    les références déjà connues de la base des composants et les avis repris. L'historique des avis est
+    conservé."""
     stats: dict = {}
 
     def edit(current):
         new, st = comp.combine(current, items, mode)
         stats.update(st)
         return new
-    _edit_components(slug, edit, actor, f"components-import-{mode}")
-    return {**stats, "total": len(comp.load_components(slug)["components"])}
-
-
-def add_components(slug: str, items: list[dict], actor: str = "cli") -> int:
-    """Ajoute des références (doublons ignorés) ; renvoie le nombre réellement ajouté."""
-    return import_components(slug, items, "add", actor)["added"]
+    _, reprise = _edit_components(slug, edit, actor, f"components-import-{mode}")
+    return {**stats, "total": len(comp.load_components(slug)["components"]),
+            "known": reprise.get("known", 0), "notices_known": reprise.get("notices", 0)}
 
 
 def remove_components(slug: str, mpns: list[str], actor: str = "cli") -> int:
     """Retire les références de ces MPN (tous fabricants) ; l'historique des avis est conservé."""
     drop = {comp.norm_mpn(m) for m in mpns}
     return _edit_components(slug, lambda current: [c for c in current if comp.norm_mpn(c["mpn"]) not in drop],
-                            actor, "components-remove")
+                            actor, "components-remove")[0]
 
 
 def reset_components(slug: str, actor: str = "cli") -> Path:
@@ -730,8 +830,10 @@ def reset_components(slug: str, actor: str = "cli") -> Path:
         for name in ("components.json", "notices.json"):
             if (v.dir / name).is_file():
                 shutil.copy2(v.dir / name, dest / name)
-        comp.save_components(slug, {"components": comp.reset_state(data["components"]), "batch": []})
+        data = {"components": comp.reset_state(data["components"]), "batch": []}
+        comp.save_components(slug, data)
         comp.save_notices(slug, [])
+        _index(slug, data["components"], [])  # ce qu'elle avait apporté à la base disparaît aussi
     audit(actor, "components-reset", slug, str(dest))
     return dest
 
@@ -777,6 +879,39 @@ def check_credentials(provider: str, actor: str = "ui") -> str:
         raise ServiceError(str(exc)) from None
     audit(actor, "credentials-test", detail=f"{provider} : ok")
     return "Connexion à Digi-Key réussie."
+
+
+def rebuild_catalog(actor: str = "cli") -> dict:
+    """Base contrôlée (mise de côté et recréée si corrompue) puis index des composants reconstruit depuis les
+    fichiers de toutes les veilles, actives et archivées. Exécuté à chaque démarrage (hook de seed)."""
+    with _locked():
+        state = db.ensure()
+        result = catalog.rebuild()
+    if state != "base ok" or result["skipped"]:  # le démarrage ordinaire n'encombre pas le journal
+        audit(actor, "catalog-rebuild", detail=f"{state} ; ignorées : {'; '.join(result['skipped']) or 'aucune'}"[:500])
+    return {**result, "database": state}
+
+
+def catalog_stats() -> dict | None:
+    """Contenu de la base des composants (page Santé) ; None si elle est indisponible."""
+    return _best_effort("base des composants", catalog.stats, trace=False)
+
+
+def address_book(limit: int | None = contacts.MAX_SHOWN) -> list[str]:
+    """Adresses du carnet (`limit` None : toutes), proposées à la saisie des destinataires ; vide si la base
+    est indisponible."""
+    return _best_effort("carnet d'adresses", contacts.all_addresses, limit, trace=False) or []
+
+
+def forget_contact(address: str, actor: str = "ui") -> bool:
+    """Retire une adresse du carnet (elle reste destinataire des veilles qui l'utilisent)."""
+    try:
+        removed = contacts.forget(address)
+    except db.ERRORS as exc:
+        raise ServiceError(f"carnet d'adresses indisponible ({type(exc).__name__})") from None
+    if removed:  # jamais l'adresse elle-même dans le journal
+        audit(actor, "contacts-forget", detail="1 adresse")
+    return removed
 
 
 def alert_status() -> dict:
@@ -894,6 +1029,7 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         data["batch"] = []
         comp.save_components(slug, data)
         comp.save_notices(slug, notices)
+        _index(slug, data["components"], notices)
         linked = [x.slug for x in _linked_veilles(slug)]
     audit(actor, "components-finalize", slug,
           f"{len(new)} nouvel(s) avis, {len(statuses)} statut(s) web, {len(rejected)} rejet(s)")

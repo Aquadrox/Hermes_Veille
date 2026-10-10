@@ -138,6 +138,233 @@
   }
   document.addEventListener("DOMContentLoaded", initComponents);
 
+  // Destinataires d'une veille : puces, saisie avec autocomplétion sur le carnet d'adresses, ajout d'une
+  // adresse du carnet au toucher ou par glisser-déposer (Pointer Events, souris et tactile : le glisser-déposer
+  // HTML5 ne fonctionne pas dans les WebView mobiles ; appui long sur écran tactile, pour garder le défilement).
+  // La zone de texte reste le champ envoyé (et la seule interface sans JavaScript) : elle est tenue à jour, et
+  // le serveur valide les adresses comme avant.
+  var EMAIL = /^[^@\s,;<>"]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;  // même règle que store.EMAIL_RE
+  var BOOK_SHOWN = 24;  // suggestions affichées : la recherche affine
+  var HOLD_MS = 350;    // appui long avant de saisir une adresse sur écran tactile
+  function el(tag, cls) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    return e;
+  }
+  function initRecipients(root) {
+    var form = root.closest("form"), area = root.querySelector("textarea"), book = root.querySelector("[data-book]");
+    var emails = [], justDragged = false, drag = null;
+    var books = book ? Array.prototype.map.call(book.children, function (li) {
+      var b = li.firstElementChild;  // <button data-email> rendu (et échappé) par le serveur
+      return {li: li, email: b.getAttribute("data-email"), q: norm(b.getAttribute("data-email"))};
+    }) : [];
+    var box = el("div", "rcpt-box"), list = box.appendChild(el("ul", "rcpt-list"));
+    var input = box.appendChild(el("input", "rcpt-input"));
+    var msg = el("p", "small rcpt-msg"), more = book && el("li", "rcpt-more muted small");
+    box.setAttribute("data-zone", "to");
+    list.setAttribute("aria-label", "Destinataires");
+    input.type = "text";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.setAttribute("inputmode", "email");
+    input.setAttribute("autocapitalize", "off");
+    input.setAttribute("aria-label", "Ajouter un destinataire");
+    input.placeholder = book ? "Ajouter ou rechercher une adresse" : "Ajouter une adresse";
+    msg.setAttribute("aria-live", "polite");
+    area.required = false;  // champ masqué : « au moins un destinataire » est vérifié à l'envoi (ci-dessous)
+    area.closest("label").hidden = true;
+    root.insertBefore(box, area.closest("label"));
+    root.insertBefore(msg, book);
+    if (book) {
+      var hint = el("p", "small muted rcpt-hint");
+      hint.textContent = "Carnet d'adresses : toucher une adresse pour l'ajouter, ou la faire glisser dans les destinataires.";
+      root.insertBefore(hint, book);
+      book.setAttribute("data-zone", "book");
+      book.appendChild(more);
+      book.hidden = false;
+    }
+
+    function has(a) {
+      a = a.toLowerCase();
+      return emails.some(function (x) { return x.toLowerCase() === a; });
+    }
+    function say(text, bad) {
+      msg.textContent = text;
+      msg.classList.toggle("err", !!bad);
+    }
+    function render() {  // puces (quelques dizaines au plus) refaites, zone de texte et carnet synchronisés
+      list.textContent = "";
+      emails.forEach(function (a) {
+        var li = list.appendChild(el("li", "rcpt-chip" + (EMAIL.test(a) ? "" : " rcpt-bad")));
+        var x = el("button", "rcpt-x");
+        li.setAttribute("data-email", a);
+        li.appendChild(el("span")).textContent = a;
+        x.type = "button";
+        x.textContent = "×";
+        x.setAttribute("aria-label", "Retirer " + a);
+        li.appendChild(x);
+      });
+      area.value = emails.join("\n");
+      input.setCustomValidity("");
+      filter();
+    }
+    function filter() {  // autocomplétion : adresses du carnet pas encore destinataires, qui contiennent la saisie
+      if (!book) return;
+      var q = norm(input.value.trim()), matched = 0;
+      books.forEach(function (b) {
+        var ok = !has(b.email) && b.q.indexOf(q) !== -1;
+        if (ok) matched++;
+        setHidden(b.li, !(ok && matched <= BOOK_SHOWN));
+      });
+      more.textContent = matched > BOOK_SHOWN ? "+ " + (matched - BOOK_SHOWN) + " autre(s) : affiner la recherche"
+        : matched ? "" : q ? "Aucune adresse du carnet ne correspond." : "Toutes les adresses du carnet sont destinataires.";
+      setHidden(more, !more.textContent);
+    }
+    function add(a) {
+      a = a.trim();
+      if (!a) return true;
+      if (!EMAIL.test(a)) { say("Adresse invalide : " + a, true); return false; }
+      if (has(a)) { say(a + " est déjà destinataire."); return true; }
+      emails.push(a);
+      render();
+      say("Destinataire ajouté : " + a);
+      return true;
+    }
+    function remove(a) {
+      emails = emails.filter(function (x) { return x !== a; });
+      render();
+      say("Destinataire retiré : " + a);
+    }
+    function firstSuggestion() {
+      var b = books.filter(function (b) { return !b.li.hidden; })[0];
+      return b && b.li.firstElementChild;
+    }
+    // Saisie validée (Entrée, séparateur, collage) : chaque adresse complète devient une puce ; une adresse
+    // invalide reste dans le champ, signalée. `partial` : le dernier morceau, en cours de frappe, y reste aussi.
+    function commit(partial) {
+      var parts = input.value.split(/[\s,;]+/), rest = partial ? parts.pop() : "";
+      var bad = parts.filter(function (a) { return !add(a); });
+      input.value = bad.concat(rest ? [rest] : []).join(" ");
+      filter();
+    }
+
+    area.value.split(/[\n,;]+/).forEach(function (a) {  // existants (même invalides : signalés en rouge)
+      a = a.trim();
+      if (a && a.charAt(0) !== "#" && !has(a)) emails.push(a);
+    });
+    render();
+
+    input.addEventListener("input", function () {
+      input.setCustomValidity("");  // sinon le navigateur bloquerait l'envoi avant même l'événement « submit »
+      if (/[\s,;]/.test(input.value)) commit(!/[\s,;]$/.test(input.value));
+      else filter();
+    });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {  // jamais l'envoi du formulaire depuis ce champ
+        e.preventDefault();
+        var v = input.value.trim(), s = !EMAIL.test(v) && v && firstSuggestion();
+        if (s) { add(s.getAttribute("data-email")); input.value = ""; filter(); } else commit(false);
+      } else if (e.key === "Backspace" && !input.value && emails.length) {
+        remove(emails[emails.length - 1]);
+      } else if (e.key === "ArrowDown" && firstSuggestion()) {
+        e.preventDefault();
+        firstSuggestion().focus();
+      }
+    });
+    input.addEventListener("blur", function () { if (EMAIL.test(input.value.trim())) commit(false); });
+    box.addEventListener("click", function (e) {
+      var x = e.target.closest(".rcpt-x");
+      if (x && !justDragged) remove(x.parentNode.getAttribute("data-email"));
+      else if (e.target === box || e.target === list) input.focus();
+    });
+    if (book) book.addEventListener("click", function (e) {
+      var b = e.target.closest("[data-email]");
+      if (!b || justDragged) return;
+      add(b.getAttribute("data-email"));
+      input.value = "";  // la recherche qui a servi à la trouver
+      filter();
+    });
+    form.addEventListener("submit", function (e) {
+      commit(false);
+      area.value = emails.concat(input.value.trim() ? [input.value.trim()] : []).join("\n");  // le serveur juge
+      if (!area.value) {
+        e.preventDefault();
+        input.setCustomValidity("Au moins un destinataire est requis.");
+        input.reportValidity();
+      }
+    });
+
+    // Glisser-déposer : du carnet vers les destinataires (ajout), ou l'inverse (retrait).
+    function zoneAt(x, y) {
+      var t = document.elementFromPoint(x, y);
+      return t && t.closest("[data-zone]");
+    }
+    function moveTo(x, y) {
+      var z = zoneAt(x, y);
+      drag.ghost.style.transform = "translate(" + (x + 10) + "px, " + (y + 10) + "px)";  // CSSOM : permis par la CSP
+      box.classList.toggle("rcpt-over", z === box && drag.from !== box);
+      if (book) book.classList.toggle("rcpt-over", z === book && drag.from !== book);
+    }
+    function start() {
+      clearTimeout(drag.timer);
+      drag.on = true;
+      drag.ghost = document.body.appendChild(drag.chip.cloneNode(true));
+      drag.ghost.classList.add("rcpt-ghost");
+      drag.ghost.setAttribute("aria-hidden", "true");
+      drag.chip.classList.add("rcpt-held");
+      root.classList.add("rcpt-dragging");
+      moveTo(drag.x, drag.y);
+    }
+    function end() {
+      if (!drag) return;
+      clearTimeout(drag.timer);
+      if (drag.on) {
+        drag.ghost.remove();
+        drag.chip.classList.remove("rcpt-held");
+        root.classList.remove("rcpt-dragging");
+        box.classList.remove("rcpt-over");
+        if (book) book.classList.remove("rcpt-over");
+        justDragged = true;  // le « click » qui suit le relâchement n'est pas un toucher
+        setTimeout(function () { justDragged = false; }, 0);
+      }
+      drag = null;
+    }
+    // Un seul pointeur suivi : un second doigt pendant un glisser est ignoré (sinon fantôme orphelin).
+    function mine(e) { return drag && e.pointerId === drag.id; }
+    root.addEventListener("pointerdown", function (e) {
+      var chip = e.target.closest("[data-email]");
+      if (drag || !chip || e.button > 0 || e.target.closest(".rcpt-x")) return;
+      drag = {chip: chip, email: chip.getAttribute("data-email"), from: chip.closest("[data-zone]"), id: e.pointerId,
+              x: e.clientX, y: e.clientY, on: false, timer: null};
+      if (e.pointerType !== "mouse") drag.timer = setTimeout(start, HOLD_MS);
+    });
+    document.addEventListener("pointermove", function (e) {
+      if (!mine(e)) return;
+      if (!drag.on) {
+        if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < 8) return;
+        if (e.pointerType !== "mouse") return end();  // le doigt bouge avant l'appui long : c'est un défilement
+        start();
+      }
+      moveTo(e.clientX, e.clientY);
+    });
+    document.addEventListener("pointerup", function (e) {
+      if (!mine(e)) return;
+      if (drag.on) {
+        var z = zoneAt(e.clientX, e.clientY);
+        if (z === box && drag.from !== box) add(drag.email);
+        else if (z === book && drag.from === box) remove(drag.email);
+      }
+      end();
+    });
+    document.addEventListener("pointercancel", function (e) { if (mine(e)) end(); });
+    // Pendant un glisser au doigt, la page ne défile pas (sinon le navigateur annulerait le geste).
+    document.addEventListener("touchmove", function (e) { if (drag && drag.on) e.preventDefault(); }, {passive: false});
+    root.addEventListener("contextmenu", function (e) { if (drag) e.preventDefault(); });  // menu de l'appui long
+  }
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("[data-recipients]").forEach(initRecipients);
+  });
+
   // Session expirée pendant une requête HTMX : retour à la page de connexion.
   document.addEventListener("htmx:responseError", function (e) {
     if (e.detail.xhr.status === 403) window.alert("Session expirée ou jeton invalide : recharge la page.");

@@ -43,6 +43,17 @@
 </section>
 
 <section class="card">
+  <h2>Base des composants</h2>
+  {% if catalog %}
+  <p>{{ catalog.parts|num }} référence(s) connue(s), {{ catalog.notices|num }} avis, apportés par
+    {{ catalog.sources }} veille(s) composants (actives et archivées).</p>
+  <p class="small muted">Partagée entre veilles : une référence ajoutée à une veille reprend les statuts et les
+    avis déjà connus. Index des fichiers des veilles, reconstruit à chaque démarrage
+    (<code>veillectl catalog rebuild</code>).</p>
+  {% else %}<p class="err">Base indisponible : voir le journal d'audit (reconstruite au prochain démarrage).</p>{% endif %}
+</section>
+
+<section class="card">
   <h2>Brevo</h2>
   {% if brevo.error %}<p class="err">{{ brevo.error }}</p>{% else %}
   <p>Compte : {{ brevo.email }}</p>

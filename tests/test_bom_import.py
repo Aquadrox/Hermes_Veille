@@ -247,9 +247,10 @@ def test_service_import_add_and_replace_keeps_state(watch):
     data["components"][0]["web_checked_at"] = "2026-01-01"
     comp.save_components(watch.slug, data)
     items = comp.parse_components("LM317T;Texas Instruments;NEW\nNE555P;Texas Instruments")
-    assert service.import_components(watch.slug, items, "add") == {"added": 1, "existing": 1, "removed": 0, "total": 3}
+    assert service.import_components(watch.slug, items, "add") == {"added": 1, "existing": 1, "removed": 0, "total": 3,
+                                                                    "known": 0, "notices_known": 0}
     st = service.import_components(watch.slug, items, "replace")
-    assert st == {"added": 0, "existing": 2, "removed": 1, "total": 2}
+    assert st == {"added": 0, "existing": 2, "removed": 1, "total": 2, "known": 0, "notices_known": 0}
     cs = comp.load_components(watch.slug)["components"]
     assert [c["mpn"] for c in cs] == ["LM317T", "NE555P"] and cs[0]["web_checked_at"] == "2026-01-01"
     assert cs[0]["ref"] == "NEW"  # remplacement : la réf. du fichier fait foi
@@ -407,7 +408,8 @@ def test_mcp_preview_and_import(watch, monkeypatch, tmp_path):
     assert p["valid"] == 3 and p["rejected_count"] == 1 and p["header_row"] == 3
     out = data(call(srv, "import_components", {"slug": watch.slug, "filename": "bom.xlsx",
                                                "default_manufacturer": "Murata"}))
-    assert out == {"slug": watch.slug, "added": 3, "existing": 1, "removed": 0, "total": 5, "ignored_rows": 0}
+    assert out == {"slug": watch.slug, "added": 3, "existing": 1, "removed": 0, "total": 5, "ignored_rows": 0,
+                   "known": 0, "notices_known": 0}
     r = call(srv, "import_components", {"slug": watch.slug, "filename": "bom.xlsx", "mpn_column": ""})
     assert r.is_error and "MPN" in r.content[0].text
     r = call(srv, "preview_component_import", {"filename": "../veilles/.audit.log"})

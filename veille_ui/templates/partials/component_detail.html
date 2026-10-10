@@ -11,7 +11,9 @@
   {% if r.web.status %}{% set label = WEB_STATUSES.get(r.web.status, r.web.status) %}
   <p class="small muted">Statut constaté sur le web :
     {% if r.web.url %}{{ source_link({"url": r.web.url, "label": label}) }}{% else %}{{ label }}{% endif %}
-    · {{ r.web.checked_at }}</p>
+    · {{ r.web.checked_at }}
+    {% if r.web.datasheet %}· repli {{ source_link({"url": r.web.datasheet, "label": "alldatasheet"}) }}{% endif %}
+    {% if r.web.maker %}· {{ source_link({"url": r.web.maker, "label": "site du fabricant"}) }}{% endif %}</p>
   {% endif %}
   {% if r.notices %}
   <ul class="notices">

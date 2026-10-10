@@ -93,8 +93,18 @@
     <h2>Destinataires</h2>
     {% if composants %}<p class="muted small">Utilisés seulement si cette veille composants n'est rattachée à aucune veille
       (sinon, ses avis partent en chapitre dans l'e-mail de la veille).</p>{% endif %}
-    <label>Une adresse par ligne <span class="muted small">(envoi en copie cachée : ils ne se voient pas)</span>
-      <textarea name="recipients" rows="4" required>{{ values.recipients }}</textarea></label>
+    {# La zone de texte est le champ envoyé (seule interface sans JavaScript) ; app.js la remplace par des
+       puces, une saisie avec autocomplétion et le carnet d'adresses (toucher ou glisser-déposer). #}
+    <p class="muted small">Envoi en copie cachée : les destinataires ne se voient pas.</p>
+    <div class="rcpt" data-recipients>
+      <label>Une adresse par ligne
+        <textarea name="recipients" rows="4" required autocapitalize="off" spellcheck="false">{{ values.recipients }}</textarea></label>
+      {% if contacts %}
+      <ul class="rcpt-book" data-book hidden aria-label="Carnet d'adresses">
+        {% for a in contacts %}<li><button type="button" class="rcpt-chip" data-email="{{ a }}">{{ a }}</button></li>{% endfor %}
+      </ul>
+      {% endif %}
+    </div>
   </section>
 
   <section class="card">

@@ -45,7 +45,11 @@ USER_ERRORS = (StoreError, schedule.ScheduleError, service.ServiceError, hermes.
 # Messages affichés après redirection : codes en liste blanche (aucun texte réfléchi).
 FLASH = {
     "created": "Veille créée.",
+    "created-known": "Veille créée. Avis déjà connus d'autres veilles repris de la base des composants : "
+                     "ils partiront avec son premier e-mail.",
     "updated": "Veille enregistrée.",
+    "updated-known": "Veille enregistrée. Avis déjà connus d'autres veilles repris de la base des composants "
+                     "pour les nouvelles références : ils partiront avec son prochain e-mail.",
     "paused": "Veille mise en pause.",
     "resumed": "Veille reprise.",
     "run": "Lancement démarré : son suivi s'affiche ci-dessous.",
@@ -59,6 +63,7 @@ FLASH = {
     "settings-saved": "Paramètres enregistrés. Utilise « E-mail de test » pour vérifier l'adresse.",
     "settings-unchanged": "Aucune modification.",
     "alert-mail": "E-mail de test envoyé aux adresses d'alerte.",
+    "contact-forgotten": "Adresse retirée du carnet (elle reste destinataire des veilles qui l'utilisent).",
 }
 # Fichiers statiques : URL versionnées par empreinte (?v=STATIC_V), donc mises en cache longtemps.
 STATIC_CACHE = "public, max-age=31536000, immutable"
@@ -133,6 +138,7 @@ templates.env.globals["status_class"] = status_class
 templates.env.globals["DAYS"] = schedule.DAYS
 templates.env.globals["NOTICE_TYPES"] = components.TYPES
 templates.env.globals["WEB_STATUSES"] = components.WEB_STATUSES
+templates.env.globals["web_status_label"] = components.web_status_label
 templates.env.globals["CRITICAL"] = components.CRITICAL
 templates.env.globals["badge_class"] = components.badge_class
 templates.env.globals["COMP_ROWS_SHOWN"] = COMP_ROWS_SHOWN
@@ -340,7 +346,15 @@ def create_app() -> FastAPI:
         # Aperçu de la fréquence rendu avec la page : pas d'aller-retour supplémentaire au chargement.
         return render(request, "veille_form.html", status_code, values=values, watches=component_watches(),
                       templates_=briefs if values["kind"] == "veille" else [],
-                      preview=schedule_ctx(values["freq"]), **ctx)
+                      preview=schedule_ctx(values["freq"]), contacts=service.address_book(), **ctx)
+
+    def notice_count(v: store.Veille) -> int:
+        """Avis d'une veille composants (0 sinon, ou fichier illisible : il n'empêche pas d'enregistrer) ; en
+        hausse après un enregistrement, des avis ont été repris de la base des composants (message dédié)."""
+        try:
+            return len(components.load_notices(v.slug)) if v.kind == "composants" else 0
+        except components.ComponentsError:
+            return 0
 
     @app.get("/veilles/new", response_class=HTMLResponse)
     def new_form(request: Request, template: str = "vierge", kind: str = "veille"):
@@ -360,7 +374,8 @@ def create_app() -> FastAPI:
                 actor=ACTOR, **kind_fields(values))
         except USER_ERRORS as exc:
             return form_page(request, values, 400, creating=True, error=str(exc))
-        return RedirectResponse(f"/veilles/{v.slug}?ok=created", status_code=303)
+        return RedirectResponse(f"/veilles/{v.slug}?ok={'created-known' if notice_count(v) else 'created'}",
+                                status_code=303)
 
     def detail_ctx(slug: str) -> dict:
         v = store.load(slug)
@@ -439,6 +454,7 @@ def create_app() -> FastAPI:
         try:
             v = store.load(slug)
             values["kind"] = v.kind  # le type ne change pas après la création
+            before = notice_count(v)
             service.update_veille(
                 slug, name=values["name"], subject=values["subject"],
                 schedule_expr=schedule.to_cron(values["freq"]),
@@ -447,7 +463,8 @@ def create_app() -> FastAPI:
         except USER_ERRORS as exc:
             values["slug"] = slug
             return form_page(request, values, 400, creating=False, v=store.load(slug), error=str(exc))
-        return RedirectResponse(f"/veilles/{v.slug}?ok=updated", status_code=303)
+        code = "updated-known" if notice_count(v) > before else "updated"
+        return RedirectResponse(f"/veilles/{v.slug}?ok={code}", status_code=303)
 
     # -------------------------------------------------------------- fragments HTMX
     @app.get("/fragments/schedule", response_class=HTMLResponse)
@@ -609,7 +626,8 @@ def create_app() -> FastAPI:
 
     # -------------------------------------------------------------- paramètres (interface seule)
     def settings_page(request: Request, status_code: int = 200, /, **ctx):
-        return render(request, "settings.html", status_code, alert=service.alert_status(), **ctx)
+        return render(request, "settings.html", status_code, alert=service.alert_status(),
+                      contacts=service.address_book(limit=None), **ctx)
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_form(request: Request):
@@ -627,6 +645,10 @@ def create_app() -> FastAPI:
             if op == "test":
                 await run_in_threadpool(service.send_test_alert, actor=ACTOR)
                 return RedirectResponse("/settings?ok=alert-mail", 303)
+            if op == "forget":
+                removed = await run_in_threadpool(service.forget_contact, str(form.get("email", "")), actor=ACTOR)
+                return RedirectResponse(f"/settings?ok={'contact-forgotten' if removed else 'settings-unchanged'}#carnet",
+                                        303)
         except USER_ERRORS as exc:
             typed = {"typed": str(form.get("alert_emails", ""))} if op == "save" else {}  # saisie conservée
             return settings_page(request, 400, error=str(exc), **typed)
@@ -640,7 +662,7 @@ def create_app() -> FastAPI:
             brevo, balance = pool.submit(brevo_account), pool.submit(deepseek.balance)
             return render(request, "health.html", rows=service.overview(), brevo=brevo.result(),
                           deepseek=balance.result(), costs=service.costs_overview(),
-                          audit=service.read_audit(40))
+                          catalog=service.catalog_stats(), audit=service.read_audit(40))
 
     # -------------------------------------------------------------- actions
     # Déclarée APRÈS /veilles/{slug}/edit : sinon « edit » serait pris pour une action.

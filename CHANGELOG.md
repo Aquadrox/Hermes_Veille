@@ -7,6 +7,83 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.4.0] — 2026-10-10
+
+Base des composants partagée entre veilles, carnet d'adresses des destinataires, repli alldatasheet pour
+les références introuvables.
+
+### Ajouté
+
+- **Base des composants** (`veilles/.veille.db`, SQLite de la bibliothèque standard : ni service ni
+  dépendance de plus). Elle partage entre veilles ce qu'on sait de chaque référence : statuts Digi-Key et
+  web, date de la dernière recherche web, avis PCN / fins de vie.
+  - **Reprise automatique.** Une référence ajoutée à une veille composants (création, ajout, import,
+    modification de la liste ; interface, CLI ou Telegram) reprend ce qu'en savent les autres veilles,
+    actives ou archivées.
+    - Les statuts et la date de recherche web sont repris : la référence passe dans la rotation normale de
+      la recherche web au lieu d'être recherchée en priorité, ce qui économise des tokens. Si une autre
+      veille l'a vérifiée le jour même, Digi-Key n'est pas réinterrogé.
+    - Les avis sont repris avec leur date de détection d'origine et dédoublonnés comme les autres. Ils
+      partent avec le premier e-mail de la veille.
+    - Message dans l'interface. Comptes `known` / `notices_known` en retour de `import_components` et
+      `add_components` (Telegram) et dans la sortie de `veillectl components add|import`.
+  - **Index des fichiers, pas une nouvelle source de vérité.** `components.json` et `notices.json` restent
+    la référence : le chien de garde et les sauvegardes sont inchangés.
+    - Chaque veille y a sa contribution (provenance). Une réinitialisation retire ce qu'elle avait apporté
+      (ce que d'autres veilles en ont déjà repris leur reste : les réinitialiser aussi au besoin) ; un
+      archivage le conserve.
+    - Reconstruite à chaque démarrage (`veillectl catalog rebuild`, hook de seed) depuis les veilles
+      actives et archivées, sans les copies de réinitialisation. Une base corrompue, ou d'un schéma plus
+      récent, est mise de côté (`.veille.db.corrompue-…`) puis recréée.
+  - Un échec de la base n'empêche jamais une analyse, une création ou un ajout : il est tracé dans le
+    journal d'audit (`db-error`). Un verrou tenu ou une erreur d'E/S ne fait jamais mettre la base de côté.
+  - À la reprise, un statut Digi-Key l'emporte sur un statut web venu d'une autre veille (Digi-Key fait foi).
+  - Robustesse multi-processus (interface, CLI du job, MCP) :
+    - journal DELETE et non WAL : aucun fichier annexe permanent qu'un `docker exec` en root rendrait
+      inaccessible à hermes ;
+    - une base créée par root est rendue au propriétaire du dossier ;
+    - attente d'un verrou plutôt qu'un échec ;
+    - schéma versionné, migrations transactionnelles ;
+    - droits 0600.
+  - CLI : `veillectl catalog rebuild|stats`. Page Santé : contenu de la base.
+- **Carnet d'adresses des destinataires.**
+  - Les adresses saisies dans une veille (interface, CLI, Telegram) sont mémorisées. Les adresses des
+    veilles existantes l'amorcent à la mise à jour. L'adresse factice d'une veille amorcée sans destinataire
+    n'y entre jamais.
+  - Formulaire de veille (PWA) :
+    - destinataires en puces (× pour retirer) ;
+    - un champ unique « Ajouter ou rechercher » qui filtre le carnet (autocomplétion insensible à la casse
+      et aux accents). Entrée prend la première suggestion. Virgule, point-virgule, espace et collage de
+      plusieurs adresses créent les puces ; Retour arrière retire la dernière ;
+    - une adresse du carnet s'ajoute d'un toucher, ou par **glisser-déposer**. Le retrait se fait aussi en
+      glissant vers le carnet ;
+    - adresse invalide signalée sans être ajoutée ; adresse tapée sans Entrée prise en compte à l'envoi ;
+      envoi sans destinataire bloqué.
+  - Glisser-déposer en Pointer Events (souris et tactile ; le glisser-déposer HTML5 ne fonctionne pas dans
+    les WebView mobiles), avec appui long au doigt pour garder le défilement. Compatible CSP : aucun script
+    ni style en ligne.
+  - Amélioration progressive : la zone de texte reste le champ envoyé, validé par le serveur comme avant ;
+    sans JavaScript, le formulaire est inchangé.
+  - Page Paramètres : liste complète du carnet et « Oublier » une adresse (données personnelles, effacée
+    aussi des pages libres du fichier). Une adresse oubliée reste destinataire des veilles qui l'utilisent.
+    Aucune adresse dans le journal d'audit ; carnet jamais exposé au MCP.
+- **Repli alldatasheet** pour une référence inconnue de Digi-Key et introuvable par la recherche web.
+  - Le lot du scan fournit à l'agent la recherche alldatasheet de la référence (MPN encodé), son statut web
+    précédent et le site du fabricant déjà trouvé. Une référence restée `UNKNOWN` passe directement par ce
+    repli.
+  - L'agent repère la fiche du bon fabricant et son « Direct Link », puis cherche la fiche produit et les
+    avis PCN / EOL sur le site du fabricant. Il rend `datasheet` (page alldatasheet) et `maker` (site du
+    fabricant) dans `statuses`.
+  - alldatasheet est derrière un challenge Cloudflare et sans API publique : il n'est consulté que par
+    l'agent, jamais par un robot de l'application.
+  - Garde-fous déterministes : un miroir de fiches techniques ne prouve jamais un statut ni un avis. Un
+    statut autre que `UNKNOWN` dont la fiche est sur alldatasheet est rejeté, et une source alldatasheet est
+    retirée d'un avis (rejeté s'il n'en a pas d'autre).
+  - Affiché dans le détail du composant (liens « alldatasheet » et « site du fabricant »), l'export Excel
+    (« Statut web » suffixé « (alldatasheet) »), la recherche de la liste et `list_components`
+    (`web_status_datasheet`, `web_status_maker`). Le site du fabricant reste connu pour les passages
+    suivants.
+
 ## [0.3.8] — 2026-10-10
 
 Références « introuvables chez Digi-Key » retrouvées, ou leur statut établi par l'agent ; recherche
