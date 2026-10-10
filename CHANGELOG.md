@@ -25,29 +25,38 @@ d'une veille composants réinitialisable.
   - Copie préalable de `components.json` et `notices.json` dans `veilles/.archive/<slug>-reinit-…/`
     (nom unique : deux remises à zéro de suite n'écrasent jamais la première copie). Refusée pendant
     un lancement manuel, et sans rien modifier si un fichier est illisible. Tracée dans l'audit.
-- **Statut web** d'une référence que Digi-Key ne connaît pas : le scan signale `digikey_error` pour
+- **Statut web** d'une référence que Digi-Key ne trouve pas : le scan signale `digikey_error` pour
   chaque composant du lot ; l'agent trouve lui-même sa fiche (fabricant, Mouser, Farnell, LCSC…) et
   rend son statut (`ACTIVE`, `NRND`, `LTB`, `OBSOLETE` ou `UNKNOWN`) dans un champ `statuses` du JSON,
-  validé comme les avis (référence suivie, statut connu, fiche http(s) obligatoire sauf `UNKNOWN`).
+  validé comme les avis (référence suivie, statut connu, fiche http(s) obligatoire sauf `UNKNOWN`) ;
+  un champ mal formé est rejeté sans bloquer l'enregistrement des avis.
   - Affiché dans le détail du composant (lien vers la fiche), dans la recherche de la liste, dans
     l'export Excel (colonne « Statut web ») et par `list_components` (Telegram). Sans avis ni fiche
-    Digi-Key, le lien du composant devient la fiche trouvée sur le web.
-  - `NRND`, `LTB` et `OBSOLETE` créent l'avis correspondant (origine « web »), comme un statut Digi-Key.
-  - Ces références passent **en priorité** dans le lot de recherche web tant que leur statut n'est
-    pas établi, puis reprennent la rotation normale (leur statut est revu à chaque passage).
+    Digi-Key, le lien du composant devient la fiche trouvée sur le web. Effacé dès que Digi-Key
+    retrouve la référence (Digi-Key fait foi).
+  - `NRND`, `LTB` et `OBSOLETE` créent l'avis correspondant, comme un statut Digi-Key : identifié par
+    son intitulé, la même obsolescence citée avec une autre fiche n'est pas un nouvel avis (fiche
+    ajoutée aux sources), une aggravation (NRND → OBSOLETE) en est un.
+  - Une référence que Digi-Key ne trouve plus passe **une fois en priorité** dans le lot de recherche
+    web (comme un statut Digi-Key qui change), puis reprend la rotation normale : le lot ne se fige
+    jamais sur elle, même si l'agent ne rend aucun statut valide.
 
 ### Corrigé
 
-- **Composants existants signalés « introuvable chez Digi-Key »** : la fiche produit exacte de l'API
-  v4 ne reconnaît pas une référence vendue par plusieurs fabricants (1N4148, 2N3904, BC547B, LM358DR…
-  elle exige alors l'identifiant du fabricant), ni une référence saisie sans sa ponctuation
-  (« 2N7002215 », « 74HC14D653 », « BAV99215 » pour les « …,215 » de Nexperia). Une recherche par
-  mot-clé (`/products/v4/search/keyword`, un appel de plus, seulement pour ces références) retrouve
-  la fiche du bon fabricant ; le MPN est comparé à la ponctuation près (le « + » d'une version sans
-  plomb reste significatif) et une fiche au MPN identique est préférée.
-- Un HTTP 400 de la recherche Digi-Key (requête refusée) est une erreur affichée, et non plus un
-  « introuvable » silencieux pour chaque référence. Une fiche Digi-Key mal formée ne fait plus échouer
-  le passage.
+- **Composants existants signalés « introuvable chez Digi-Key »** (toute la liste, MPN uniques
+  compris). La fiche exacte `/products/v4/search/{mpn}/productdetails` :
+  - exige l'en-tête `X-DIGIKEY-Account-Id` en OAuth « 2-legged » (documentation v4), jamais envoyé ;
+  - ne reconnaît pas une référence vendue par plusieurs fabricants (1N4148, 2N3904, BC547B, LM358DR…) ;
+  - ne reconnaît pas une référence saisie sans sa ponctuation (« 2N7002215 », « 74HC14D653 »,
+    « BAV99215 » pour les « …,215 » de Nexperia) ;
+  - et tout HTTP 400 y était traduit en « introuvable ».
+  Chaque référence passe désormais par la **recherche par mot-clé** (`/products/v4/search/keyword`,
+  qui n'exige pas d'Account-Id), toujours un seul appel par référence. La fiche retenue est celle du
+  fabricant suivi, au MPN identique de préférence, sinon à la ponctuation près ; le « + » d'une version
+  sans plomb et le point décimal (« SMBJ6.0A » ≠ « SMBJ60A ») restent significatifs. Un MPN trouvé
+  seulement chez d'autres fabricants est signalé « fabricant différent chez Digi-Key (…) ».
+- Un refus de Digi-Key (HTTP 400, 500…) est une erreur affichée qui nomme la référence en cause, plus
+  jamais un « introuvable » silencieux ; une fiche mal formée ne fait plus échouer le passage.
 
 ### Modifié
 
@@ -55,16 +64,18 @@ d'une veille composants réinitialisable.
   Re-rendu au prochain démarrage du conteneur (réconciliation), sans action manuelle.
 - Export Excel : colonne « Statut web » après « Vérifié Digi-Key » (les colonnes suivantes se décalent
   d'un cran).
+- Test de fumée de l'image : 31 outils MCP attendus.
 
 ### Mesures
 
-- Passage Digi-Key de 300 références (200 uniques, 60 multi-fabricants, 40 absentes ; faux Digi-Key à
-  5 ms par appel) : 301 → 401 appels, statuts trouvés 200 → 260, références laissées à l'agent 100 →
-  40. Au débit réel (0,6 s par appel) : 3,0 → 4,0 min, soit 0,6 s par référence introuvable ; temps
-  de calcul hors latence inchangé (≈ 0,45 ms par appel).
-- Mêmes données avant/après : rendu de la liste de 300 composants 7,8 → 8,2 ms (même processus),
-  page de la veille ≈ 27 → 29 ms (écart dans le bruit de mesure, ± 2 ms), +0,8 Ko de HTML (carte de
-  réinitialisation) ; `group()` inchangé (≈ 2 ms) ; export Excel ≈ 83 → 86 ms (une colonne de plus).
+- Passage Digi-Key de 300 références (200 uniques, 60 multi-fabricants, 40 absentes ; faux Digi-Key
+  à 5 ms par appel) : 301 appels avant comme après ; statuts trouvés 200 → 260, références laissées à
+  l'agent 100 → 40 (avec la vraie API, sans Account-Id, la fiche exacte n'en trouvait aucune). Durée
+  au débit réel inchangée (3,0 min) ; calcul hors latence ≈ 0,55 → 0,62 ms par appel (réponses de
+  recherche plus longues).
+- Mêmes données avant/après : rendu de la liste de 300 composants 7,9 → 8,4 ms (même processus) ;
+  page de la veille ≈ 28–32 ms et export Excel ≈ 85–110 ms, sans écart mesurable (bruit de mesure) ;
+  +0,8 Ko de HTML (carte de réinitialisation).
 
 ## [0.3.7] — 2026-10-10
 

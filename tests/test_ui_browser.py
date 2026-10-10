@@ -269,7 +269,6 @@ def test_progress_panel_mobile(watch, page, monkeypatch):  # noqa: F811
     assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
 
-
 def test_reset_search_mobile(data, watch, page):  # noqa: F811
     """Réinitialiser la recherche en PWA mobile : confirmation (app.js, aucun JS en ligne), refus sans effet,
     puis acceptation ; avis effacés, message affiché, aucun défilement horizontal."""

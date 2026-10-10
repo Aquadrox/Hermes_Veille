@@ -31,6 +31,8 @@ def finalize_raw(v, raw):
     ("lm 317t", "LM317T", True),
     ("LM317T-DG", "LM317T", False),          # lettres en plus : autre référence
     ("MAX232CPE+", "MAX232CPE", False),      # « + » sans plomb : significatif
+    ("SMBJ6.0A", "SMBJ60A", False),          # point décimal : 6 V ≠ 60 V
+    ("P6KE6.8CA", "p6ke6.8ca", True),
 ])
 def test_loose_mpn(a, b, same):
     assert (comp.loose_mpn(a) == comp.loose_mpn(b)) is same
@@ -55,8 +57,10 @@ def test_validate_statuses_schema_and_matching():
     assert any("aucune fiche" in r for r in rejected) and any("INCONNU" in r for r in rejected)
     assert comp.validate_statuses({"notices": []}, comps()) == ({}, [])  # champ facultatif
     assert comp.validate_statuses([], comps()) == ({}, [])               # ancien format : liste d'avis
-    with pytest.raises(comp.ComponentsError, match="statuses"):
-        comp.validate_statuses({"statuses": {"mpn": "LM317T"}}, comps())
+    # mal typé : rejeté sans bloquer l'enregistrement des avis
+    assert comp.validate_statuses({"statuses": {"mpn": "LM317T"}}, comps()) == ({}, ["« statuses » : liste attendue"])
+    found, rejected = comp.validate_statuses({"statuses": [{"mpn": "LM317T", "status": "UNKNOWN"}] * 502}, comps())
+    assert len(found) == 1 and rejected == ["2 statut(s) au-delà de la limite de 500"]
 
 
 def test_apply_statuses_records_and_creates_notices():
@@ -66,18 +70,10 @@ def test_apply_statuses_records_and_creates_notices():
                                    ne: {"status": "OBSOLETE", "url": "https://www.mouser.com/p/ne"}}, "2026-10-10")
     assert cs[0]["web_status"] == {"status": "ACTIVE", "url": "https://a.org/lm", "checked_at": "2026-10-10"}
     (n,) = out  # seul le statut obsolète devient un avis
-    assert (n["key"], n["type"], n["origin"], n["title"]) == (ne, "OBSOLETE", "web", "Statut constaté sur le web : Obsolète")
+    assert (n["key"], n["type"], n["origin"], n["title"]) == (ne, "OBSOLETE", "statut-web",
+                                                              "Statut constaté sur le web : Obsolète")
     assert n["sources"] == [{"url": "https://www.mouser.com/p/ne", "label": "www.mouser.com"}]
     assert comp.merge([], out)[0]["type"] == "OBSOLETE"  # format accepté par la fusion
-
-
-def test_batch_prioritises_unknown_to_digikey_until_web_status():
-    cs = [{"mpn": "A", "web_checked_at": "2026-09-01", "dk": None},
-          {"mpn": "B", "web_checked_at": "2026-10-01", "dk": {"error": "introuvable chez Digi-Key"}},
-          {"mpn": "C", "web_checked_at": None, "dk": None}]
-    assert [c["mpn"] for c in comp.batch(cs, 3)] == ["C", "B", "A"]  # inconnue de Digi-Key avant la plus ancienne
-    cs[1]["web_status"] = {"status": "ACTIVE", "url": "https://a.org", "checked_at": "2026-10-01"}
-    assert [c["mpn"] for c in comp.batch(cs, 3)] == ["C", "A", "B"]  # statut établi : rotation normale
 
 
 def test_reset_state_keeps_the_list_only():
@@ -130,6 +126,53 @@ def test_finalize_records_web_statuses(watch, tools):  # noqa: F811
     assert len(comp.load_notices(watch.slug)) == 1
 
 
+def test_web_status_cited_with_another_sheet_is_not_a_new_notice(watch, tools):  # noqa: F811
+    """Le statut est redemandé à chaque rotation : la même obsolescence citée avec une autre fiche ne
+    redéclenche ni avis ni e-mail « [EOL ×1] ». Une aggravation (NRND -> OBSOLETE) en est un."""
+    def status(ntype, url):
+        return finalize_raw(watch, {"notices": [], "statuses": [{"mpn": "NE555P", "status": ntype, "url": url}]})
+    assert "1 nouvel(s) avis" in status("OBSOLETE", "https://www.mouser.com/p/ne555p")
+    assert "0 nouvel(s) avis" in status("OBSOLETE", "https://fr.farnell.com/p/ne555p")
+    (n,) = comp.load_notices(watch.slug)
+    assert len(n["sources"]) == 2  # la nouvelle fiche complète l'avis connu
+    status("NRND", "https://a.org/nrnd")
+    assert [x["type"] for x in comp.load_notices(watch.slug)] == ["OBSOLETE", "NRND"]
+
+
+def test_unknown_reference_is_searched_once_then_rotates(watch, tools, monkeypatch):  # noqa: F811
+    """Une référence que Digi-Key ne trouve plus passe une fois en priorité, même si l'agent ne rend aucun
+    statut valide : le lot ne se fige jamais sur elle (les autres références restent recherchées)."""
+    clock = {"day": 9}
+    monkeypatch.setattr(comp, "today", lambda: f"2026-10-{clock['day']:02d}")
+    monkeypatch.setattr(store, "report_stamp", lambda: f"2026-10-{clock['day']:02d}-23h00")
+    service.update_veille(watch.slug, batch_size=1)
+    lots = []
+    for answers in ({}, {}, {}, {"NE555P": UNKNOWN}, {"NE555P": UNKNOWN}, {"NE555P": UNKNOWN}):
+        clock["day"] += 1  # une exécution par jour : scan puis finalize
+        out = service.components_scan(watch.slug, client=FakeClient(answers))
+        lots.append(out["batch"][0]["mpn"])
+        finalize_raw(watch, {"notices": [], "statuses": [{"mpn": "NE555P", "status": "EOL"}]})  # statut rejeté
+    # 3 jamais vérifiées, puis NE555P (devenue introuvable) en priorité une fois, puis la rotation reprend
+    assert lots == ["LM317T", "STM32F103C8T6", "NE555P", "NE555P", "LM317T", "STM32F103C8T6"]
+    ne = next(c for c in comp.load_components(watch.slug)["components"] if c["mpn"] == "NE555P")
+    assert ne["dk"]["changed_at"] == "2026-10-13" and "web_status" not in ne
+
+
+def test_web_status_dropped_once_digikey_finds_the_reference(watch, tools):  # noqa: F811
+    service.components_scan(watch.slug, client=FakeClient({"NE555P": UNKNOWN}))
+    finalize_raw(watch, {"notices": [], "statuses": [{"mpn": "NE555P", "status": "ACTIVE", "url": "https://a.org/p"}]})
+    ne = next(c for c in comp.load_components(watch.slug)["components"] if c["mpn"] == "NE555P")
+    assert ne["web_status"]["status"] == "ACTIVE"
+    ne["dk"]["checked_at"] = "2000-01-01"  # revérifié aujourd'hui
+    data = comp.load_components(watch.slug)
+    data["components"] = [ne if c["mpn"] == "NE555P" else c for c in data["components"]]
+    comp.save_components(watch.slug, data)
+    service.components_scan(watch.slug, client=FakeClient({"NE555P": {"status": "Active",
+                                                                      "product_url": "https://www.digikey.com/p/9"}}))
+    ne = next(c for c in comp.load_components(watch.slug)["components"] if c["mpn"] == "NE555P")
+    assert "web_status" not in ne and ne["dk"]["status"] == "Active" and ne["dk"]["error"] is None
+
+
 # --------------------------------------------------------------------------
 # Remise à zéro
 # --------------------------------------------------------------------------
@@ -157,6 +200,7 @@ def test_reset_starts_over_and_keeps_a_copy(searched):
     assert [c["added_at"] for c in data["components"]] == added
     # copie préalable intacte dans les archives, rapports et destinataires conservés
     assert dest.parent == paths.archive_dir() and dest.name.startswith(f"{searched.slug}-reinit-")
+    assert dest.stat().st_mode & 0o777 == 0o755  # comme les autres dossiers du volume
     assert {n: (dest / n).read_text() for n in before} == before
     assert store.list_reports(searched.slug) and store.read_recipients(searched.slug) == ["achats@example.org"]
     assert any(a["action"] == "components-reset" and a["actor"] == "test" for a in service.read_audit())
@@ -183,12 +227,15 @@ def test_reset_refused_while_running_or_on_bad_input(searched, monkeypatch):
                               recipients=["a@example.org"], brief="# b\n")
     with pytest.raises(service.ServiceError, match="pas une veille composants"):
         service.reset_components(v.slug)
-    (searched.dir / "notices.json").write_text("{corrompu")
-    with pytest.raises(comp.ComponentsError, match="notices.json illisible"):
-        service.reset_components(searched.slug)
-    assert (searched.dir / "notices.json").read_text() == "{corrompu"  # rien touché
-    assert not paths.archive_dir().exists() or not any(paths.archive_dir().iterdir())
-    (searched.dir / "notices.json").write_text(before)
+    for name in ("notices.json", "components.json"):
+        good = (searched.dir / name).read_text()
+        (searched.dir / name).write_text("{corrompu")
+        with pytest.raises(comp.ComponentsError, match=f"{name} illisible"):
+            service.reset_components(searched.slug)
+        assert (searched.dir / name).read_text() == "{corrompu"  # rien touché
+        assert not paths.archive_dir().exists() or not any(paths.archive_dir().iterdir())
+        (searched.dir / name).write_text(good)
+    assert (searched.dir / "notices.json").read_text() == before
 
 
 def test_cli_reset(searched, capsys):
@@ -215,6 +262,13 @@ def test_ui_reset_button_confirmation_and_csrf(ui, searched, monkeypatch):  # no
     assert re.search(r'<button class="danger" disabled>Réinitialiser la recherche', t)
     r = client.post(f"/veilles/{searched.slug}/reset-search", data={"csrf": csrf})
     assert r.status_code == 400 and "lancement est en cours" in r.text
+
+
+def test_ui_reset_with_corrupted_file_shows_the_error(ui, searched):  # noqa: F811
+    client, csrf = ui
+    (searched.dir / "notices.json").write_text("{corrompu")
+    r = client.post(f"/veilles/{searched.slug}/reset-search", data={"csrf": csrf})
+    assert r.status_code == 500 and "notices.json illisible" in r.text
 
 
 def test_ui_reset_absent_from_thematic_veille(ui):  # noqa: F811

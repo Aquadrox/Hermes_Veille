@@ -125,20 +125,23 @@ lundi 6h30 — job de la veille thématique rattachée
   la recherche web ne remonte qu'à cette date (moins 30 jours de marge) et un avis déjà connu
   n'est jamais signalé à nouveau. Avis et dates sont conservés dans `components.json` et
   `notices.json`, avec leurs liens sources.
-- **Référence introuvable chez Digi-Key** : la fiche produit exacte ne reconnaît ni une référence
-  vendue par plusieurs fabricants (1N4148, LM358DR…), ni une référence saisie sans sa ponctuation
-  (« 2N7002215 » pour « 2N7002,215 » chez Nexperia). Dans ce cas, une **recherche par mot-clé** Digi-Key
-  (un appel de plus) retrouve la fiche du bon fabricant, à la ponctuation près (le « + » d'une
-  version sans plomb reste significatif). Encore introuvable (référence de base comme
-  ESP32-WROOM-32E, fabricant non distribué par Digi-Key), la référence passe **en priorité** dans le
-  lot de recherche web : l'agent trouve lui-même sa fiche (fabricant, Mouser, Farnell, LCSC…) et
-  établit son **statut web** (actif, NRND, dernière commande, obsolète, ou introuvable), avec la fiche
-  en source. Ce statut s'affiche dans le détail du composant et dans l'export Excel (colonne
-  « Statut web ») ; NRND, dernière commande et obsolète créent l'avis correspondant.
+- **Statut Digi-Key** : une recherche par mot-clé par référence (la fiche exacte de l'API exige un
+  Account-Id en OAuth « 2-legged » et ne reconnaît ni une référence de plusieurs fabricants, ni une
+  référence saisie sans sa ponctuation, « 2N7002215 » pour « 2N7002,215 »). La fiche retenue est celle
+  du fabricant suivi, au MPN identique de préférence, sinon à la ponctuation près (le « + » d'une
+  version sans plomb et le point décimal restent significatifs).
+- **Référence introuvable chez Digi-Key** (référence de base comme ESP32-WROOM-32E, fabricant non
+  distribué) : elle passe une fois **en priorité** dans le lot de recherche web, et l'agent trouve
+  lui-même sa fiche (fabricant, Mouser, Farnell, LCSC…) pour établir son **statut web** (actif, NRND,
+  dernière commande, obsolète, ou introuvable), avec la fiche en source. Ce statut s'affiche dans le
+  détail du composant et dans l'export Excel (colonne « Statut web ») ; NRND, dernière commande et
+  obsolète créent l'avis correspondant. Il est revu à chaque passage de la référence dans le lot et
+  effacé si Digi-Key la retrouve.
 - **Volume** : le statut Digi-Key couvre toutes les références à chaque exécution (≈ 0,6 s par
-  référence, une recherche par mot-clé de plus pour une référence introuvable, 900 appels au plus) ; la recherche web, coûteuse en tokens, tourne par **lots**
+  référence, 900 au plus) ; la recherche web, coûteuse en tokens, tourne par **lots**
   (`batch_size`). Avec 300 références et des lots de 40, chacune est recherchée sur le web toutes les
-  8 semaines environ, et **en priorité** dès que son statut Digi-Key change.
+  8 semaines environ, et **en priorité** dès que son statut Digi-Key change ou que Digi-Key ne la
+  trouve plus.
 - **À la demande** (interface ou Telegram) : « Lancer l'analyse » / `run_veille_now` exécute tout de
   suite l'analyse complète ; « Vérifier les statuts Digi-Key » / `check_component_statuses` (ou
   `veillectl components scan <slug> --status-only`) relit en arrière-plan le statut de toutes les

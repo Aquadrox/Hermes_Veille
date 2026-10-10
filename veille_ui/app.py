@@ -658,6 +658,8 @@ def create_app() -> FastAPI:
         try:
             store.check_slug(slug)
             func(slug, actor=ACTOR)
+        except components.ComponentsError as exc:  # fichier corrompu : la page de la veille ne s'afficherait pas
+            return render(request, "error.html", 500, error=str(exc))
         except USER_ERRORS as exc:
             if htmx_row:
                 return row_response(request, slug, str(exc))

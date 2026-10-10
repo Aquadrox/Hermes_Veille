@@ -618,6 +618,7 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
                 if r["status"] != prev.get("status") and (prev.get("status") or ntype):
                     dk["changed_at"] = day
                 dk.update(status=r["status"], product_url=r["product_url"])
+                c.pop("web_status", None)  # Digi-Key fait foi, revérifié à chaque passage
                 if ntype:
                     url = r["product_url"] or comp.normalize_url(
                         "https://www.digikey.com/en/products/result?keywords=" + quote_plus(c["mpn"]))
@@ -625,6 +626,8 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
                         c, ntype, f"Statut Digi-Key : {r['status']}", url, "Digi-Key", "digikey")], day)
             else:
                 info["errors"] += 1
+                if not prev.get("error"):  # Digi-Key ne la trouve plus : recherche web prioritaire, une fois
+                    dk["changed_at"] = day
             c["dk"] = dk
         lot = comp.batch(data["components"], v.batch_size) if data["components"] and plan_batch else []
         if plan_batch:
@@ -710,7 +713,8 @@ def reset_components(slug: str, actor: str = "cli") -> Path:
     prochaine analyse revérifie tout et re-signale comme nouveaux les avis retrouvés. La liste des composants,
     les rapports et les destinataires restent. Renvoie la copie préalable (archives : rien n'est perdu).
 
-    Refusée pendant un lancement manuel : son `finalize` enregistrerait le lot d'avant la remise à zéro.
+    Refusée pendant un lancement manuel (suivi). Une exécution planifiée n'est pas détectable : remise à zéro
+    entre son scan et son finalize, les avis qu'elle trouve sont enregistrés et son lot sera recherché à nouveau.
     """
     with _locked():
         v = _components_veille(slug)
@@ -722,6 +726,7 @@ def reset_components(slug: str, actor: str = "cli") -> Path:
         # Nom unique (deux remises à zéro dans la même seconde ne s'écrasent pas) : jamais une copie déjà vidée.
         dest = Path(tempfile.mkdtemp(prefix=f"{slug}-reinit-{dt.datetime.now():%Y%m%d-%H%M%S}-",
                                      dir=paths.archive_dir()))
+        dest.chmod(0o755)  # comme les autres dossiers du volume (mkdtemp : 0700)
         for name in ("components.json", "notices.json"):
             if (v.dir / name).is_file():
                 shutil.copy2(v.dir / name, dest / name)

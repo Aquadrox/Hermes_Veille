@@ -45,6 +45,9 @@ CRITICAL = frozenset(t for t, (_, sev) in TYPES.items() if sev <= 1)
 # Un statut qui est aussi un type d'avis (NRND, LTB, OBSOLETE) crée l'avis correspondant.
 WEB_STATUSES = {"ACTIVE": "Actif", "NRND": TYPES["NRND"][0], "LTB": TYPES["LTB"][0],
                 "OBSOLETE": TYPES["OBSOLETE"][0], "UNKNOWN": "Introuvable"}
+# Origines des avis tirés d'un statut de cycle de vie : identifiés par leur intitulé, pas par leur lien
+# (le même statut cité avec une autre fiche n'est pas un nouvel avis).
+STATUS_ORIGINS = ("digikey", "statut-web")
 SCOPES = ("référence", "gamme")
 HEADER_WORDS = {"mpn", "référence", "reference", "ref", "partnumber", "manufacturerpartnumber", "fabricant",
                 "manufacturer", "mfr", "brand", "marque"}
@@ -69,9 +72,10 @@ def norm_mpn(mpn: str) -> str:
 
 
 def loose_mpn(mpn: str) -> str:
-    """MPN sans ponctuation, pour reconnaître une référence chez un distributeur : « 2N7002,215 » (Nexperia)
-    ~ « 2N7002215 ». Le « + » reste significatif (« MAX232CPE+ » sans plomb ≠ « MAX232CPE »)."""
-    return re.sub(r"[^A-Z0-9+]", "", (mpn or "").upper())
+    """MPN sans séparateurs, pour reconnaître une référence chez un distributeur : « 2N7002,215 » (Nexperia)
+    ~ « 2N7002215 ». Restent significatifs le « + » (« MAX232CPE+ » sans plomb ≠ « MAX232CPE ») et le point
+    décimal (« SMBJ6.0A », 6 V ≠ « SMBJ60A », 60 V)."""
+    return re.sub(r"[^A-Z0-9+.]", "", (mpn or "").upper())
 
 
 def norm_mfr(name: str) -> str:
@@ -340,8 +344,8 @@ def validate_statuses(raw, components: list[dict]) -> tuple[dict[str, dict], lis
     items = raw.get("statuses") if isinstance(raw, dict) else None
     if items is None:
         return {}, []
-    if not isinstance(items, list):
-        raise ComponentsError("format attendu : « statuses » est une liste")
+    if not isinstance(items, list):  # champ facultatif : rejeté, les avis sont enregistrés quand même
+        return {}, ["« statuses » : liste attendue"]
     match = _matcher(components)
     found, rejected = {}, []
     for i, item in enumerate(items[:MAX_CANDIDATES], 1):
@@ -359,6 +363,8 @@ def validate_statuses(raw, components: list[dict]) -> tuple[dict[str, dict], lis
             rejected.append(f"statut #{i} : aucune référence suivie ({_text(item.get('mpn'), 'label')[:64]})")
         else:
             found[key_of(c["mpn"], c["manufacturer"])] = {"status": status, "url": url}
+    if len(items) > MAX_CANDIDATES:
+        rejected.append(f"{len(items) - MAX_CANDIDATES} statut(s) au-delà de la limite de {MAX_CANDIDATES}")
     return found, rejected
 
 
@@ -380,7 +386,7 @@ def apply_statuses(components: list[dict], statuses: dict[str, dict], day: str) 
         c["web_status"] = {**s, "checked_at": day}
         if s["status"] in TYPES:
             out.append(status_notice(c, s["status"], f"Statut constaté sur le web : {WEB_STATUSES[s['status']]}",
-                                     s["url"], urlsplit(s["url"]).hostname, "web"))
+                                     s["url"], urlsplit(s["url"]).hostname, "statut-web"))
     return out
 
 
@@ -394,7 +400,7 @@ def _identities(n: dict) -> set[tuple[str, str]]:
     ids = {(n["key"], f"u:{n['type']}:{s['url']}") for s in n["sources"]}
     if n.get("number"):
         ids.add((n["key"], "n:" + norm_mpn(n["number"])))
-    if n.get("origin") == "digikey":
+    if n.get("origin") in STATUS_ORIGINS:
         ids.add((n["key"], "dk:" + n["title"].lower()))
     return ids
 
@@ -465,16 +471,14 @@ def mark_delivered(notices: list[dict], ids: set[str], channel: str, day: str | 
 # Lot tournant de recherche web
 # --------------------------------------------------------------------------
 def batch(components: list[dict], size: int) -> list[dict]:
-    """Jamais vérifiés ; puis inconnus de Digi-Key sans statut web encore établi, ou statut Digi-Key changé
-    depuis la dernière recherche ; puis les plus anciens."""
+    """Jamais vérifiés, puis statut Digi-Key changé depuis la dernière recherche (y compris une référence que
+    Digi-Key ne trouve plus : une recherche, pas toutes), puis les plus anciens."""
     def rank(c):
         web = c.get("web_checked_at")
-        dk = c.get("dk") or {}
+        changed = (c.get("dk") or {}).get("changed_at")
         if not web:
             return (0, "")
-        changed = dk.get("changed_at")
-        urgent = (dk.get("error") and not c.get("web_status")) or (changed and changed > web)
-        return (1 if urgent else 2, web)
+        return (1 if changed and changed > web else 2, web)
     return sorted(components, key=rank)[: max(1, size)]
 
 
