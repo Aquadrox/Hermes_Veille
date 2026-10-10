@@ -60,6 +60,8 @@ button.primary, .button.primary { background: var(--accent); border-color: var(-
 button.danger { border-color: var(--bad); color: var(--bad); }
 button.link { border: 0; background: none; padding: 0; color: var(--text); }
 button:disabled { opacity: .5; cursor: not-allowed; }
+/* action en cours (formulaire envoyé, requête htmx) : le bouton réagit tout de suite */
+button.busy, button.busy:disabled, button.htmx-request { opacity: .6; cursor: progress; }
 form.inline { display: inline; }
 .actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
 

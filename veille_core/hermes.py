@@ -102,23 +102,31 @@ def run_usage(job_id: str | None, limit: int = 50, db: Path | None = None) -> li
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
         conn.row_factory = sqlite3.Row
         try:
+            # Intervalle sur la clé primaire (`cron_<id>_` <= id < `cron_<id>``, « ` » suit « _ ») :
+            # l'index est utilisé, là où un LIKE parcourrait toute la table des sessions.
+            prefix = f"cron_{job_id}_"
             sessions = conn.execute(
                 "SELECT id, model, started_at, ended_at, end_reason, api_call_count, estimated_cost_usd, "
                 + ", ".join(_TOKEN_COLS)
-                + " FROM sessions WHERE id LIKE ? ESCAPE '\\' ORDER BY started_at DESC LIMIT ?",
-                (f"cron\\_{job_id}\\_%", int(limit)),
+                + " FROM sessions WHERE id >= ? AND id < ? ORDER BY started_at DESC LIMIT ?",
+                (prefix, prefix[:-1] + "`", int(limit)),
             ).fetchall()
+            usage: dict[str, list] = {}
+            if sessions:  # détail par modèle de toutes les exécutions, en une requête
+                try:
+                    for m in conn.execute(
+                        "SELECT session_id, model, SUM(api_call_count) AS calls, SUM(estimated_cost_usd) AS est, "
+                        + ", ".join(f"SUM({c}) AS {c}" for c in _TOKEN_COLS)
+                        + " FROM session_model_usage WHERE session_id IN ("
+                        + ",".join("?" * len(sessions)) + ") GROUP BY session_id, model",
+                        [row["id"] for row in sessions],
+                    ):
+                        usage.setdefault(m["session_id"], []).append(m)
+                except sqlite3.OperationalError:
+                    pass
             runs = []
             for row in sessions:
-                try:
-                    per_model = conn.execute(
-                        "SELECT model, SUM(api_call_count) AS calls, SUM(estimated_cost_usd) AS est, "
-                        + ", ".join(f"SUM({c}) AS {c}" for c in _TOKEN_COLS)
-                        + " FROM session_model_usage WHERE session_id = ? GROUP BY model",
-                        (row["id"],),
-                    ).fetchall()
-                except sqlite3.OperationalError:
-                    per_model = []
+                per_model = usage.get(row["id"], [])
                 models = [{"model": m["model"], "api_calls": m["calls"] or 0,
                            "hermes_estimate_usd": m["est"] or 0.0,
                            **{c: m[c] or 0 for c in _TOKEN_COLS}} for m in per_model]

@@ -681,7 +681,8 @@ def test_ui_components_list_filters_and_detail(ui, watch):
     rows = _rows_html(t)
     assert len(rows) == 3 and rows[0] == '<tr class="comp crit"'  # LM317T (dernière commande) en tête
     assert 'data-types="NRND PCN"' in t  # 2 avis -> 1 ligne
-    assert '<tr class="detail"' not in t and "hx-get" not in t  # détail créé et chargé au clic (app.js)
+    assert '<tr class="detail"' not in t  # détail créé et chargé au clic (app.js), pas par htmx :
+    assert f'hx-get="/veilles/{watch.slug}/components/' not in t
     assert 'id="comp-search"' in t and t.count("data-col=") == 5 and "data-types aria-label" in t
     assert 'href="https://st.com/nrnd/1" target="_blank" rel="noopener noreferrer"' in t  # lien du pire avis
     assert "1 en fin de vie ou dernière commande" in t

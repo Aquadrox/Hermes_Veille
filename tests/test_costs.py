@@ -83,6 +83,9 @@ def make_db(home, job_id):
     # Session hors cron et cron d'un autre job : ignorées.
     db.execute("INSERT INTO sessions (id, source, started_at, input_tokens) VALUES ('tg_123', 'telegram', ?, 9)", (off,))
     db.execute("INSERT INTO sessions (id, source, started_at, input_tokens) VALUES ('cron_autre_20261005_063500', 'cron', ?, 9)", (off,))
+    # Identifiants voisins (même préfixe) : hors de l'intervalle lu sur la clé primaire.
+    for other in (f"cron_{job_id}0_20261005_063500", f"cron_{job_id}-x_20261005_063500", f"cron_{job_id}"):
+        db.execute("INSERT INTO sessions (id, source, started_at, input_tokens) VALUES (?, 'cron', ?, 9)", (other, off))
     db.commit()
     db.close()
 

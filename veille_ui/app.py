@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import re
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qs
 
@@ -14,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from veille_core import (
@@ -56,6 +59,11 @@ FLASH = {
     "settings-unchanged": "Aucune modification.",
     "alert-mail": "E-mail de test envoyé aux adresses d'alerte.",
 }
+# Fichiers statiques : URL versionnées par empreinte (?v=STATIC_V), donc mises en cache longtemps.
+STATIC_CACHE = "public, max-age=31536000, immutable"
+# Déjà compressés : PDF et classeurs Excel (format zip) ne passent pas par gzip.
+GZIP_EXCLUDED = (*DEFAULT_EXCLUDED_CONTENT_TYPES, "application/pdf",
+                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
        "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 
@@ -106,6 +114,15 @@ def status_class(row: dict) -> str:
     return "ok"
 
 
+def static_version() -> str:
+    """Empreinte du contenu de static/ : change dès qu'un fichier change (cache navigateur renouvelé)."""
+    h = hashlib.sha256()
+    for f in sorted((HERE / "static").rglob("*")):
+        if f.is_file():
+            h.update(f.relative_to(HERE).as_posix().encode() + b"\0" + f.read_bytes())
+    return h.hexdigest()[:12]
+
+
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 templates.env.filters["dt"] = fmt_dt
 templates.env.filters["size"] = fmt_size
@@ -121,6 +138,7 @@ templates.env.globals["FIELDS"] = bom_import.FIELDS
 templates.env.globals["LABELS"] = bom_import.LABELS
 templates.env.globals["column_name"] = bom_import.column_name
 templates.env.globals["VERSION"] = version()
+templates.env.globals["STATIC_V"] = static_version()
 
 
 # --------------------------------------------------------------------------
@@ -178,6 +196,16 @@ def kind_fields(values: dict) -> dict:
         return {"components": components.parse_components(values["components"]),
                 "batch_size": values["batch_size"]}
     return {"include_components": values["include_components"]}
+
+
+def schedule_ctx(freq: dict) -> dict:
+    """Aperçu d'une fréquence (expression, libellé, prochaines exécutions) ou son erreur."""
+    try:
+        expr = schedule.to_cron(freq)
+        runs = schedule.next_runs(expr, 3)
+        return {"expr": expr, "human": schedule.describe(expr), "runs": runs, "peak": pricing.is_peak(runs[0])}
+    except schedule.ScheduleError as exc:
+        return {"error": str(exc)}
 
 
 def component_watches() -> list[store.Veille]:
@@ -240,8 +268,12 @@ def create_app() -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers.setdefault("Cache-Control", "no-store")
+        static = path.startswith("/static/") and response.status_code == 200
+        response.headers.setdefault("Cache-Control", STATIC_CACHE if static else "no-store")
         return response
+
+    # Ajoutée après `guard` : enveloppe toute la pile (les en-têtes ci-dessus sont déjà posés).
+    app.add_middleware(GZipMiddleware, minimum_size=1024, exclude_content_types=GZIP_EXCLUDED)
 
     def render(request: Request, template: str, status_code: int = 200, /, **ctx):
         session = request.state.session or {}
@@ -295,8 +327,10 @@ def create_app() -> FastAPI:
     # -------------------------------------------------------------- création / édition
     def form_page(request: Request, values: dict, status_code: int = 200, /, **ctx):
         briefs = [t for t in store.brief_templates() if t != service.COMPONENTS_TEMPLATE]
+        # Aperçu de la fréquence rendu avec la page : pas d'aller-retour supplémentaire au chargement.
         return render(request, "veille_form.html", status_code, values=values, watches=component_watches(),
-                      templates_=briefs if values["kind"] == "veille" else [], **ctx)
+                      templates_=briefs if values["kind"] == "veille" else [],
+                      preview=schedule_ctx(values["freq"]), **ctx)
 
     @app.get("/veilles/new", response_class=HTMLResponse)
     def new_form(request: Request, template: str = "vierge", kind: str = "veille"):
@@ -322,9 +356,8 @@ def create_app() -> FastAPI:
         v = store.load(slug)
         row = service.describe(v)
         logs = store.list_run_logs(slug)
-        runs = hermes.runs(v.job_id, 10) if v.job_id and row["status"]["exists"] else []
         nxt = schedule.next_runs(v.schedule, 3)
-        return {"row": row, "v": v, "reports": store.list_reports(slug), "logs": logs, "runs": runs,
+        return {"row": row, "v": v, "reports": store.list_reports(slug), "logs": logs,
                 "next_runs": nxt, "next_peak": bool(nxt) and pricing.is_peak(nxt[0]),
                 "costs": service.costs(slug), **components_ctx(v)}
 
@@ -351,6 +384,17 @@ def create_app() -> FastAPI:
         except StoreError:
             return render(request, "error.html", 404, error="Veille introuvable.")
         return render(request, "veille_detail.html", **ctx)
+
+    @app.get("/veilles/{slug}/history", response_class=HTMLResponse)
+    def history(request: Request, slug: str):
+        """Historique d'exécution Hermes, chargé après la page : `hermes cron runs` démarre toute la
+        CLI Hermes (près d'une seconde), la page s'affiche sans l'attendre."""
+        try:
+            v = store.load(slug)
+        except StoreError:
+            return PlainTextResponse("veille introuvable", status_code=404)
+        runs = hermes.runs(v.job_id, 10) if v.job_id and hermes.get_job(v.job_id, service._safe_jobs()) else []
+        return render(request, "partials/history.html", runs=runs)
 
     @app.get("/veilles/{slug}/components/{anchor}", response_class=HTMLResponse)
     def component_detail(request: Request, slug: str, anchor: str):
@@ -398,14 +442,7 @@ def create_app() -> FastAPI:
     # -------------------------------------------------------------- fragments HTMX
     @app.get("/fragments/schedule", response_class=HTMLResponse)
     def schedule_preview(request: Request):
-        try:
-            expr = schedule.to_cron(freq_from_form(request.query_params))
-            runs = schedule.next_runs(expr, 3)
-            ctx = {"expr": expr, "human": schedule.describe(expr), "runs": runs,
-                   "peak": pricing.is_peak(runs[0])}
-        except schedule.ScheduleError as exc:
-            ctx = {"error": str(exc)}
-        return render(request, "partials/schedule_preview.html", **ctx)
+        return render(request, "partials/schedule_preview.html", **schedule_ctx(freq_from_form(request.query_params)))
 
     @app.post("/fragments/brief", response_class=HTMLResponse)
     async def brief_preview(request: Request):
@@ -586,9 +623,12 @@ def create_app() -> FastAPI:
     # -------------------------------------------------------------- santé
     @app.get("/health", response_class=HTMLResponse)
     def health(request: Request):
-        return render(request, "health.html", rows=service.overview(), brevo=brevo_account(),
-                      deepseek=deepseek.balance(), costs=service.costs_overview(),
-                      audit=service.read_audit(40))
+        # Comptes Brevo et DeepSeek interrogés en parallèle (deux appels réseau, chacun jusqu'à 10 s).
+        with ThreadPoolExecutor(2) as pool:
+            brevo, balance = pool.submit(brevo_account), pool.submit(deepseek.balance)
+            return render(request, "health.html", rows=service.overview(), brevo=brevo.result(),
+                          deepseek=balance.result(), costs=service.costs_overview(),
+                          audit=service.read_audit(40))
 
     # -------------------------------------------------------------- actions
     # Déclarée APRÈS /veilles/{slug}/edit : sinon « edit » serait pris pour une action.

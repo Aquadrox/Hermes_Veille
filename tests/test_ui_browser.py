@@ -234,3 +234,20 @@ def test_layout_full_width_on_desktop(data, page):
     pg.set_viewport_size({"width": 390, "height": 844})
     m = pg.evaluate(metrics)
     assert m["left"] == 16 and m["card"] == m["vw"] - 32 and m["header"] == "20px" and not m["overflow"], m
+
+
+def test_slow_action_marks_button_busy_at_once(watch, page, monkeypatch):  # noqa: F811
+    """Pause (CLI Hermes, ~1 s) : le bouton passe tout de suite « en cours » et ne se reclique pas ;
+    l'historique Hermes, lui, arrive après la page."""
+    from veille_core import hermes
+    pg = page
+    slow_pause = hermes.pause
+    monkeypatch.setattr(hermes, "pause", lambda job_id: (time.sleep(1.5), slow_pause(job_id)))
+    # état du bouton relevé pendant l'envoi (Playwright n'interroge pas une page qui navigue)
+    pg.evaluate("""() => document.addEventListener('submit', e => setTimeout(() => sessionStorage.setItem(
+        'btn', [e.submitter.textContent, e.submitter.classList.contains('busy'), e.submitter.disabled].join()), 50))""")
+    pg.click("#detail-head button:text-is('Pause')")
+    pg.wait_for_url("**?ok=paused", timeout=10_000)
+    assert pg.evaluate("sessionStorage.getItem('btn')") == "Pause,true,true"
+    assert pg.locator("#detail-head button:text-is('Reprendre')").is_enabled()
+    pg.locator("section h2:text('Historique')").wait_for(timeout=5_000)  # fragment chargé (load)
