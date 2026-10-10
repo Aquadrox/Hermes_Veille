@@ -618,16 +618,16 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
                 if r["status"] != prev.get("status") and (prev.get("status") or ntype):
                     dk["changed_at"] = day
                 dk.update(status=r["status"], product_url=r["product_url"])
+                c.pop("web_status", None)  # Digi-Key fait foi, revérifié à chaque passage
                 if ntype:
                     url = r["product_url"] or comp.normalize_url(
                         "https://www.digikey.com/en/products/result?keywords=" + quote_plus(c["mpn"]))
-                    new += comp.merge(notices, [{
-                        "key": key, "mpn": c["mpn"], "manufacturer": c["manufacturer"], "type": ntype,
-                        "title": f"Statut Digi-Key : {r['status']}", "number": "", "published": "",
-                        "ltb_date": "", "eol_date": "", "scope": "référence", "summary": "",
-                        "sources": [{"url": url, "label": "Digi-Key"}], "origin": "digikey"}], day)
+                    new += comp.merge(notices, [comp.status_notice(
+                        c, ntype, f"Statut Digi-Key : {r['status']}", url, "Digi-Key", "digikey")], day)
             else:
                 info["errors"] += 1
+                if not prev.get("error"):  # Digi-Key ne la trouve plus : recherche web prioritaire, une fois
+                    dk["changed_at"] = day
             c["dk"] = dk
         lot = comp.batch(data["components"], v.batch_size) if data["components"] and plan_batch else []
         if plan_batch:
@@ -650,6 +650,8 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
             "digikey": info, "new_digikey_notices": len(new),
             "batch": [{"mpn": c["mpn"], "manufacturer": c["manufacturer"], "ref": c.get("ref", ""),
                        "since": comp.search_since(c), "digikey_status": (c.get("dk") or {}).get("status"),
+                       # non nul : Digi-Key ne la trouve pas, l'agent établit lui-même son statut (« statuses »)
+                       "digikey_error": (c.get("dk") or {}).get("error"),
                        "known": known.get(comp.key_of(c["mpn"], c["manufacturer"]), [])[:20]}
                       for c in lot]}
 
@@ -704,6 +706,34 @@ def remove_components(slug: str, mpns: list[str], actor: str = "cli") -> int:
     drop = {comp.norm_mpn(m) for m in mpns}
     return _edit_components(slug, lambda current: [c for c in current if comp.norm_mpn(c["mpn"]) not in drop],
                             actor, "components-remove")
+
+
+def reset_components(slug: str, actor: str = "cli") -> Path:
+    """Remet la recherche à zéro : avis effacés, statuts (Digi-Key, web) et dates de recherche oubliés ; la
+    prochaine analyse revérifie tout et re-signale comme nouveaux les avis retrouvés. La liste des composants,
+    les rapports et les destinataires restent. Renvoie la copie préalable (archives : rien n'est perdu).
+
+    Refusée pendant un lancement manuel (suivi). Une exécution planifiée n'est pas détectable : remise à zéro
+    entre son scan et son finalize, les avis qu'elle trouve sont enregistrés et son lot sera recherché à nouveau.
+    """
+    with _locked():
+        v = _components_veille(slug)
+        if running_pid(slug):
+            raise ServiceError("un lancement est en cours : attendre sa fin avant de réinitialiser")
+        data = comp.load_components(slug)
+        comp.load_notices(slug)  # illisible : erreur levée ici, rien n'est modifié
+        paths.archive_dir().mkdir(parents=True, exist_ok=True)
+        # Nom unique (deux remises à zéro dans la même seconde ne s'écrasent pas) : jamais une copie déjà vidée.
+        dest = Path(tempfile.mkdtemp(prefix=f"{slug}-reinit-{dt.datetime.now():%Y%m%d-%H%M%S}-",
+                                     dir=paths.archive_dir()))
+        dest.chmod(0o755)  # comme les autres dossiers du volume (mkdtemp : 0700)
+        for name in ("components.json", "notices.json"):
+            if (v.dir / name).is_file():
+                shutil.copy2(v.dir / name, dest / name)
+        comp.save_components(slug, {"components": comp.reset_state(data["components"]), "batch": []})
+        comp.save_notices(slug, [])
+    audit(actor, "components-reset", slug, str(dest))
+    return dest
 
 
 def notices(slug: str, ntype: str | None = None, since: str | None = None) -> list[dict]:
@@ -854,7 +884,9 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
     with _locked():
         data, notices = comp.load_components(slug), comp.load_notices(slug)
         valid, rejected = comp.validate_candidates(raw, data["components"])
-        new = comp.merge(notices, valid, day)
+        statuses, bad = comp.validate_statuses(raw, data["components"])
+        rejected += bad
+        new = comp.merge(notices, valid + comp.apply_statuses(data["components"], statuses, day), day)
         lot = set(data["batch"])
         for c in data["components"]:
             if comp.key_of(c["mpn"], c["manufacturer"]) in lot:
@@ -863,7 +895,8 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         comp.save_components(slug, data)
         comp.save_notices(slug, notices)
         linked = [x.slug for x in _linked_veilles(slug)]
-    audit(actor, "components-finalize", slug, f"{len(new)} nouvel(s) avis, {len(rejected)} rejet(s)")
+    audit(actor, "components-finalize", slug,
+          f"{len(new)} nouvel(s) avis, {len(statuses)} statut(s) web, {len(rejected)} rejet(s)")
     critical = sum(1 for n in new if n["type"] in comp.CRITICAL)
     if track:  # cumulés : finalize relancé après un échec (PDF, e-mail) garde les avis du premier passage
         found = Counter(n["key"] for n in new)
@@ -889,7 +922,7 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
     _mark(slug, {n["id"] for n in report}, "report", day)
     lines = [f"OK: veille composants — {len(new)} nouvel(s) avis "
              f"(dont {critical} fin(s) de vie / dernière(s) commande(s)), "
-             f"{len(rejected)} rejet(s), PDF {pdf}"]
+             f"{len(statuses)} statut(s) établi(s) sur le web, {len(rejected)} rejet(s), PDF {pdf}"]
     lines += [f"  rejet {r}" for r in rejected[:20]]
     mail = comp.pending(notices, "mail")
     if linked:

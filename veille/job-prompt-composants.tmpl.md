@@ -13,11 +13,12 @@ RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 
 1. PRÉPARATION — exécute (timeout de la commande : 1200 secondes, elle interroge Digi-Key pour tous les composants) :
    veillectl components scan ${slug}
-   Elle affiche en JSON le LOT de composants à rechercher sur le web aujourd'hui (au plus ${batch_size}) : pour chacun, `mpn`, `manufacturer`, `since` (chercher les avis publiés depuis cette date ; null = jamais vérifié : cherche aussi l'état actuel et l'historique), `digikey_status` et `known` (avis déjà enregistrés : ne les recherche pas à nouveau) ; ainsi que `track_progress` (voir étape 3).
+   Elle affiche en JSON le LOT de composants à rechercher sur le web aujourd'hui (au plus ${batch_size}) : pour chacun, `mpn`, `manufacturer`, `since` (chercher les avis publiés depuis cette date ; null = jamais vérifié : cherche aussi l'état actuel et l'historique), `digikey_status`, `digikey_error` (non nul : Digi-Key ne connaît pas la référence, voir étape 3) et `known` (avis déjà enregistrés : ne les recherche pas à nouveau) ; ainsi que `track_progress` (voir étape 3).
 
 2. LIS le brief `${dir}/config.md` : sources à privilégier, mots-clés, règles de fiabilité.
 
 3. RECHERCHE : pour chaque composant du lot, web_search / web_extract (regroupe les recherches par fabricant : un avis vise souvent une GAMME entière). Cherche « <MPN> PCN », « <MPN> EOL », « <MPN> end of life », « <MPN> last time buy », « <MPN> PDN », « <MPN> discontinued », la page des avis du fabricant et les fiches distributeurs (Mouser, Digi-Key, Farnell, Arrow, TME).
+   RÉFÉRENCE INCONNUE DE DIGI-KEY — pour chaque composant du lot dont `digikey_error` n'est pas null (même si `since` est renseigné) : trouve toi-même sa fiche produit (site du fabricant d'abord, puis Mouser, Farnell, Arrow, TME, LCSC) et établis son statut de cycle de vie ACTUEL, à reporter dans `statuses` (étape 4) : ACTIVE (en production), NRND, LTB, OBSOLETE (arrêté, discontinued), ou UNKNOWN si aucune fiche ne mentionne la référence. Une référence de base (ex. ESP32-WROOM-32E) vaut pour ses variantes commandables (-N4, -N8…) si elles ont toutes le même statut ; sinon, UNKNOWN.
    SUIVI EN DIRECT — UNIQUEMENT si la sortie de l'étape 1 contient "track_progress": true (lancement manuel suivi en direct) : AVANT chaque groupe de recherches (un fabricant, ou un composant seul), exécute
    veillectl components progress ${slug} <MPN> [<MPN> …]
    avec les MPN du groupe (commande instantanée : ignore sa sortie, ne la relance jamais). Si `track_progress` vaut false, ne l'exécute JAMAIS.
@@ -26,8 +27,9 @@ RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
    - Un avis de gamme liste dans `mpns` toutes les références SUIVIES qu'il concerne (uniquement des MPN du lot ou de la liste suivie).
    - Une fiche distributeur indiquant « Obsolete », « Last Time Buy », « Not Recommended for New Designs » compte comme avis (type OBSOLETE, LTB ou NRND), avec la fiche comme source.
 
-4. ÉCRIS `${dir}/rapports/D-pcn.json`, EXACTEMENT ce format (tableau vide s'il n'y a rien de nouveau) :
-   {"notices":[{"mpns":["MPN suivi", "..."],"manufacturer":"Fabricant","type":"EOL|PDN|OBSOLETE|LTB|NRND|PCN|AUTRE","title":"intitulé court de l'avis","number":"numéro de l'avis ou vide","published":"AAAA-MM-JJ ou vide","ltb_date":"AAAA-MM-JJ ou vide","eol_date":"AAAA-MM-JJ ou vide","scope":"référence|gamme","summary":"ce qui change, en 1 à 2 phrases, en français","sources":[{"url":"https://…","label":"Texas Instruments"}]}]}
+4. ÉCRIS `${dir}/rapports/D-pcn.json`, EXACTEMENT ce format (`notices` vide s'il n'y a rien de nouveau) :
+   {"notices":[{"mpns":["MPN suivi", "..."],"manufacturer":"Fabricant","type":"EOL|PDN|OBSOLETE|LTB|NRND|PCN|AUTRE","title":"intitulé court de l'avis","number":"numéro de l'avis ou vide","published":"AAAA-MM-JJ ou vide","ltb_date":"AAAA-MM-JJ ou vide","eol_date":"AAAA-MM-JJ ou vide","scope":"référence|gamme","summary":"ce qui change, en 1 à 2 phrases, en français","sources":[{"url":"https://…","label":"Texas Instruments"}]}],"statuses":[{"mpn":"MPN suivi","manufacturer":"Fabricant","status":"ACTIVE|NRND|LTB|OBSOLETE|UNKNOWN","url":"https://… (fiche ouverte qui indique ce statut ; vide seulement pour UNKNOWN)"}]}
+   `statuses` : une entrée par composant du lot dont `digikey_error` n'est pas null (tableau vide sinon). Un statut NRND, LTB ou OBSOLETE crée l'avis correspondant : inutile de le répéter dans `notices`.
 
 5. ENREGISTRE — exécute :
    veillectl components finalize ${slug} ${dir}/rapports/D-pcn.json

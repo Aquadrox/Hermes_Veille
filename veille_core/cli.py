@@ -20,6 +20,7 @@ Veille composants (PCN / fins de vie) :
   veillectl components scan <slug> --status-only                    (statut Digi-Key seul, à la demande)
   veillectl components progress <slug> MPN …                        (étape 3 du job, lancement suivi)
   veillectl components finalize <slug> <avis.json>                  (étape 5 du job)
+  veillectl components reset <slug>                                 (recherche remise à zéro, copie archivée)
   veillectl components chapter <slug> --for <veille> --append <rapport.md>
 """
 from __future__ import annotations
@@ -154,6 +155,8 @@ def _components(args) -> int:
         if not args.items:
             raise store.StoreError("chemin du fichier JSON des avis manquant")
         print(service.components_finalize(slug, Path(args.items[0])))
+    elif args.action == "reset":
+        print(f"✓ recherche réinitialisée (avis et statuts effacés) ; copie dans {service.reset_components(slug)}")
     elif args.action == "chapter":
         if not (args.for_slug and args.append):
             raise store.StoreError("--for <veille> et --append <rapport.md> sont requis")
@@ -249,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_comp = sub.add_parser("components", help="veille composants : PCN et fins de vie")
     p_comp.add_argument("action", choices=("list", "notices", "add", "remove", "import", "scan", "progress",
-                                           "finalize", "chapter"))
+                                           "finalize", "chapter", "reset"))
     p_comp.add_argument("slug")
     p_comp.add_argument("items", nargs="*", help="add : lignes « MPN;Fabricant;Réf » ; remove, progress : MPN ; "
                                                   "finalize : fichier JSON")

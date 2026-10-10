@@ -50,6 +50,7 @@ FLASH = {
     "resumed": "Veille reprise.",
     "run": "Lancement démarré : son suivi s'affiche ci-dessous.",
     "checking": "Vérification des statuts Digi-Key démarrée : l'avancement s'affiche ci-dessous.",
+    "reset": "Recherche réinitialisée (copie archivée) : «\u00a0Lancer l'analyse\u00a0» repart de zéro.",
     "archived": "Veille archivée.",
     "mail": "E-mail de test envoyé.",
     "creds-saved": "Clés enregistrées. Utilise « Tester la connexion » pour les vérifier.",
@@ -131,6 +132,7 @@ templates.env.filters["num"] = fmt_int
 templates.env.globals["status_class"] = status_class
 templates.env.globals["DAYS"] = schedule.DAYS
 templates.env.globals["NOTICE_TYPES"] = components.TYPES
+templates.env.globals["WEB_STATUSES"] = components.WEB_STATUSES
 templates.env.globals["CRITICAL"] = components.CRITICAL
 templates.env.globals["badge_class"] = components.badge_class
 templates.env.globals["COMP_ROWS_SHOWN"] = COMP_ROWS_SHOWN
@@ -647,7 +649,8 @@ def create_app() -> FastAPI:
         ops = {"pause": (service.pause, "paused"), "resume": (service.resume, "resumed"),
                "run": (service.run_now, "run"), "test-email": (service.send_test_email, "mail"),
                "archive": (service.archive, "archived"),
-               "check-status": (service.check_statuses_now, "checking")}
+               "check-status": (service.check_statuses_now, "checking"),
+               "reset-search": (service.reset_components, "reset")}
         if action not in ops:
             return PlainTextResponse("action inconnue", status_code=404)
         func, code = ops[action]
@@ -655,6 +658,8 @@ def create_app() -> FastAPI:
         try:
             store.check_slug(slug)
             func(slug, actor=ACTOR)
+        except components.ComponentsError as exc:  # fichier corrompu : la page de la veille ne s'afficherait pas
+            return render(request, "error.html", 500, error=str(exc))
         except USER_ERRORS as exc:
             if htmx_row:
                 return row_response(request, slug, str(exc))

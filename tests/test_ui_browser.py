@@ -268,3 +268,23 @@ def test_progress_panel_mobile(watch, page, monkeypatch):  # noqa: F811
     assert "en cours : LM317T" in pg.text_content(f"#row-{watch.slug}")
     assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
+
+def test_reset_search_mobile(data, watch, page):  # noqa: F811
+    """Réinitialiser la recherche en PWA mobile : confirmation (app.js, aucun JS en ligne), refus sans effet,
+    puis acceptation ; avis effacés, message affiché, aucun défilement horizontal."""
+    from veille_core import components as comp
+    pg = page
+    button = "#reinitialiser button.danger"
+    pg.locator(button).scroll_into_view_if_needed()
+    assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    dialogs = []
+    pg.once("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
+    pg.click(button)
+    pg.wait_for_timeout(300)  # laisse à une éventuelle soumission le temps de naviguer
+    assert dialogs and "Avis détectés (2), statuts et dates de recherche seront effacés" in dialogs[0]
+    assert len(comp.load_notices(watch.slug)) == 2  # refusé : rien n'a changé
+    pg.once("dialog", lambda d: d.accept())
+    pg.click(button)
+    pg.wait_for_url("**?ok=reset", timeout=10_000)
+    assert "Recherche réinitialisée" in pg.text_content(".flash") and comp.load_notices(watch.slug) == []
+    assert pg.text_content("#comp-count") == "3 / 3"  # la liste des composants reste

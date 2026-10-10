@@ -48,6 +48,8 @@ Gestion des veilles technologiques automatisées (rapports PDF envoyés par e-ma
 - Pour modifier une partie du brief, préfère `edit_brief` (remplacement ciblé) à
   `update_brief` (remplacement complet).
 - `archive_veille` retire la veille du planning (rien n'est effacé) ; il exige de répéter le slug.
+- `reset_component_search` (veille composants) efface les avis et les statuts pour relancer l'analyse
+  de zéro (copie archivée) ; il exige de répéter le slug : confirme avec l'utilisateur avant.
 - Heures exprimées à l'heure de Paris.
 - Veilles COMPOSANTS (`kind` = composants) : surveillance des avis PCN et des fins de vie (EOL,
   PDN, obsolescence, dernière commande LTB, NRND) d'une liste de références « MPN ; Fabricant ;
@@ -263,16 +265,20 @@ def preview_schedule(frequency: Frequency = "weekly", time: str = "08:00",
 
 def list_components(slug: str) -> list[dict]:
     """Références suivies par une veille composants : MPN, fabricant, réf. interne, statut
-    Digi-Key, avis le plus critique, dates des dernières vérifications (Digi-Key et web)."""
+    Digi-Key, statut établi par la recherche web (référence inconnue de Digi-Key : ACTIVE, NRND,
+    LTB, OBSOLETE ou UNKNOWN, avec sa source), avis le plus critique, dates des dernières
+    vérifications (Digi-Key et web)."""
     v = _guard(service._components_veille, slug)
     comps = _guard(components.load_components, v.slug)["components"]
     worst = components.worst_by_key(_guard(components.load_notices, v.slug))
     out = []
     for c in comps:
         dk, w = c.get("dk") or {}, worst.get(components.key_of(c["mpn"], c["manufacturer"]))
+        web = c.get("web_status") or {}
         out.append({"mpn": c["mpn"], "manufacturer": c["manufacturer"], "ref": c.get("ref", ""),
                     "digikey_status": dk.get("status"), "digikey_error": dk.get("error"),
-                    "digikey_checked_at": dk.get("checked_at"), "web_checked_at": c.get("web_checked_at"),
+                    "digikey_checked_at": dk.get("checked_at"), "web_status": web.get("status"),
+                    "web_status_url": web.get("url"), "web_checked_at": c.get("web_checked_at"),
                     "worst_notice": w["type"] if w else None})
     return out
 
@@ -558,6 +564,18 @@ def archive_veille(slug: str, confirm_slug: str) -> dict:
     return {"slug": slug, "archived_to": str(dest)}
 
 
+def reset_component_search(slug: str, confirm_slug: str) -> dict:
+    """Veille composants : réinitialise la recherche (avis détectés effacés, statuts Digi-Key et web et
+    dates de recherche oubliés) pour relancer l'analyse de zéro ; les avis retrouvés seront de nouveau
+    signalés comme nouveaux. Liste des composants, rapports et destinataires conservés ; copie préalable
+    archivée. Refusé pendant un lancement. `confirm_slug` doit répéter exactement `slug`."""
+    if confirm_slug != slug:
+        raise ToolError("confirmation invalide : `confirm_slug` doit être identique à `slug`")
+    dest = _guard(service.reset_components, slug, actor=_actor())
+    return {"slug": slug, "reset": True, "backup": str(dest),
+            "hint": "lancer l'analyse (run_veille_now) pour repartir de zéro"}
+
+
 READ_TOOLS = [list_veilles, get_veille, get_brief, list_brief_templates, list_reports, read_report,
               get_run_log, run_history, preview_schedule, get_costs, health, list_components, list_notices,
               preview_component_import]
@@ -567,7 +585,7 @@ WRITE_TOOLS = [(create_veille, WRITE), (update_veille, WRITE), (set_recipients, 
                (import_components, DESTROY),  # mode replace : la liste existante est remplacée
                (pause_veille, WRITE), (resume_veille, WRITE),
                (check_component_statuses, WRITE), (run_veille_now, SEND), (send_test_email, SEND),
-               (archive_veille, DESTROY)]
+               (archive_veille, DESTROY), (reset_component_search, DESTROY)]
 
 
 def build_server(readonly: bool = False) -> MCPServer:

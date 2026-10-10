@@ -7,6 +7,76 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.3.8] — 2026-10-10
+
+Références « introuvables chez Digi-Key » retrouvées, ou leur statut établi par l'agent ; recherche
+d'une veille composants réinitialisable.
+
+### Ajouté
+
+- **Réinitialiser la recherche** d'une veille composants, pour relancer l'analyse de zéro : avis
+  détectés, statuts Digi-Key et web et dates de recherche effacés ; la liste des composants (réf.
+  internes, dates d'ajout), les rapports et les destinataires sont conservés. Les avis retrouvés à
+  l'analyse suivante sont de nouveau signalés comme nouveaux.
+  - Interface (PWA) : carte « Réinitialiser la recherche » de la page de la veille, avec
+    confirmation (nombre d'avis effacés) ; bouton désactivé pendant un lancement.
+  - CLI : `veillectl components reset <slug>`. Telegram : outil `reset_component_search`, marqué
+    destructeur (approbation) et qui exige de répéter le slug, comme `archive_veille`.
+  - Copie préalable de `components.json` et `notices.json` dans `veilles/.archive/<slug>-reinit-…/`
+    (nom unique : deux remises à zéro de suite n'écrasent jamais la première copie). Refusée pendant
+    un lancement manuel, et sans rien modifier si un fichier est illisible. Tracée dans l'audit.
+- **Statut web** d'une référence que Digi-Key ne trouve pas : le scan signale `digikey_error` pour
+  chaque composant du lot ; l'agent trouve lui-même sa fiche (fabricant, Mouser, Farnell, LCSC…) et
+  rend son statut (`ACTIVE`, `NRND`, `LTB`, `OBSOLETE` ou `UNKNOWN`) dans un champ `statuses` du JSON,
+  validé comme les avis (référence suivie, statut connu, fiche http(s) obligatoire sauf `UNKNOWN`) ;
+  un champ mal formé est rejeté sans bloquer l'enregistrement des avis.
+  - Affiché dans le détail du composant (lien vers la fiche), dans la recherche de la liste, dans
+    l'export Excel (colonne « Statut web ») et par `list_components` (Telegram). Sans avis ni fiche
+    Digi-Key, le lien du composant devient la fiche trouvée sur le web. Effacé dès que Digi-Key
+    retrouve la référence (Digi-Key fait foi).
+  - `NRND`, `LTB` et `OBSOLETE` créent l'avis correspondant, comme un statut Digi-Key : identifié par
+    son intitulé, la même obsolescence citée avec une autre fiche n'est pas un nouvel avis (fiche
+    ajoutée aux sources), une aggravation (NRND → OBSOLETE) en est un.
+  - Une référence que Digi-Key ne trouve plus passe **une fois en priorité** dans le lot de recherche
+    web (comme un statut Digi-Key qui change), puis reprend la rotation normale : le lot ne se fige
+    jamais sur elle, même si l'agent ne rend aucun statut valide.
+
+### Corrigé
+
+- **Composants existants signalés « introuvable chez Digi-Key »** (toute la liste, MPN uniques
+  compris). La fiche exacte `/products/v4/search/{mpn}/productdetails` :
+  - exige l'en-tête `X-DIGIKEY-Account-Id` en OAuth « 2-legged » (documentation v4), jamais envoyé ;
+  - ne reconnaît pas une référence vendue par plusieurs fabricants (1N4148, 2N3904, BC547B, LM358DR…) ;
+  - ne reconnaît pas une référence saisie sans sa ponctuation (« 2N7002215 », « 74HC14D653 »,
+    « BAV99215 » pour les « …,215 » de Nexperia) ;
+  - et tout HTTP 400 y était traduit en « introuvable ».
+  Chaque référence passe désormais par la **recherche par mot-clé** (`/products/v4/search/keyword`,
+  qui n'exige pas d'Account-Id), toujours un seul appel par référence. La fiche retenue est celle du
+  fabricant suivi, au MPN identique de préférence, sinon à la ponctuation près ; le « + » d'une version
+  sans plomb et le point décimal (« SMBJ6.0A » ≠ « SMBJ60A ») restent significatifs. Un MPN trouvé
+  seulement chez d'autres fabricants est signalé « fabricant différent chez Digi-Key (…) ».
+- Un refus de Digi-Key (HTTP 400, 500…) est une erreur affichée qui nomme la référence en cause, plus
+  jamais un « introuvable » silencieux ; une fiche mal formée ne fait plus échouer le passage.
+
+### Modifié
+
+- Prompt des veilles composants : étape « référence inconnue de Digi-Key » et champ `statuses`.
+  Re-rendu au prochain démarrage du conteneur (réconciliation), sans action manuelle.
+- Export Excel : colonne « Statut web » après « Vérifié Digi-Key » (les colonnes suivantes se décalent
+  d'un cran).
+- Test de fumée de l'image : 31 outils MCP attendus.
+
+### Mesures
+
+- Passage Digi-Key de 300 références (200 uniques, 60 multi-fabricants, 40 absentes ; faux Digi-Key
+  à 5 ms par appel) : 301 appels avant comme après ; statuts trouvés 200 → 260, références laissées à
+  l'agent 100 → 40 (avec la vraie API, sans Account-Id, la fiche exacte n'en trouvait aucune). Durée
+  au débit réel inchangée (3,0 min) ; calcul hors latence ≈ 0,55 → 0,62 ms par appel (réponses de
+  recherche plus longues).
+- Mêmes données avant/après : rendu de la liste de 300 composants 7,9 → 8,4 ms (même processus) ;
+  page de la veille ≈ 28–32 ms et export Excel ≈ 85–110 ms, sans écart mesurable (bruit de mesure) ;
+  +0,8 Ko de HTML (carte de réinitialisation).
+
 ## [0.3.7] — 2026-10-10
 
 Avancement d'une analyse composants visible en direct, dans l'interface et sur Telegram.
