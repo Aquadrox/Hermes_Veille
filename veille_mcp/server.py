@@ -125,7 +125,8 @@ def _progress(p: dict | None) -> dict | None:
         lot.setdefault(b["state"], []).append(b["mpn"] + (f" ({b['notices']} avis)" if b.get("notices") else ""))
     return {"summary": p["summary"], "step": p["step"], "running": p["running"], "finished": p["finished"],
             "interrupted": p["interrupted"], "current": p["current"], "minutes": p["minutes"],
-            **({"result": p["result"]} if p["result"] else {}), **({"batch": lot} if lot else {})}
+            **({"result": p["result"]} if p["result"] else {}), **({"batch": lot} if lot else {}),
+            **({"warning": p["warning"]} if p["warning"] else {})}
 
 
 def _summary(row: dict) -> dict:

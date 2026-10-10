@@ -3,6 +3,8 @@ l'agent et finalize ; lu par l'interface (page de la veille, tableau de bord) et
 pour une exécution planifiée."""
 import json
 import os
+import re
+from types import SimpleNamespace
 
 import pytest
 from test_components import FakeClient, cand, finalize, tools, ui, watch  # noqa: F401 - fixtures partagées
@@ -135,19 +137,20 @@ def test_status_only_scan_does_not_touch_a_running_analysis(watch):  # noqa: F81
 
 def test_digikey_writes_are_throttled(watch, monkeypatch):  # noqa: F811
     """Boucle Digi-Key (une référence ≈ 0,6 s) : une écriture par seconde au plus, plus les changements d'étape."""
-    service.add_components(watch.slug, comp.parse_components("\n".join(f"R{i};Fab" for i in range(300))))
+    service.add_components(watch.slug, comp.parse_components("\n".join(f"R{i};Fab" for i in range(7))))
     manual(watch.slug)
+    clock = iter(1000 + 0.6 * i for i in range(1, 100))  # 0,6 s entre deux références
+    monkeypatch.setattr(progress, "time", SimpleNamespace(monotonic=lambda: next(clock)))
     writes = []
     real = store.atomic_write
     monkeypatch.setattr(store, "atomic_write", lambda path, data, mode=0o644: (writes.append(path),
                                                                                real(path, data, mode)))
-    service.components_scan(watch.slug, client=FakeClient({}))  # 303 références, instantanées
-    tracked = [p for p in writes if p.name == progress.FILE]
-    assert 2 <= len(tracked) <= 3  # première référence, (une seconde écoulée), lot du jour
+    service.components_scan(watch.slug, client=FakeClient({}))  # 10 références
+    # références 1, 3, 5, 7, 9 (une seconde écoulée depuis la précédente écriture), puis le lot du jour
+    assert sum(1 for p in writes if p.name == progress.FILE) == 6
 
 
 def test_progress_write_failure_never_breaks_the_run(watch, tools, monkeypatch):  # noqa: F811
-    from types import SimpleNamespace
     manual(watch.slug)
 
     def broken(*a, **k):
@@ -161,11 +164,72 @@ def test_progress_write_failure_never_breaks_the_run(watch, tools, monkeypatch):
     assert state(watch.slug)["step"] == "start"  # rien n'a pu être écrit, rien n'a échoué
 
 
-def test_corrupted_progress_file_is_ignored(watch):  # noqa: F811
-    manual(watch.slug)
-    progress.path(watch.slug).write_text("{pas du json")
-    assert service.run_progress(watch.slug) is None
+@pytest.mark.parametrize("content", [
+    "{pas du json", "[]",
+    '{"v": 0, "log": "LOG", "kind": "analyse", "step": "web"}',  # autre version de l'image
+    '{"v": 1, "log": "LOG", "kind": "analyse", "step": "web", "batch": "x"}',
+    '{"v": 1, "log": "LOG", "kind": "analyse", "step": "web", "batch": [{"mpn": "LM317T", "state": "x"}]}',
+    '{"v": 1, "log": "LOG", "kind": ["x"], "step": "web"}',
+    '{"v": 1, "log": "LOG", "kind": "analyse", "step": "done", "result": {"new": "1"}}',
+])
+def test_malformed_or_other_version_state_is_ignored(watch, ui, tools, content, capsys):  # noqa: F811
+    """Fichier mal formé ou d'une autre version : ignoré partout, jamais une erreur (pages, job, CLI)."""
+    log = manual(watch.slug)
+    progress.path(watch.slug).write_text(content.replace("LOG", log))
+    assert service.run_progress(watch.slug) is None and service.describe(watch)["progress"] is None
     assert service.components_scan(watch.slug, client=FakeClient({}))["track_progress"] is False
+    assert cli.main(["components", "progress", watch.slug, "LM317T"]) == 0
+    assert "aucun lancement suivi" in capsys.readouterr().out
+    assert "OK: veille composants" in finalize(watch, [])
+    client, _ = ui
+    assert client.get("/").status_code == 200
+    assert client.get(f"/veilles/{watch.slug}/runs/{log}", params={"poll": 1}).status_code == 200
+
+
+def test_digikey_stop_is_never_shown_as_a_success(watch, monkeypatch):  # noqa: F811
+    from veille_core import digikey
+    manual(watch.slug, kind="statuts")
+    service.components_scan(watch.slug, client=FakeClient({"LM317T": digikey.DigiKeyError("HTTP 401")}),
+                            plan_batch=False)
+    view = service.run_progress(watch.slug, running=False)
+    assert view["finished"] and view["warning"] == "HTTP 401" and view["summary"] == "Terminé : 0 / 3 référence(s)"
+    manual(watch.slug)  # analyse : budget de temps dépassé, la suite continue avec un avertissement
+    service.components_scan(watch.slug, client=FakeClient({}), budget_s=-1)
+    view = service.run_progress(watch.slug, running=True)
+    assert view["step"] == "web" and "budget de temps" in view["warning"]
+
+
+def test_finalize_rerun_keeps_what_the_first_pass_found(watch, tools, monkeypatch, tmp_path):  # noqa: F811
+    manual(watch.slug)
+    service.components_scan(watch.slug)
+    service.components_progress(watch.slug, ["STM32F103C8T6"])
+    bad = watch.dir / "rapports" / "bad.json"
+    bad.write_text("{pas du json")
+    with pytest.raises(comp.ComponentsError):  # l'agent corrige le JSON et relance
+        service.components_finalize(watch.slug, bad)
+    st = state(watch.slug)
+    assert st["step"] == "finalize" and [b["state"] for b in st["batch"]] == ["done", "done"]
+    good, broken = os.environ["BUILD_REPORT"], tmp_path / "broken_pdf.py"
+    broken.write_text("import sys; sys.exit(1)\n")
+    monkeypatch.setenv("BUILD_REPORT", str(broken))
+    with pytest.raises(service.ServiceError, match="PDF"):  # puis le PDF échoue : il relance encore
+        finalize(watch, [cand(["LM317T"])])
+    monkeypatch.setenv("BUILD_REPORT", good)
+    finalize(watch, [cand(["LM317T"])])  # avis déjà enregistré au passage précédent
+    st = state(watch.slug)
+    assert st["step"] == "done" and st["result"] == {"new": 1, "critical": 1, "rejected": 0}
+    assert [b["notices"] for b in st["batch"]] == [1, 0]
+
+
+def test_finished_run_takes_no_more_writes(watch, tools):  # noqa: F811
+    """Entre la fin de finalize et la fin du processus (réponse de l'agent), une commande tapée à la main
+    ou une exécution planifiée n'écrit plus rien."""
+    manual(watch.slug)
+    service.components_scan(watch.slug)
+    finalize(watch, [])
+    before = state(watch.slug)
+    assert service.components_scan(watch.slug)["track_progress"] is False
+    assert service.components_progress(watch.slug, ["LM317T"]) is False and state(watch.slug) == before
 
 
 def test_cli_progress_is_always_a_success(watch, capsys):  # noqa: F811
@@ -204,7 +268,12 @@ def test_view_steps_and_summaries():
     assert v["current"] == "B2, C3"
     v = progress.view(web, running=False)
     assert v["interrupted"] and v["summary"] == "Interrompu à l'étape 2/3 — Recherche web : 1 / 4 composant(s)"
-    assert [s["state"] for s in v["steps"]] == ["done", "failed", "todo"] and v["minutes"] == 7
+    assert [s["state"] for s in v["steps"]] == ["done", "failed", "todo"]
+    assert v["minutes"] is None  # fin réelle inconnue : pas de durée trompeuse
+    assert progress.view({**base, "step": "done"}, running=False)["minutes"] == 7
+    single = progress.view({**base, "kind": "statuts", "step": "digikey",
+                            "digikey": {"done": 1, "total": 3, "current": "NE555P"}}, True)
+    assert single["summary"] == "Statut Digi-Key : 1 / 3 référence(s) · en cours : NE555P"  # pas d'« étape 1/1 »
     assert progress.view({**base, "step": "start"}, running=False)["summary"] == "Interrompu au démarrage"
     dk_off = progress.view({**base, "kind": "statuts", "step": "done", "digikey": {"skipped": True}}, False)
     assert dk_off["summary"] == "Terminé : clés absentes, étape ignorée" and dk_off["max"] is None
@@ -213,7 +282,7 @@ def test_view_steps_and_summaries():
 
 def test_run_progress_only_for_the_latest_log(watch):  # noqa: F811
     old = manual(watch.slug)
-    assert service.run_progress(watch.slug, old)["log"] == old
+    assert service.run_progress(watch.slug, old) is not None
     newer = "29991231-235959.log"  # lancement suivant (veille thématique, ou non suivi)
     (store.runs_dir(watch.slug) / newer).write_text("")
     assert service.run_progress(watch.slug) is None and service.run_progress(watch.slug, old) is None
@@ -237,8 +306,10 @@ def test_ui_run_log_shows_progress(ui, watch, monkeypatch):  # noqa: F811
     log, running = tracked_run(watch, monkeypatch)
     r = client.get(f"/veilles/{watch.slug}/runs/{log}", params={"poll": 1}).text
     assert "Étape 2/3 — Recherche web : 0 / 2 composant(s) · en cours : LM317T" in r
-    assert '<li class="done">Statut Digi-Key</li><li class="current">Recherche web</li><li class="todo">' in r
-    assert '<progress value="0" max="2">' in r and 'class="searching" title="Texas Instruments — recherche en cours"' in r
+    steps = re.findall(r'<li class="(\w+)">([^<]+)</li>', r[r.index('class="steps"'):])[:3]
+    assert steps == [("done", "Statut Digi-Key"), ("current", "Recherche web"), ("todo", "Rapport et envoi")]
+    assert re.search(r'<progress value="0" max="2"[^>]*aria-label="Avancement"', r)
+    assert 'class="searching" title="Texas Instruments — recherche en cours"' in r
     assert "style=" not in r and "<script" not in r  # CSP : ni style ni script en ligne
     assert '<pre class="log">' not in r  # journal encore vide : l'avancement suffit
     running["pid"] = None  # fin sans finalize : on montre où le lancement s'est arrêté
@@ -259,9 +330,11 @@ def test_ui_dashboard_row_polls_only_while_running(ui, watch, monkeypatch):  # n
     assert r.status_code == 200 and r.text.strip().startswith(f'<tr id="row-{watch.slug}" hx-get=')
     running["pid"] = None
     r = client.get(f"/veilles/{watch.slug}/row").text
-    assert "hx-trigger" not in r.split(">")[0] and "Étape 2/3" not in r and ">\n      actif\n" in r
+    assert "hx-trigger" not in r.split(">")[0] and "Étape 2/3" not in r
+    assert re.search(r'class="badge ok">\s*actif\s*</span>', r)
     service.archive(watch.slug)
-    assert client.get(f"/veilles/{watch.slug}/row").status_code == 286  # htmx arrête d'interroger
+    r = client.get(f"/veilles/{watch.slug}/row")
+    assert r.status_code == 286 and r.text == ""  # htmx retire la ligne et arrête d'interroger
 
 
 def test_ui_thematic_run_shows_no_progress(ui, monkeypatch, tools):  # noqa: F811

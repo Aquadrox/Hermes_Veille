@@ -126,6 +126,7 @@ input[type=file] { width: auto; max-width: 100%; }
 .progress { border-left: 3px solid var(--run); padding: .1rem 0 .1rem .75rem; margin: .5rem 0 .75rem; }
 .progress.failed { border-left-color: var(--bad); }
 .progress.done { border-left-color: var(--ok); }
+.progress.warned { border-left-color: var(--warn); }
 .progress p { margin: .2rem 0; }
 .progress .elapsed { white-space: nowrap; }
 progress { display: block; width: 100%; max-width: 32rem; height: .5rem; margin: .3rem 0; accent-color: var(--run); }

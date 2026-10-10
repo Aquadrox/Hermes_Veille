@@ -11,6 +11,8 @@
 #   4. crée la veille par défaut sur une installation neuve (une seule fois)
 #   5. réconcilie chaque veille avec son job cron (prompt re-rendu, job recréé
 #      s'il a disparu) — c'est ce qui propage une mise à jour de l'image.
+#   6. oublie les lancements manuels du démarrage précédent (`runs/.running`) :
+#      leurs processus n'existent plus, et leur PID pourrait être réattribué.
 #
 # IMPORTANT : tout est exécuté EN TANT QUE hermes (sinon les fichiers créés
 # appartiennent à root et les écritures suivantes échouent en permission).
@@ -68,6 +70,9 @@ as_hermes "$VEILLECTL" bootstrap 2>&1 | sed 's/^/[seed-veille] bootstrap: /'
 
 # --- 5. Réconciliation ---
 as_hermes "$VEILLECTL" reconcile 2>&1 | sed 's/^/[seed-veille] reconcile: /'
+
+# --- 6. Lancements manuels interrompus par le redémarrage ---
+find "$VEILLES_DIR" -mindepth 3 -maxdepth 3 -path '*/runs/.running' -type f -delete 2>/dev/null || true
 
 log "veilles :"
 as_hermes "$VEILLECTL" list 2>&1 | sed 's/^/  /'

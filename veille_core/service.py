@@ -380,22 +380,28 @@ def running_pid(slug: str) -> int | None:
     return pid
 
 
+def _current_state(slug: str) -> dict | None:
+    """Avancement du DERNIER lancement manuel ; None : absent, illisible, ou d'un lancement plus ancien."""
+    state = progress.read(slug)
+    latest = store.list_run_logs(slug, 1)
+    return state if state and latest and state["log"] == latest[0] else None
+
+
 def run_progress(slug: str, log: str | None = None, running: bool | None = None) -> dict | None:
     """Avancement du dernier lancement manuel (vue commune interface / MCP) ; None s'il n'est pas suivi.
     `log` : seulement si c'est ce journal-là ; `running` : déjà connu de l'appelant."""
-    state = progress.read(slug)
-    latest = store.list_run_logs(slug, 1)
-    if not state or not latest or state.get("log") != latest[0] or log not in (None, latest[0]):
+    state = _current_state(slug)
+    if state is None or log not in (None, state["log"]):
         return None
     return progress.view(state, running_pid(slug) is not None if running is None else running)
 
 
 def _tracker(slug: str, kind: str) -> progress.Tracker | None:
     """Suivi du lancement manuel EN COURS de ce type (interface, Telegram), sinon None : une exécution
-    planifiée ou une commande tapée à la main n'écrit rien, personne ne la regarde."""
-    state = progress.read(slug)
-    if not state or state.get("kind") != kind or state.get("log") not in store.list_run_logs(slug, 1) \
-            or running_pid(slug) is None:
+    planifiée ou une commande tapée à la main n'écrit rien, personne ne la regarde ; un lancement terminé
+    (étape « done ») non plus."""
+    state = _current_state(slug)
+    if state is None or state["kind"] != kind or state["step"] == "done" or running_pid(slug) is None:
         return None
     return progress.Tracker(slug, state)
 
@@ -593,7 +599,8 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
             except digikey.DigiKeyError as exc:
                 info["error"] = str(exc)
                 break
-        dk_progress = {"done": len(results), "total": len(todo)}
+        note = info.get("error") or info.get("stopped")  # arrêt : affiché, jamais pris pour un succès
+        dk_progress = {"done": len(results), "total": len(todo), **({"note": note[:200]} if note else {})}
     with _locked():
         v = _components_veille(slug)
         data, notices = comp.load_components(slug), comp.load_notices(slug)
@@ -831,6 +838,8 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
     v = _components_veille(slug)
     track = _tracker(slug, "analyse")
     if track:
+        for b in track.state.get("batch", []):
+            b["state"] = "done"  # recherche web terminée
         track.update(step="finalize", phase="notices")
     try:
         if candidates.stat().st_size > comp.MAX_CANDIDATES_BYTES:
@@ -856,11 +865,14 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         linked = [x.slug for x in _linked_veilles(slug)]
     audit(actor, "components-finalize", slug, f"{len(new)} nouvel(s) avis, {len(rejected)} rejet(s)")
     critical = sum(1 for n in new if n["type"] in comp.CRITICAL)
-    if track:
+    if track:  # cumulés : finalize relancé après un échec (PDF, e-mail) garde les avis du premier passage
         found = Counter(n["key"] for n in new)
         for b in track.state.get("batch", []):
-            b.update(state="done", notices=found[comp.key_of(b["mpn"], b["manufacturer"])])
-        track.update(phase="pdf", result={"new": len(new), "critical": critical, "rejected": len(rejected)})
+            b["notices"] = b.get("notices", 0) + found[comp.key_of(b["mpn"], b["manufacturer"])]
+        prev = track.state.get("result") or {}
+        track.update(phase="pdf", result={"new": prev.get("new", 0) + len(new),
+                                          "critical": prev.get("critical", 0) + critical,
+                                          "rejected": len(rejected)})
 
     report = comp.pending(notices, "report", {day})
     view = comp.digest(data["components"], notices, report)

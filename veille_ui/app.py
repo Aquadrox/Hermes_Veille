@@ -329,8 +329,8 @@ def create_app() -> FastAPI:
         """Ligne du tableau de bord, ré-interrogée pendant un lancement (avancement, puis état final)."""
         try:
             return row_response(request, slug)
-        except StoreError:  # veille archivée entre-temps : 286, htmx arrête d'interroger
-            return PlainTextResponse("veille introuvable", status_code=286)
+        except StoreError:  # veille archivée entre-temps : 286 vide, htmx retire la ligne et arrête d'interroger
+            return Response(status_code=286)
 
     # -------------------------------------------------------------- création / édition
     def form_page(request: Request, values: dict, status_code: int = 200, /, **ctx):

@@ -19,7 +19,7 @@
     </span>
     {% set p = row.progress %}{% if p %}
     <div class="small">{{ p.summary }}</div>
-    {% if p.max %}<progress value="{{ p.value }}" max="{{ p.max }}">{{ p.value }} / {{ p.max }}</progress>{% endif %}
+    {% if p.max %}<progress value="{{ p.value }}" max="{{ p.max }}" aria-label="Avancement">{{ p.value }} / {{ p.max }}</progress>{% endif %}
     {% endif %}
   </td>
   <td data-label="Prochain run">{{ st.next_run_at|dt }}</td>

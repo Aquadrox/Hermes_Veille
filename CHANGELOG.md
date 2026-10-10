@@ -29,15 +29,26 @@ Avancement d'une analyse composants visible en direct, dans l'interface et sur T
     **uniquement lors d'un lancement manuel** (`track_progress` dans la sortie du scan). Une exécution
     planifiée n'écrit rien et ne coûte aucun appel de plus. Le prompt des veilles composants est re-rendu
     au prochain démarrage du conteneur (réconciliation), sans action manuelle.
+  - Passage Digi-Key arrêté (erreur de l'API, budget de temps atteint) : signalé en orange, jamais
+    affiché comme un succès. Relance de `finalize` après un échec (PDF, e-mail) : les avis trouvés au
+    premier passage restent comptés.
   - État dans `runs/.progress.json` (écriture atomique, une par seconde au plus pendant le passage
-    Digi-Key). Confort d'affichage : une écriture qui échoue est ignorée, l'analyse continue.
+    Digi-Key, format versionné). Confort d'affichage : une écriture qui échoue, ou un fichier mal formé
+    ou d'une autre version, est ignoré ; l'analyse continue.
+
+### Corrigé
+
+- Après un redémarrage du conteneur, un lancement manuel interrompu n'est plus considéré « en cours »
+  si son numéro de processus a été réattribué : l'amorçage oublie les `runs/.running` du démarrage
+  précédent.
 
 ### Mesures
 
 - Passage Digi-Key de 300 références : 2 à 3 écritures de l'état (≈ 0,4 ms chacune), durée inchangée
   (1,57 s avec un faux Digi-Key à 5 ms par appel, avant comme après).
-- Suivi du journal toutes les 5 s : 4,6 → 4,7 ms côté serveur, 230 → 631 octets compressés (lot de 40).
-- Ligne du tableau de bord : 6,6 ms, 1,4 Ko, toutes les 10 s pendant un lancement seulement.
+- Suivi du journal toutes les 5 s : ≈ +0,8 ms côté serveur (4,2–4,6 → 4,7–5,9 ms), 230 → 649 octets
+  compressés (lot de 40) ; page de la veille et tableau de bord inchangés (≈ 20 ms et ≈ 7 ms).
+- Ligne du tableau de bord : ≈ 7 ms, 1,5 Ko, toutes les 10 s pendant un lancement seulement.
 - Telegram : réponse de `get_run_log` compacte (1,1 Ko pour un lot de 40, au lieu de 3,5 Ko en détail).
 - Signal de l'agent : commande de ≈ 0,15 s, un appel par groupe de recherches (fabricant).
 

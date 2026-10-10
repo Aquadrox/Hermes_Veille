@@ -4,7 +4,8 @@
 (`veillectl components scan | progress | finalize`) ; lu par l'interface et le MCP. Une exécution
 planifiée n'écrit rien : personne ne la regarde (voir `service._tracker`).
 
-Confort d'affichage seulement : une écriture qui échoue est ignorée, l'exécution continue.
+Confort d'affichage seulement : une écriture qui échoue est ignorée, un fichier d'une autre version
+ou mal formé est ignoré ; l'exécution continue.
 """
 from __future__ import annotations
 
@@ -16,16 +17,31 @@ from . import store
 from .components import norm_mpn
 
 FILE = ".progress.json"
+SCHEMA = 1  # format du fichier : un autre (mise à jour de l'image en cours de lancement) est ignoré
 MIN_INTERVAL_S = 1.0  # boucle Digi-Key (≈ 0,6 s par référence) : une écriture par seconde au plus
 STEPS = {  # étapes affichées, par type de lancement
     "analyse": (("digikey", "Statut Digi-Key"), ("web", "Recherche web"), ("finalize", "Rapport et envoi")),
     "statuts": (("digikey", "Statut Digi-Key"),),
 }
 PHASES = {"notices": "enregistrement des avis", "pdf": "rapport PDF", "mail": "envoi de l'e-mail"}
+CHIP_STATES = ("pending", "searching", "done")
 
 
 def path(slug: str):
     return store.runs_dir(slug) / FILE
+
+
+def _valid(data) -> bool:
+    """Forme attendue par les écrivains et par `view` (rien d'autre n'est lu)."""
+    if not isinstance(data, dict) or data.get("v") != SCHEMA \
+            or not all(isinstance(data.get(k), str) for k in ("log", "kind", "step")) or data["kind"] not in STEPS:
+        return False
+    batch, result = data.get("batch", []), data.get("result", {})
+    return (isinstance(data.get("digikey", {}), dict) and isinstance(data.get("phase", ""), str)
+            and isinstance(result, dict) and all(isinstance(n, int) for n in result.values())
+            and isinstance(batch, list)
+            and all(isinstance(b, dict) and isinstance(b.get("mpn"), str) and isinstance(b.get("manufacturer"), str)
+                    and b.get("state") in CHIP_STATES and isinstance(b.get("notices", 0), int) for b in batch))
 
 
 def read(slug: str) -> dict | None:
@@ -33,7 +49,7 @@ def read(slug: str) -> dict | None:
         data = json.loads(path(slug).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
+    return data if _valid(data) else None
 
 
 class Tracker:
@@ -43,7 +59,7 @@ class Tracker:
     """
 
     def __init__(self, slug: str, state: dict):
-        self.slug, self.state, self._last = slug, state, 0.0
+        self.slug, self.state, self._last = slug, state, float("-inf")  # première écriture : immédiate
 
     def update(self, throttle: bool = False, **changes) -> None:
         self.state.update(changes)
@@ -70,7 +86,7 @@ class Tracker:
 
 
 def start(slug: str, log: str, kind: str) -> None:
-    Tracker(slug, {"log": log, "kind": kind, "started_at": store.now_iso(), "step": "start"}).update()
+    Tracker(slug, {"v": SCHEMA, "log": log, "kind": kind, "started_at": store.now_iso(), "step": "start"}).update()
 
 
 def _minutes(since: str | None, until: str | None = None) -> int | None:
@@ -116,6 +132,8 @@ def view(state: dict, running: bool) -> dict:
     if not running:  # recherche interrompue : pas faite
         batch = [{**b, "state": "pending"} if b["state"] == "searching" else b for b in batch]
     result = state.get("result") or {}
+    # Passage Digi-Key arrêté (erreur de l'API, budget de temps) : signalé, jamais affiché comme un succès.
+    warning = (state.get("digikey") or {}).get("note") or ""
     if finished:
         summary = "Terminé"
         if "new" in result:
@@ -127,15 +145,21 @@ def view(state: dict, running: bool) -> dict:
     elif current < 0:
         summary = "Démarrage…" if running else "Interrompu au démarrage"
     else:
-        label = f"étape {current + 1}/{len(ids)} — {steps_def[current][1]}"
-        summary = (f"Interrompu à l'{label}" if interrupted else f"É{label[1:]}") + (f" : {detail}" if detail else "")
+        name = steps_def[current][1]
+        if len(ids) == 1:  # pas de « étape 1/1 »
+            summary = f"Interrompu — {name}" if interrupted else name
+        elif interrupted:
+            summary = f"Interrompu à l'étape {current + 1}/{len(ids)} — {name}"
+        else:
+            summary = f"Étape {current + 1}/{len(ids)} — {name}"
+        if detail:
+            summary += f" : {detail}"
         if doing and running:
             summary += f" · en cours : {doing}"
+    # Durée réelle : jusqu'à maintenant (en cours) ou jusqu'à la fin ; inconnue si interrompu.
+    minutes = None if interrupted else _minutes(state.get("started_at"), state.get("updated_at") if finished else None)
     return {
-        "log": state.get("log"), "kind": state.get("kind"), "step": step, "steps": steps,
-        "running": running, "finished": finished, "interrupted": interrupted,
+        "step": step, "steps": steps, "running": running, "finished": finished, "interrupted": interrupted,
         "value": value, "max": maximum or None, "current": doing if running else "",
-        "batch": batch, "result": result,
-        "minutes": _minutes(state.get("started_at"), None if running else state.get("updated_at")),
-        "summary": summary,
+        "batch": batch, "result": result, "warning": warning, "minutes": minutes, "summary": summary,
     }
