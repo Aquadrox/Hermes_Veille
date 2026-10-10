@@ -18,7 +18,8 @@ import hashlib
 import html
 import json
 import re
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from pathlib import Path
+from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urlsplit, urlunsplit
 
 from . import store
 
@@ -48,6 +49,11 @@ WEB_STATUSES = {"ACTIVE": "Actif", "NRND": TYPES["NRND"][0], "LTB": TYPES["LTB"]
 # Origines des avis tirés d'un statut de cycle de vie : identifiés par leur intitulé, pas par leur lien
 # (le même statut cité avec une autre fiche n'est pas un nouvel avis).
 STATUS_ORIGINS = ("digikey", "statut-web")
+# Repli d'une référence introuvable (Digi-Key puis recherche web) : alldatasheet.com mène au fabricant (son
+# « Direct Link »). Miroir de fiches techniques : il ne fait JAMAIS foi pour un statut ni pour un avis.
+ALLDATASHEET_SEARCH = "https://www.alldatasheet.com/view.jsp?Searchword="
+# Ses domaines : alldatasheet.com, .net, .es, .co.kr…, alldatasheetde.com, et leurs sous-domaines (html., pdf1.…).
+_ALLDATASHEET_HOST = re.compile(r"(?:[a-z0-9-]+\.)*alldatasheet[a-z]{0,2}\.(?:co\.)?[a-z]{2,3}")
 SCOPES = ("référence", "gamme")
 HEADER_WORDS = {"mpn", "référence", "reference", "ref", "partnumber", "manufacturerpartnumber", "fabricant",
                 "manufacturer", "mfr", "brand", "marque"}
@@ -192,17 +198,26 @@ def reset_state(components: list[dict]) -> list[dict]:
 # --------------------------------------------------------------------------
 # Fichiers (écriture atomique ; un fichier corrompu est une ERREUR, jamais une liste vide)
 # --------------------------------------------------------------------------
-def _load(slug: str, name: str) -> dict:
-    path = store.veille_dir(slug) / name
+def _read(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as exc:
-        raise ComponentsError(f"{name} illisible ({exc}) : corriger ou restaurer le fichier") from None
+        raise ComponentsError(f"{path.name} illisible ({exc}) : corriger ou restaurer le fichier") from None
     if not isinstance(data, dict):
-        raise ComponentsError(f"{name} illisible (objet JSON attendu)")
+        raise ComponentsError(f"{path.name} illisible (objet JSON attendu)")
     return data
+
+
+def _load(slug: str, name: str) -> dict:
+    return _read(store.veille_dir(slug) / name)
+
+
+def read_state(directory: Path) -> tuple[list[dict], list[dict]]:
+    """(références, avis) du dossier d'une veille, active ou archivée (base des composants)."""
+    return (_read(directory / "components.json").get("components") or [],
+            _read(directory / "notices.json").get("notices") or [])
 
 
 def _save(slug: str, name: str, data: dict) -> None:
@@ -243,6 +258,15 @@ def normalize_url(url: str) -> str | None:
                        if not k.lower().startswith("utm_")])
     path = parts.path.rstrip("/") or ""
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, query, ""))
+
+
+def is_alldatasheet(url: str | None) -> bool:
+    return bool(url) and bool(_ALLDATASHEET_HOST.fullmatch(urlsplit(url).hostname or ""))
+
+
+def alldatasheet_url(mpn: str) -> str:
+    """Page de recherche alldatasheet d'une référence (MPN encodé : « # », « + », « / » sont permis)."""
+    return ALLDATASHEET_SEARCH + quote_plus(mpn)
 
 
 def _text(value, field: str) -> str:
@@ -298,15 +322,18 @@ def validate_candidates(raw, components: list[dict]) -> tuple[list[dict], list[s
         if not isinstance(raw_sources, list) or not isinstance(mpns, list):
             rejected.append(f"#{i} : « sources » et « mpns » doivent être des listes")
             continue
-        sources, seen_urls = [], set()
+        sources, seen_urls, mirror = [], set(), False
         for s in raw_sources:
             url = normalize_url(s.get("url") if isinstance(s, dict) else s)
-            if url and url not in seen_urls:
+            if is_alldatasheet(url):  # miroir de fiches techniques : jamais la preuve d'un avis
+                mirror = True
+            elif url and url not in seen_urls:
                 seen_urls.add(url)
                 label = _text(s.get("label"), "label") if isinstance(s, dict) else ""
                 sources.append({"url": url, "label": label or urlsplit(url).hostname})
         if not sources:
-            rejected.append(f"#{i} : aucune source http(s) valide")
+            rejected.append(f"#{i} : " + ("alldatasheet n'est jamais une source d'avis : lien du fabricant attendu"
+                                          if mirror else "aucune source http(s) valide"))
             continue
         manufacturer = _text(item.get("manufacturer"), "label")
         matched = []
@@ -339,8 +366,12 @@ def validate_candidates(raw, components: list[dict]) -> tuple[list[dict], list[s
 
 def validate_statuses(raw, components: list[dict]) -> tuple[dict[str, dict], list[str]]:
     """{"statuses": [...]} de l'agent (cycle de vie des références inconnues de Digi-Key) -> ({clé: {"status",
-    "url"}}, rejets). Même rigueur que les avis : référence suivie, statut connu, fiche http(s) obligatoire
-    sauf pour UNKNOWN (aucune fiche trouvée). Champ facultatif : absent, rien à valider."""
+    "url"[, "datasheet", "maker"]}}, rejets). Même rigueur que les avis : référence suivie, statut connu, fiche
+    http(s) obligatoire sauf pour UNKNOWN (aucune fiche trouvée). Champ facultatif : absent, rien à valider.
+
+    Repli alldatasheet : `datasheet` (page alldatasheet consultée) et `maker` (site du fabricant atteint par
+    son « Direct Link ») sont facultatifs. Une fiche alldatasheet ne fait jamais foi pour un statut : seule
+    une référence UNKNOWN peut la citer (elle devient alors `datasheet`)."""
     items = raw.get("statuses") if isinstance(raw, dict) else None
     if items is None:
         return {}, []
@@ -353,16 +384,24 @@ def validate_statuses(raw, components: list[dict]) -> tuple[dict[str, dict], lis
             rejected.append(f"statut #{i} : objet attendu")
             continue
         status = _text(item.get("status"), "label").upper()
-        url = normalize_url(item.get("url")) if item.get("url") else None
+        url, datasheet, maker = (normalize_url(item.get(f)) if item.get(f) else None
+                                 for f in ("url", "datasheet", "maker"))
         c = match(item.get("mpn"), _text(item.get("manufacturer"), "label"))
+        if status == "UNKNOWN" and is_alldatasheet(url):
+            url, datasheet = None, datasheet or url
         if status not in WEB_STATUSES:
             rejected.append(f"statut #{i} : statut inconnu « {status[:20]} »")
+        elif is_alldatasheet(url):
+            rejected.append(f"statut #{i} : alldatasheet ne fait pas foi pour un statut (fiche du fabricant attendue)")
         elif not url and status != "UNKNOWN":
             rejected.append(f"statut #{i} : aucune fiche http(s) valide")
         elif c is None:
             rejected.append(f"statut #{i} : aucune référence suivie ({_text(item.get('mpn'), 'label')[:64]})")
         else:
-            found[key_of(c["mpn"], c["manufacturer"])] = {"status": status, "url": url}
+            found[key_of(c["mpn"], c["manufacturer"])] = {
+                "status": status, "url": url,
+                **({"datasheet": datasheet} if is_alldatasheet(datasheet) else {}),
+                **({"maker": maker} if maker and not is_alldatasheet(maker) else {})}
     if len(items) > MAX_CANDIDATES:
         rejected.append(f"{len(items) - MAX_CANDIDATES} statut(s) au-delà de la limite de {MAX_CANDIDATES}")
     return found, rejected
@@ -383,7 +422,8 @@ def apply_statuses(components: list[dict], statuses: dict[str, dict], day: str) 
         s = statuses.get(key_of(c["mpn"], c["manufacturer"]))
         if s is None:
             continue
-        c["web_status"] = {**s, "checked_at": day}
+        maker = s.get("maker") or (c.get("web_status") or {}).get("maker")  # site du fabricant : gardé
+        c["web_status"] = {**s, **({"maker": maker} if maker else {}), "checked_at": day}
         if s["status"] in TYPES:
             out.append(status_notice(c, s["status"], f"Statut constaté sur le web : {WEB_STATUSES[s['status']]}",
                                      s["url"], urlsplit(s["url"]).hostname, "statut-web"))
@@ -414,7 +454,8 @@ def merge(notices: list[dict], candidates: list[dict], found_at: str | None = No
     """Ajoute les candidats inconnus à `notices` (en place) et les renvoie.
 
     Un candidat déjà connu (même composant ET même numéro d'avis ou même URL) n'est pas
-    signalé à nouveau : ses nouvelles sources et les champs vides sont complétés.
+    signalé à nouveau : ses nouvelles sources et les champs vides sont complétés. Un candidat repris
+    de la base des composants garde sa date de détection d'origine (`found_at`), sauf `found_at` imposé.
     """
     index: dict[tuple[str, str], dict] = {}
     for n in notices:
@@ -432,7 +473,7 @@ def merge(notices: list[dict], candidates: list[dict], found_at: str | None = No
             for ident in _identities(known):
                 index[ident] = known
             continue
-        n = {**c, "id": notice_id(c), "found_at": found_at or today(), "delivered": {}}
+        n = {**c, "id": notice_id(c), "found_at": found_at or c.get("found_at") or today(), "delivered": {}}
         notices.append(n)
         new.append(n)
         for ident in _identities(n):
@@ -526,6 +567,12 @@ def badge_class(ntype: str) -> str:
 def anchor(key: str) -> str:
     """Identifiant HTML / pandoc sûr d'un composant (la clé contient « | » et du texte libre)."""
     return "c-" + hashlib.sha1(key.encode()).hexdigest()[:10]
+
+
+def web_status_label(web: dict) -> str:
+    """Libellé du statut web d'un composant, « (alldatasheet) » s'il a fallu ce repli pour l'établir."""
+    label = WEB_STATUSES.get(web.get("status"), "")
+    return f"{label} (alldatasheet)" if label and web.get("datasheet") else label
 
 
 def _status_link(dk: dict, web: dict) -> dict | None:
@@ -827,7 +874,7 @@ def to_xlsx(components: list[dict], notices: list[dict]) -> bytes:
         values = (r["mpn"], r["manufacturer"], r["ref"], "Oui" if r["critical"] else "",
                   ", ".join(TYPES[t][0] for t in r["types"]), r["worst"]["title"] if r["worst"] else "",
                   r["deadline"], r["found"], dk.get("status") or dk.get("error"), dk.get("checked_at"),
-                  WEB_STATUSES.get(r["web"].get("status"), ""), r["web_checked_at"], url,
+                  web_status_label(r["web"]), r["web_checked_at"], url,
                   "" if r["tracked"] else "retiré")
         for col, value in enumerate(values, 1):
             cell = ws.cell(n, col, _xlsx_cell(value, col in _XLSX_DATES))

@@ -2,6 +2,7 @@
 
 Exécuté si Playwright et Chromium sont disponibles (poste de développement), sauté sinon.
 """
+import contextlib
 import os
 import socket
 import threading
@@ -24,8 +25,10 @@ def _chromium():
     return None
 
 
-@pytest.fixture
-def page(watch, monkeypatch):  # noqa: F811
+@contextlib.contextmanager
+def _browser(monkeypatch, start: str, **context):
+    """Serveur de l'interface (thread) + Chromium connecté ; page ouverte sur `start`. À la fin : aucune erreur
+    JS ni violation CSP. `context` : options du contexte (viewport mobile par défaut, tactile…)."""
     from veille_ui import auth
     monkeypatch.setenv("VEILLE_UI_PASSWORD_HASH", auth.hash_password(PASSWORD))
     monkeypatch.setenv("VEILLE_UI_SECRET", "s" * 64)
@@ -50,7 +53,7 @@ def page(watch, monkeypatch):  # noqa: F811
             except Exception as exc:  # noqa: BLE001 - navigateur absent : test sauté
                 pytest.skip(f"Chromium indisponible : {exc}")
             try:
-                pg = browser.new_page(viewport={"width": 390, "height": 844})  # PWA mobile
+                pg = browser.new_context(**{"viewport": {"width": 390, "height": 844}, **context}).new_page()  # PWA mobile
                 errors = []
                 pg.on("pageerror", lambda e: errors.append(str(e)))
                 pg.on("console", lambda m: errors.append(m.text) if m.type == "error" and not m.text.startswith(
@@ -59,13 +62,19 @@ def page(watch, monkeypatch):  # noqa: F811
                 pg.goto(base + "/login")
                 pg.fill("input[name=password]", PASSWORD)
                 pg.click("button")
-                pg.goto(f"{base}/veilles/{watch.slug}")
+                pg.goto(base + start)
                 yield pg
                 assert errors == []  # aucune erreur JS ni violation CSP
             finally:
                 browser.close()
     finally:
         server.should_exit = True
+
+
+@pytest.fixture
+def page(watch, monkeypatch):  # noqa: F811
+    with _browser(monkeypatch, f"/veilles/{watch.slug}") as pg:
+        yield pg
 
 
 def _visible(pg, expected: list[str] | None = None) -> list[str]:
@@ -288,3 +297,141 @@ def test_reset_search_mobile(data, watch, page):  # noqa: F811
     pg.wait_for_url("**?ok=reset", timeout=10_000)
     assert "Recherche réinitialisée" in pg.text_content(".flash") and comp.load_notices(watch.slug) == []
     assert pg.text_content("#comp-count") == "3 / 3"  # la liste des composants reste
+
+
+# --------------------------------------------------------------------------
+# Destinataires : puces, carnet d'adresses, glisser-déposer (tactile réel et souris)
+# --------------------------------------------------------------------------
+BOOK = ["achats@example.org", "jean.dupont@example.org", "marie.curie@labo.example", "rssi@example.org"]
+
+
+@pytest.fixture
+def form(env, monkeypatch):
+    """Formulaire de création, PWA mobile TACTILE, carnet d'adresses rempli."""
+    from veille_core import contacts
+    contacts.remember(BOOK)
+    with _browser(monkeypatch, "/veilles/new", has_touch=True, is_mobile=True) as pg:
+        yield pg
+
+
+def _recipients(pg) -> list[str]:
+    """Champ réellement envoyé (zone de texte masquée, tenue à jour par app.js)."""
+    return [a for a in pg.input_value("textarea[name=recipients]").split("\n") if a]
+
+
+def _book(pg) -> list[str]:
+    return pg.eval_on_selector_all("[data-book] li:not([hidden]) [data-email]", "els => els.map(e => e.dataset.email)")
+
+
+def _center(pg, selector: str) -> tuple[float, float]:
+    b = pg.locator(selector).bounding_box()
+    return b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+
+
+def _touch_drag(pg, source: str, target: str, hold_ms: int = 500) -> None:
+    """Glisser au doigt avec de vrais événements tactiles (CDP) : appui de `hold_ms` sur `source`, déplacement,
+    relâché sur `target`. hold_ms = 0 : balayage (défilement)."""
+    cdp = pg.context.new_cdp_session(pg)
+
+    def touch(kind, x=0.0, y=0.0):
+        cdp.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": [] if kind == "touchEnd" else [{"x": x, "y": y}]})
+    (x, y), (tx, ty) = _center(pg, source), _center(pg, target)
+    touch("touchStart", x, y)
+    pg.wait_for_timeout(hold_ms)
+    for i in range(1, 11):
+        touch("touchMove", x + (tx - x) * i / 10, y + (ty - y) * i / 10)
+        pg.wait_for_timeout(15)
+    touch("touchEnd")
+    pg.wait_for_timeout(100)
+
+
+def test_recipients_widget_tap_keyboard_and_submit(form):
+    """Saisie mobile : autocomplétion sur le carnet, toucher pour ajouter, séparateurs et collage, adresse
+    invalide refusée, retrait (× et Retour arrière) ; la veille créée a exactement ces destinataires."""
+    from veille_core import contacts, store
+    pg = form
+    assert not pg.is_visible("textarea[name=recipients]") and pg.is_visible(".rcpt-input")
+    assert sorted(_book(pg)) == sorted(BOOK)
+    pg.fill(".rcpt-input", "DUPONT")  # recherche sans casse
+    assert _book(pg) == ["jean.dupont@example.org"]
+    pg.press(".rcpt-input", "Enter")  # première suggestion ; jamais l'envoi du formulaire
+    assert _recipients(pg) == ["jean.dupont@example.org"] and pg.input_value(".rcpt-input") == ""
+    assert "jean.dupont@example.org" not in _book(pg)  # déjà destinataire : plus proposée
+    pg.tap("[data-book] [data-email='marie.curie@labo.example']")
+    pg.fill(".rcpt-input", "nouveau@example.org,")  # séparateur : puce créée
+    pg.fill(".rcpt-input", "a@example.org; b@example.org ")  # collage de plusieurs adresses
+    assert _recipients(pg) == ["jean.dupont@example.org", "marie.curie@labo.example", "nouveau@example.org",
+                               "a@example.org", "b@example.org"]
+    pg.fill(".rcpt-input", "pas-une-adresse")
+    pg.press(".rcpt-input", "Enter")
+    assert "Adresse invalide : pas-une-adresse" in pg.text_content(".rcpt-msg")
+    assert pg.input_value(".rcpt-input") == "pas-une-adresse" and len(_recipients(pg)) == 5
+    pg.fill(".rcpt-input", "")
+    pg.press(".rcpt-input", "Backspace")  # champ vide : retire la dernière
+    pg.tap(".rcpt-list [aria-label='Retirer nouveau@example.org']")
+    assert _recipients(pg) == ["jean.dupont@example.org", "marie.curie@labo.example", "a@example.org"]
+    assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    pg.fill("input[name=name]", "Veille Destinataires")
+    pg.fill(".rcpt-input", "z@example.org")  # tapée sans Entrée : prise en compte à l'envoi
+    pg.click("button.primary")
+    pg.wait_for_url("**/veilles/veille-destinataires?ok=created")
+    assert store.read_recipients("veille-destinataires") == [
+        "jean.dupont@example.org", "marie.curie@labo.example", "a@example.org", "z@example.org"]
+    assert {"a@example.org", "z@example.org"} <= set(contacts.all_addresses())  # carnet enrichi
+
+
+def test_recipients_drag_and_drop_touch(form):
+    """Glisser-déposer au doigt (PWA) : appui long carnet -> destinataires, puis l'inverse ; un balayage rapide
+    fait défiler la page sans rien ajouter."""
+    pg = form
+    pg.locator("[data-recipients]").scroll_into_view_if_needed()
+    _touch_drag(pg, "[data-book] [data-email='rssi@example.org']", ".rcpt-box")
+    assert _recipients(pg) == ["rssi@example.org"] and pg.locator(".rcpt-ghost").count() == 0
+    before = pg.evaluate("scrollY")
+    _touch_drag(pg, "[data-book] [data-email='achats@example.org']", ".rcpt-box", hold_ms=0)
+    assert _recipients(pg) == ["rssi@example.org"] and pg.evaluate("scrollY") != before  # défilement
+    pg.locator("[data-recipients]").scroll_into_view_if_needed()
+    _touch_drag(pg, ".rcpt-list [data-email='rssi@example.org'] span", "[data-book]")
+    assert _recipients(pg) == [] and "rssi@example.org" in _book(pg)
+
+
+def test_recipients_drag_and_drop_mouse_and_errors(env, monkeypatch):
+    """Bureau : glisser à la souris (sans double ajout par le clic qui suit) ; envoi sans destinataire bloqué
+    côté client ; adresse invalide renvoyée par le serveur signalée en rouge, saisie conservée."""
+    from veille_core import contacts
+    contacts.remember(BOOK)
+    with _browser(monkeypatch, "/veilles/new", viewport={"width": 1280, "height": 900}) as pg:
+        (x, y), (tx, ty) = _center(pg, "[data-book] [data-email='achats@example.org']"), _center(pg, ".rcpt-box")
+        pg.mouse.move(x, y)
+        pg.mouse.down()
+        pg.mouse.move(tx, ty, steps=8)
+        assert pg.locator(".rcpt-box.rcpt-over").count() == 1  # zone cible signalée
+        pg.mouse.up()
+        assert _recipients(pg) == ["achats@example.org"]
+        pg.click("[data-book] [data-email='rssi@example.org']")  # clic simple : ajout
+        assert _recipients(pg) == ["achats@example.org", "rssi@example.org"]
+        pg.click(".rcpt-list [aria-label='Retirer achats@example.org']")
+        pg.click(".rcpt-list [aria-label='Retirer rssi@example.org']")
+        pg.fill("input[name=name]", "Veille Vide")
+        pg.click("button.primary")
+        pg.wait_for_timeout(300)
+        assert pg.url.endswith("/veilles/new") and pg.evaluate(
+            "document.querySelector('.rcpt-input').validationMessage") == "Au moins un destinataire est requis."
+        pg.fill(".rcpt-input", "ok@example.org pas@valide")
+        pg.click("button.primary")  # le serveur juge : 400, formulaire réaffiché avec la saisie
+        pg.get_by_text("adresse(s) invalide(s) : pas@valide").wait_for()
+        assert _recipients(pg) == ["ok@example.org", "pas@valide"]
+        assert pg.locator(".rcpt-list .rcpt-bad").text_content().startswith("pas@valide")
+
+
+def test_recipients_without_javascript(env, monkeypatch):
+    """Sans JavaScript : la zone de texte d'origine, le carnet masqué ; la création fonctionne comme avant."""
+    from veille_core import contacts, store
+    contacts.remember(BOOK)
+    with _browser(monkeypatch, "/veilles/new", java_script_enabled=False) as pg:
+        assert pg.is_visible("textarea[name=recipients]") and not pg.is_visible("[data-book]")
+        pg.fill("input[name=name]", "Veille Sans JS")
+        pg.fill("textarea[name=recipients]", "a@example.org\nb@example.org")
+        pg.click("button.primary")
+        pg.wait_for_url("**/veilles/veille-sans-js?ok=created")
+        assert store.read_recipients("veille-sans-js") == ["a@example.org", "b@example.org"]

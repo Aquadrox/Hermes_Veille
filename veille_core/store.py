@@ -31,6 +31,7 @@ EMAIL_RE = re.compile(r"^[^@\s,;<>\"]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 REPORT_RE = re.compile(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})(?:-([0-9]{2})h([0-9]{2}))?-veille\.(pdf|md)\Z")
 RUN_LOG_RE = re.compile(r"^\d{8}-\d{6}\.log$")
 KINDS = ("veille", "composants")
+PLACEHOLDER_RECIPIENT = "destinataire@example.com"  # veille amorcée sans VEILLE_RECIPIENTS (en pause)
 
 
 class StoreError(ValueError):

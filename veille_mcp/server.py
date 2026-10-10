@@ -266,8 +266,8 @@ def preview_schedule(frequency: Frequency = "weekly", time: str = "08:00",
 def list_components(slug: str) -> list[dict]:
     """Références suivies par une veille composants : MPN, fabricant, réf. interne, statut
     Digi-Key, statut établi par la recherche web (référence inconnue de Digi-Key : ACTIVE, NRND,
-    LTB, OBSOLETE ou UNKNOWN, avec sa source), avis le plus critique, dates des dernières
-    vérifications (Digi-Key et web)."""
+    LTB, OBSOLETE ou UNKNOWN, avec sa source ; repli alldatasheet : fiche consultée et site du
+    fabricant), avis le plus critique, dates des dernières vérifications (Digi-Key et web)."""
     v = _guard(service._components_veille, slug)
     comps = _guard(components.load_components, v.slug)["components"]
     worst = components.worst_by_key(_guard(components.load_notices, v.slug))
@@ -278,7 +278,8 @@ def list_components(slug: str) -> list[dict]:
         out.append({"mpn": c["mpn"], "manufacturer": c["manufacturer"], "ref": c.get("ref", ""),
                     "digikey_status": dk.get("status"), "digikey_error": dk.get("error"),
                     "digikey_checked_at": dk.get("checked_at"), "web_status": web.get("status"),
-                    "web_status_url": web.get("url"), "web_checked_at": c.get("web_checked_at"),
+                    "web_status_url": web.get("url"), "web_status_datasheet": web.get("datasheet"),
+                    "web_status_maker": web.get("maker"), "web_checked_at": c.get("web_checked_at"),
                     "worst_notice": w["type"] if w else None})
     return out
 
@@ -487,10 +488,13 @@ def edit_brief(slug: str, find: str, replace: str) -> dict:
 
 def add_components(slug: str, components_list: list[str]) -> dict:
     """Ajoute des références à une veille composants : lignes « MPN ; Fabricant ; Réf. interne »
-    (réf. facultative). Les doublons sont ignorés."""
+    (réf. facultative). Les doublons sont ignorés. Ce que les autres veilles savent déjà de ces
+    références (statuts, avis) est repris de la base des composants : `known` références
+    reconnues, `notices_known` avis repris (envoyés au prochain e-mail de la veille)."""
     items = _guard(components.parse_components, "\n".join(components_list))
-    added = _guard(service.add_components, slug, items, actor=_actor())
-    return {"slug": slug, "added": added, "total": len(components.load_components(slug)["components"])}
+    st = _guard(service.import_components, slug, items, "add", actor=_actor())
+    return {"slug": slug, "added": st["added"], "total": st["total"], "known": st["known"],
+            "notices_known": st["notices_known"]}
 
 
 def remove_components(slug: str, mpns: list[str]) -> dict:

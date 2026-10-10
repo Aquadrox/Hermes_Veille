@@ -66,8 +66,9 @@ Fonctions :
   lancement immédiat en un clic ; avancement d'une analyse composants en cours (étape, composant) ;
 - **créer / modifier une veille** : nom, sujet, fréquence (quotidienne, jours ouvrés,
   hebdomadaire, mensuelle ou expression cron, avec aperçu des prochaines exécutions),
-  destinataires, brief de mission (à partir d'un modèle, avec aperçu), mise en forme du PDF,
-  modèle LLM ;
+  destinataires (puces, autocomplétion sur le **carnet d'adresses**, ajout au toucher ou par
+  glisser-déposer, y compris au doigt dans la PWA), brief de mission (à partir d'un modèle, avec aperçu),
+  mise en forme du PDF, modèle LLM ;
 - **détail** : historique complet des rapports (PDF et Markdown, en tête de page), journal du
   lancement en cours (rafraîchi en direct ; veille composants : avancement étape par étape), coût des exécutions,
   historique d'exécution Hermes, e-mail de test, **archivage** (rien n'est effacé) ;
@@ -79,8 +80,9 @@ Fonctions :
   cliquable) et l'e-mail ; boutons « Lancer l'analyse »
   (complète) et « Vérifier les statuts Digi-Key » (immédiat, sans LLM ni e-mail) — voir plus bas ;
 - **sources** : clés d'API des distributeurs (Digi-Key), saisie masquée et test de connexion ;
-- **paramètres** : adresse(s) des alertes du chien de garde, avec e-mail de test.
-- **santé** : état des veilles, crédits Brevo et journal d'audit.
+- **paramètres** : adresse(s) des alertes du chien de garde, avec e-mail de test ; carnet d'adresses
+  (« Oublier » une adresse) ;
+- **santé** : état des veilles, crédits Brevo, contenu de la base des composants et journal d'audit.
 
 Sécurité, en plus du tunnel : un mot de passe administrateur (hash argon2 dans `.env`), une
 session signée valable 12 h, un jeton CSRF sur chaque action, une limite de tentatives de
@@ -137,6 +139,22 @@ lundi 6h30 — job de la veille thématique rattachée
   détail du composant et dans l'export Excel (colonne « Statut web ») ; NRND, dernière commande et
   obsolète créent l'avis correspondant. Il est revu à chaque passage de la référence dans le lot et
   effacé si Digi-Key la retrouve.
+- **Repli alldatasheet** : toujours introuvable (ou restée « introuvable » au passage précédent), l'agent
+  ouvre la recherche alldatasheet de la référence (fournie par le scan), retient la fiche du bon fabricant
+  et son **« Direct Link »**, puis cherche la fiche produit et les avis PCN / EOL **sur le site du
+  fabricant**. alldatasheet n'est qu'un annuaire : il ne fait jamais foi (un statut ou un avis dont la seule
+  source est alldatasheet est rejeté). La page consultée et le site du fabricant sont gardés (détail du
+  composant, Excel « Statut web (alldatasheet) », `list_components`) et resservent au passage suivant.
+  Protégé par Cloudflare et sans API publique, le site n'est consulté que par l'agent, jamais par un robot
+  de l'application.
+- **Base des composants** (`veilles/.veille.db`) : ce que les veilles savent de chaque référence (statuts
+  Digi-Key et web, dernière recherche web, avis) est partagé. Une référence ajoutée à une veille (création,
+  ajout, import ; interface, CLI ou Telegram) **reprend les avis déjà connus** des autres veilles, actives ou
+  archivées : ils partent avec son premier e-mail. Ses statuts et sa date de recherche web sont repris
+  aussi, ce qui évite de la rechercher à nouveau sur le web en priorité (économie de tokens). La base n'est
+  qu'un **index** des fichiers des veilles (qui font foi) : reconstruite à chaque démarrage
+  (`veillectl catalog rebuild`), elle retire ce qu'une veille réinitialisée avait apporté et garde ce
+  qu'une veille archivée savait. Un échec de la base n'interrompt jamais une analyse (tracé dans l'audit).
 - **Volume** : le statut Digi-Key couvre toutes les références à chaque exécution (≈ 0,6 s par
   référence, 900 au plus) ; la recherche web, coûteuse en tokens, tourne par **lots**
   (`batch_size`). Avec 300 références et des lots de 40, chacune est recherchée sur le web toutes les
@@ -263,6 +281,7 @@ docker exec veille-hermes veillectl create --kind composants --name "Composants 
     --schedule "0 23 * * 0" --recipients achats@exemple.fr --components-file /opt/data/bom.csv
 docker exec veille-hermes veillectl edit industrie-4-0 --include-components composants-carte-x
 docker exec veille-hermes veillectl components list|notices composants-carte-x [--type EOL]
+docker exec veille-hermes veillectl catalog rebuild|stats     # base des composants partagée
 ```
 
 ## Exploitation
@@ -319,6 +338,8 @@ imports/            nomenclatures déposées pour import (Telegram / CLI), analy
 veilles/.archive/   veilles archivées, copies des remises à zéro (`<slug>-reinit-…`)
 veilles/.audit.log  journal d'audit (interface, CLI, amorçage)
 veilles/.settings.json  paramètres de l'interface (adresses d'alerte), lus aussi par le chien de garde
+veilles/.veille.db  base SQLite (0600) : index des composants (reconstruit à chaque démarrage depuis les
+                    fichiers des veilles) et carnet d'adresses des destinataires
 cron/jobs.json      jobs Hermes (état, prochain et dernier run)
 state.db            historique des exécutions Hermes (tokens, coûts)
 ```

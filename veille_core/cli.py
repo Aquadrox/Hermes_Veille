@@ -22,6 +22,9 @@ Veille composants (PCN / fins de vie) :
   veillectl components finalize <slug> <avis.json>                  (étape 5 du job)
   veillectl components reset <slug>                                 (recherche remise à zéro, copie archivée)
   veillectl components chapter <slug> --for <veille> --append <rapport.md>
+
+Base des composants (connaissance partagée entre veilles, reconstruite à chaque démarrage) :
+  veillectl catalog rebuild | stats
 """
 from __future__ import annotations
 
@@ -30,7 +33,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import bom_import, components, hermes, schedule, service, store, version
+from . import bom_import, catalog, components, db, hermes, schedule, service, store, version
 
 
 def _print_overview() -> int:
@@ -115,8 +118,13 @@ def _import(args) -> int:
         return 0
     st = service.import_components(args.slug, p["components"], "replace" if args.replace else "add")
     print(f"✓ import : {st['added']} ajouté(s), {st['existing']} déjà présent(s), {st['removed']} retiré(s) — "
-          f"{st['total']} composant(s) suivis")
+          f"{st['total']} composant(s) suivis{_known(st)}")
     return 0
+
+
+def _known(st: dict) -> str:
+    """Reprise depuis la base des composants, à la suite du compte rendu d'un ajout."""
+    return f" ; base : {st['known']} déjà connu(s), {st['notices_known']} avis repris" if st.get("known") else ""
 
 
 def _components(args) -> int:
@@ -132,7 +140,8 @@ def _components(args) -> int:
     elif args.action == "add":
         items = _components_file(args.file) or []
         items += components.parse_components("\n".join(args.items))
-        print(f"✓ {service.add_components(slug, items)} composant(s) ajouté(s)")
+        st = service.import_components(slug, items, "add")
+        print(f"✓ {st['added']} composant(s) ajouté(s){_known(st)}")
     elif args.action == "remove":
         print(f"✓ {service.remove_components(slug, args.items)} composant(s) retiré(s)")
     elif args.action == "import":
@@ -276,6 +285,9 @@ def main(argv: list[str] | None = None) -> int:
     p_costs.add_argument("slug", nargs="?")
     p_costs.add_argument("--days", type=int, default=30)
 
+    p_cat = sub.add_parser("catalog", help="base des composants partagée entre veilles")
+    p_cat.add_argument("action", choices=("rebuild", "stats"))
+
     sub.add_parser("reconcile")
     sub.add_parser("migrate")
     sub.add_parser("bootstrap")
@@ -296,6 +308,15 @@ def main(argv: list[str] | None = None) -> int:
             return _costs(args.slug, args.days)
         if args.cmd == "components":
             return _components(args)
+        if args.cmd == "catalog":
+            st = service.rebuild_catalog() if args.action == "rebuild" else catalog.stats()
+            if "database" in st:
+                print(st["database"])
+            print(f"✓ base des composants : {st['parts']} référence(s), {st['notices']} avis, "
+                  f"{st['sources']} veille(s) (actives et archivées)")
+            for line in st.get("skipped", []):
+                print(f"  ignorée — {line}")
+            return 0
         if args.cmd == "create":
             if args.kind == "composants" and not args.brief_file:
                 args.template = service.COMPONENTS_TEMPLATE
@@ -339,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "reconcile":
             for line in service.reconcile_all():
                 print(line)
-    except (store.StoreError, schedule.ScheduleError, service.ServiceError, hermes.HermesError, OSError) as exc:
+    except (store.StoreError, schedule.ScheduleError, service.ServiceError, hermes.HermesError, *db.ERRORS) as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1
     return 0

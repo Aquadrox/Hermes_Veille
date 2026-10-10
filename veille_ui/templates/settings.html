@@ -37,6 +37,21 @@
   {% endif %}
 </section>
 
+<section class="card" id="carnet">
+  <h2>Carnet d'adresses <span class="badge">{{ contacts|length }}</span></h2>
+  <p class="small muted">Adresses déjà saisies comme destinataires, proposées à la saisie d'une veille (les plus
+    utilisées d'abord). « Oublier » retire une adresse des suggestions ; elle reste destinataire des veilles qui
+    l'utilisent et y revient si on l'ajoute de nouveau à une veille.</p>
+  {% if contacts %}
+  <form method="post" action="/settings/forget">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <ul class="book-admin">
+      {% for a in contacts %}<li><span>{{ a }}</span> <button name="email" value="{{ a }}" class="small">Oublier</button></li>{% endfor %}
+    </ul>
+  </form>
+  {% else %}<p class="small muted">Vide : il se remplit avec les destinataires des veilles.</p>{% endif %}
+</section>
+
 <p class="small muted">Les destinataires des rapports se règlent dans chaque veille (« Modifier »).
   L'expéditeur (BREVO_SENDER_EMAIL), lié au compte Brevo, reste dans le .env du serveur.
   Modifiable depuis cette interface uniquement (ni Telegram ni MCP) ; chaque changement est tracé dans le journal d'audit

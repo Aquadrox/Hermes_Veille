@@ -22,6 +22,9 @@ Détecter au plus tôt les avis qui imposent une action d'approvisionnement ou d
 2. **Distributeurs** : Digi-Key, Mouser, Farnell / element14, Arrow, TME, RS — fiche produit
    (statut de cycle de vie) et onglet « PCN / Notifications ».
 3. Agrégateurs d'obsolescence publics, uniquement en complément d'une source 1 ou 2.
+4. **alldatasheet.com**, en dernier recours, pour une référence introuvable ailleurs : sa fiche
+   donne le fabricant et son « Direct Link » vers le site du fabricant, où chercher la fiche produit
+   et les avis. Jamais une source d'avis ou de statut en soi.
 
 ## Règles de fiabilité
 

@@ -145,7 +145,12 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h \
     /opt/veille-app/.venv/bin/python -c "import defusedxml; from openpyxl import Workbook; wb = Workbook(); ws = wb.active; ws.append([\"Fabricant\", \"Mfr. P/N\", \"Digi-Key Part Number\"]); ws.append([\"Yageo\", \"RC0603FR-0710KL\", \"311-ND\"]); wb.save(\"/tmp/h/bom.xlsx\")"
     veillectl components import smoke-composants /tmp/h/bom.xlsx | grep -q "1 ajouté"
     veillectl components list smoke-composants | grep -q "RC0603FR-0710KL"
-    echo "  veille composants : OK (PDF $size octets, import Excel)"
+    # Base des composants (sqlite3 du Python de l'\''image) : reconstruite, puis reprise par une nouvelle veille
+    veillectl catalog rebuild | grep -q "base des composants : 2 référence(s), 1 avis"
+    veillectl create --kind composants --name "Smoke reprise" --schedule "0 23 * * 0" \
+        --recipients smoke@example.org --components-file bom.csv
+    veillectl components notices smoke-reprise | grep -q "EOL"
+    echo "  veille composants : OK (PDF $size octets, import Excel, base des composants)"
 ' || { fail "veille composants en échec"; exit 1; }
 ok "veille composants fonctionnelle"
 

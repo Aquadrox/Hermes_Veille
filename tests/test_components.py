@@ -798,7 +798,7 @@ def test_mcp_components_tools(env, tools):
                                          "kind": "composants", "components_list": ["LM317T;Texas Instruments;R1"]}))
     assert v["kind"] == "composants" and v["cron"] == "0 23 * * 0" and v["components"]["components"] == 1
     assert data(call(srv, "add_components", {"slug": "bom-z", "components_list": ["NE555P;Texas Instruments"]})) == {
-        "slug": "bom-z", "added": 1, "total": 2}
+        "slug": "bom-z", "added": 1, "total": 2, "known": 0, "notices_known": 0}
     assert data(call(srv, "remove_components", {"slug": "bom-z", "mpns": ["NE555P"]}))["total"] == 1
     r = call(srv, "add_components", {"slug": "bom-z", "components_list": ["mauvaise ligne"]})
     assert r.is_error and "ligne 1" in r.content[0].text
