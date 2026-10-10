@@ -251,3 +251,20 @@ def test_slow_action_marks_button_busy_at_once(watch, page, monkeypatch):  # noq
     assert pg.evaluate("sessionStorage.getItem('btn')") == "Pause,true,true"
     assert pg.locator("#detail-head button:text-is('Reprendre')").is_enabled()
     pg.locator("section h2:text('Historique')").wait_for(timeout=5_000)  # fragment chargé (load)
+
+
+def test_progress_panel_mobile(watch, page, monkeypatch):  # noqa: F811
+    """Avancement d'une analyse sur mobile (PWA) : page de la veille puis tableau de bord, sans défilement
+    horizontal ni erreur JS / CSP (vérifié par la fixture)."""
+    from test_progress import tracked_run
+    tracked_run(watch, monkeypatch)
+    pg = page
+    pg.reload()
+    pg.locator(".progress").wait_for()
+    assert "Étape 2/3 — Recherche web : 0 / 2 composant(s) · en cours : LM317T" in pg.text_content(".progress")
+    assert pg.locator("ul.chips li.searching").count() == 1 and pg.locator("progress").count() == 1
+    assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    pg.goto(pg.url.split("/veilles/")[0] + "/")
+    assert "en cours : LM317T" in pg.text_content(f"#row-{watch.slug}")
+    assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+

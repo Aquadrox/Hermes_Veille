@@ -1,0 +1,16 @@
+{# Avancement d'un lancement suivi (veille composants) : étapes, compteur, composant en cours, lot de
+   recherche web. Rafraîchi avec le journal (toutes les 5 s) : ni JS ni style en ligne (CSP). #}
+{% set chip_labels = {"pending": "à rechercher", "searching": "recherche en cours", "done": "recherche faite"} %}
+<div class="progress{% if p.interrupted %} failed{% elif p.warning %} warned{% elif p.finished %} done{% endif %}">
+  <p><strong>{{ p.summary }}</strong>{% if p.minutes is not none %} <span class="muted small elapsed">· {{ "depuis" if p.running else "en" }} {{ "moins d'1" if p.minutes == 0 else p.minutes }} min</span>{% endif %}</p>
+  {% if p.steps|length > 1 %}
+  <ol class="steps">{% for s in p.steps %}<li class="{{ s.state }}">{{ s.label }}</li>{% endfor %}</ol>
+  {% endif %}
+  {% if p.warning %}<p class="small warn">Digi-Key : {{ p.warning }}</p>{% endif %}
+  {% if p.max and p.running %}<progress value="{{ p.value }}" max="{{ p.max }}" aria-label="Avancement">{{ p.value }} / {{ p.max }}</progress>{% endif %}
+  {% if p.batch %}
+  <ul class="chips" aria-label="Lot de recherche web">
+    {% for b in p.batch %}<li class="{{ b.state }}" title="{{ b.manufacturer }} — {{ chip_labels[b.state] }}">{{ b.mpn }}{% if b.notices %} <strong>· {{ b.notices }} avis</strong>{% endif %}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</div>

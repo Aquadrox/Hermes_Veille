@@ -1,9 +1,11 @@
-{# Journal d'un lancement, interrogé toutes les 5 s tant qu'il tourne. Suivi depuis une page affichée « en cours »
-   (`poll=1`) et terminé : l'en-tête (état, boutons) est renvoyé avec lui, en échange hors bande. #}
+{# Journal d'un lancement, interrogé toutes les 5 s tant qu'il tourne, précédé de l'avancement s'il est suivi
+   (veille composants). Suivi depuis une page affichée « en cours » (`poll=1`) et terminé : l'en-tête (état,
+   boutons) est renvoyé avec lui, en échange hors bande. #}
 <div id="run-log"{% if running %} hx-get="/veilles/{{ slug }}/runs/{{ name }}?poll=1" hx-trigger="every 5s" hx-swap="outerHTML"{% endif %}>
   <p class="small">Journal <code>{{ name }}</code>
     {% if running %}<span class="badge run">en cours…</span>{% else %}<span class="badge">terminé</span>
     {% if row %}· <a href="/veilles/{{ slug }}">recharger</a> pour voir le nouveau rapport{% endif %}{% endif %}</p>
-  <pre class="log">{{ text or "(vide pour l'instant)" }}</pre>
+  {% if progress %}{% with p = progress %}{% include "partials/progress.html" %}{% endwith %}{% endif %}
+  {% if text or not progress %}<pre class="log">{{ text or "(vide pour l'instant)" }}</pre>{% endif %}
 </div>
 {% if row %}{% with oob = true %}{% include "partials/detail_head.html" %}{% endwith %}{% endif %}

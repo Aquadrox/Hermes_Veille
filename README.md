@@ -63,13 +63,13 @@ Fonctions :
 
 - **tableau de bord** : état de chaque veille (active, en pause, en échec), prochain et dernier
   run, dernier rapport et nombre de rapports (lien vers l'historique). Pause, reprise et
-  lancement immédiat en un clic ;
+  lancement immédiat en un clic ; avancement d'une analyse composants en cours (étape, composant) ;
 - **créer / modifier une veille** : nom, sujet, fréquence (quotidienne, jours ouvrés,
   hebdomadaire, mensuelle ou expression cron, avec aperçu des prochaines exécutions),
   destinataires, brief de mission (à partir d'un modèle, avec aperçu), mise en forme du PDF,
   modèle LLM ;
 - **détail** : historique complet des rapports (PDF et Markdown, en tête de page), journal du
-  lancement en cours (rafraîchi en direct), coût des exécutions,
+  lancement en cours (rafraîchi en direct ; veille composants : avancement étape par étape), coût des exécutions,
   historique d'exécution Hermes, e-mail de test, **archivage** (rien n'est effacé) ;
 - **veille composants** : **liste unique de tous les composants**, une ligne chacun (types d'avis en
   badges, fins de vie en rouge et en tête, échéance, lien vers la source), avec **recherche en temps
@@ -134,6 +134,14 @@ lundi 6h30 — job de la veille thématique rattachée
   `veillectl components scan <slug> --status-only`) relit en arrière-plan le statut de toutes les
   références, sans LLM, sans coût en tokens et sans e-mail — utile juste après un import de
   nomenclature. Le lot de la prochaine exécution planifiée n'est pas modifié.
+- **Avancement en direct** de ces lancements manuels : étape 1/3 « Statut Digi-Key » (référence en
+  cours, `124 / 310`), 2/3 « Recherche web » (une pastille par composant du lot : à rechercher, en
+  cours, fait), 3/3 « Rapport et envoi » ; à la fin, les nouveaux avis par composant, ou l'étape où le
+  lancement s'est arrêté. Page de la veille (rafraîchi toutes les 5 s), tableau de bord (10 s) et
+  Telegram (« Où en est l'analyse de la veille composants ? », outil `get_run_log`). Pendant la
+  recherche web, c'est l'agent qui signale chaque groupe de recherches
+  (`veillectl components progress`) : au mieux de ce qu'il fait, et seulement lors d'un lancement
+  manuel — une exécution planifiée n'écrit rien et ne coûte aucun appel de plus.
 - **Livraison** : rattachée à une veille thématique (« Chapitre composants » dans son formulaire),
   la veille composants n'envoie rien elle-même : ses nouveaux avis partent en chapitre de l'e-mail
   de cette veille. Sinon, elle envoie son propre e-mail (HTML lisible sur mobile + PDF).
@@ -175,7 +183,7 @@ Puis, dans Telegram : « Liste mes veilles », « Résume le dernier rapport de 
 industrie-4-0 », « Passe la veille cyber au mardi 7h30 », « Ajoute dsi@exemple.fr aux
 destinataires », « Mets la veille industrie-4-0 en pause », « Crée une veille sur l'hydrogène
 industriel, chaque lundi à 8h, pour moi@exemple.fr », « Quelles fins de vie ont été détectées
-ce mois-ci ? »…
+ce mois-ci ? », « Où en est l'analyse de la veille composants ? »…
 
 - **Transport stdio via `docker exec -i`** : aucun port réseau n'est ouvert.
 - **`trust: untrusted`** : les 14 outils de lecture s'exécutent directement ; les 16 outils de
@@ -282,7 +290,7 @@ veilles/<slug>/
     rapports/         AAAA-MM-JJ-HHhMM-veille.{md,pdf}, -charts.json (composants : -pcn.json) ;
                       horodatés : deux exécutions le même jour ne s'écrasent plus (anciens
                       noms AAAA-MM-JJ-veille toujours lus)
-    runs/             journaux des lancements manuels
+    runs/             journaux des lancements manuels (.progress.json : avancement du dernier)
     components.json   veille composants : références, statut Digi-Key, dates de vérification
     notices.json      veille composants : avis PCN / EOL détectés, sources, livraisons
 imports/            nomenclatures déposées pour import (Telegram / CLI), analyses en cours de

@@ -13,11 +13,14 @@ RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 
 1. PRÉPARATION — exécute (timeout de la commande : 1200 secondes, elle interroge Digi-Key pour tous les composants) :
    veillectl components scan ${slug}
-   Elle affiche en JSON le LOT de composants à rechercher sur le web aujourd'hui (au plus ${batch_size}) : pour chacun, `mpn`, `manufacturer`, `since` (chercher les avis publiés depuis cette date ; null = jamais vérifié : cherche aussi l'état actuel et l'historique), `digikey_status` et `known` (avis déjà enregistrés : ne les recherche pas à nouveau).
+   Elle affiche en JSON le LOT de composants à rechercher sur le web aujourd'hui (au plus ${batch_size}) : pour chacun, `mpn`, `manufacturer`, `since` (chercher les avis publiés depuis cette date ; null = jamais vérifié : cherche aussi l'état actuel et l'historique), `digikey_status` et `known` (avis déjà enregistrés : ne les recherche pas à nouveau) ; ainsi que `track_progress` (voir étape 3).
 
 2. LIS le brief `${dir}/config.md` : sources à privilégier, mots-clés, règles de fiabilité.
 
 3. RECHERCHE : pour chaque composant du lot, web_search / web_extract (regroupe les recherches par fabricant : un avis vise souvent une GAMME entière). Cherche « <MPN> PCN », « <MPN> EOL », « <MPN> end of life », « <MPN> last time buy », « <MPN> PDN », « <MPN> discontinued », la page des avis du fabricant et les fiches distributeurs (Mouser, Digi-Key, Farnell, Arrow, TME).
+   SUIVI EN DIRECT — UNIQUEMENT si la sortie de l'étape 1 contient "track_progress": true (lancement manuel suivi en direct) : AVANT chaque groupe de recherches (un fabricant, ou un composant seul), exécute
+   veillectl components progress ${slug} <MPN> [<MPN> …]
+   avec les MPN du groupe (commande instantanée : ignore sa sortie, ne la relance jamais). Si `track_progress` vaut false, ne l'exécute JAMAIS.
    RÈGLES ABSOLUES :
    - Chaque avis a au moins UNE source dont tu as ouvert la page et qui mentionne explicitement la référence ou sa gamme. Lien PRÉCIS (document ou fiche), jamais une page d'accueil. N'INVENTE AUCUNE URL : sans lien vérifié, n'inclus pas l'avis.
    - Un avis de gamme liste dans `mpns` toutes les références SUIVIES qu'il concerne (uniquement des MPN du lot ou de la liste suivie).

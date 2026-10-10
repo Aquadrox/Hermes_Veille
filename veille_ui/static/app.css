@@ -121,6 +121,34 @@ label.inline-choice input { width: auto; margin: 0; }
 input[type=file] { width: auto; max-width: 100%; }
 .block { display: block; margin-top: .4rem; }
 
+/* Avancement d'un lancement suivi : étapes, barre, lot de recherche web en pastilles (repliées à la ligne
+   sur mobile, sans défilement horizontal). L'état se lit aussi au symbole, pas seulement à la couleur. */
+.progress { border-left: 3px solid var(--run); padding: .1rem 0 .1rem .75rem; margin: .5rem 0 .75rem; }
+.progress.failed { border-left-color: var(--bad); }
+.progress.done { border-left-color: var(--ok); }
+.progress.warned { border-left-color: var(--warn); }
+.progress p { margin: .2rem 0; }
+.progress .elapsed { white-space: nowrap; }
+progress { display: block; width: 100%; max-width: 32rem; height: .5rem; margin: .3rem 0; accent-color: var(--run); }
+ol.steps { display: flex; flex-wrap: wrap; gap: .2rem 1rem; list-style: none; counter-reset: step; padding: 0; margin: .3rem 0;
+  font-size: .85rem; color: var(--muted); }
+ol.steps li { counter-increment: step; }
+ol.steps li::before { content: counter(step) ". "; }
+ol.steps li.done { color: var(--ok); }
+ol.steps li.done::before { content: "✓ "; }
+ol.steps li.current { color: var(--run); font-weight: 600; }
+ol.steps li.current::before { content: "▸ " counter(step) ". "; }
+ol.steps li.failed { color: var(--bad); font-weight: 600; }
+ol.steps li.failed::before { content: "✗ " counter(step) ". "; }
+ul.chips { display: flex; flex-wrap: wrap; gap: .3rem; list-style: none; padding: 0; margin: .4rem 0 .2rem; }
+ul.chips li { font-size: .78rem; padding: .05rem .45rem; border: 1px solid var(--line); border-radius: 999px;
+  color: var(--muted); overflow-wrap: anywhere; }
+ul.chips li::before { content: "○ "; }
+ul.chips li.searching { color: var(--run); border-color: var(--run); font-weight: 600; }
+ul.chips li.searching::before { content: "… "; }
+ul.chips li.done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+ul.chips li.done::before { content: "✓ "; }
+
 footer.foot { text-align: center; padding: 0 var(--gutter) 2rem; }
 pre.log { max-height: 420px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
   padding: .75rem; font-size: .8rem; white-space: pre-wrap; word-break: break-word; }
