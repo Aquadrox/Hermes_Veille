@@ -153,8 +153,8 @@ lundi 6h30 — job de la veille thématique rattachée
   archivées : ils partent avec son premier e-mail. Ses statuts et sa date de recherche web sont repris
   aussi, ce qui évite de la rechercher à nouveau sur le web en priorité (économie de tokens). La base n'est
   qu'un **index** des fichiers des veilles (qui font foi) : reconstruite à chaque démarrage
-  (`veillectl catalog rebuild`), elle retire ce qu'une veille réinitialisée avait apporté et garde ce
-  qu'une veille archivée savait. Un échec de la base n'interrompt jamais une analyse (tracé dans l'audit).
+  (`veillectl catalog rebuild`), elle retire ce qu'une veille réinitialisée avait apporté (ce que d'autres
+  veilles en ont déjà repris leur reste) et garde ce qu'une veille archivée savait. Un échec de la base n'interrompt jamais une analyse (tracé dans l'audit).
 - **Volume** : le statut Digi-Key couvre toutes les références à chaque exécution (≈ 0,6 s par
   référence, 900 au plus) ; la recherche web, coûteuse en tokens, tourne par **lots**
   (`batch_size`). Avec 300 références et des lots de 40, chacune est recherchée sur le web toutes les

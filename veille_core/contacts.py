@@ -31,14 +31,16 @@ def remember(addresses) -> None:
         remember_in(con, addresses)
 
 
-def all_addresses(limit: int = MAX_SHOWN) -> list[str]:
-    """Adresses du carnet, les plus utilisées puis les plus récentes d'abord."""
+def all_addresses(limit: int | None = MAX_SHOWN) -> list[str]:
+    """Adresses du carnet, les plus utilisées puis les plus récentes d'abord (`limit` None : toutes)."""
     with db.connect() as con:
         return [r[0] for r in con.execute(
-            "SELECT email FROM contacts ORDER BY uses DESC, last_used DESC, email LIMIT ?", (limit,))]
+            "SELECT email FROM contacts ORDER BY uses DESC, last_used DESC, email LIMIT ?",
+            (-1 if limit is None else limit,))]
 
 
 def forget(address: str) -> bool:
-    """Retire une adresse du carnet ; True si elle y était."""
+    """Retire une adresse du carnet ; True si elle y était. Effacée aussi des pages libres du fichier."""
     with db.connect() as con, con:
+        con.execute("PRAGMA secure_delete = ON")
         return con.execute("DELETE FROM contacts WHERE email = ?", ((address or "").strip(),)).rowcount > 0

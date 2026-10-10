@@ -402,3 +402,76 @@ def test_mcp_list_components_reports_fallback(known):
     rows = {r["mpn"]: r for r in data(call(build_server(), "list_components", {"slug": known.slug}))}
     assert rows["NE555P"]["web_status_datasheet"] == ADS and rows["NE555P"]["web_status_maker"] == "https://www.ti.com"
     assert rows["LM317T"]["web_status_datasheet"] is None
+
+
+# --------------------------------------------------------------------------
+# Régressions relevées en revue
+# --------------------------------------------------------------------------
+def test_ensure_keeps_a_locked_database(env, monkeypatch):
+    """Un verrou tenu (ou une E/S passagère) n'est pas une corruption : la base n'est pas mise de côté (le carnet
+    d'adresses, qui n'existe qu'ici, serait perdu)."""
+    contacts.remember(["a@example.org"])
+    monkeypatch.setattr(db, "TIMEOUT", 0.2)
+    holder = sqlite3.connect(paths.database(), isolation_level=None)
+    holder.execute("BEGIN EXCLUSIVE")
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            db.ensure()
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert not list(paths.veilles_dir().glob(".veille.db.corrompue-*")) and contacts.all_addresses() == ["a@example.org"]
+
+
+def test_adopted_digikey_status_wins_over_web_status(known, tools):  # noqa: F811
+    """Reprise : statut Digi-Key d'une veille plus récent que le statut web d'une autre -> pas de statut web
+    (Digi-Key fait foi, comme au scan)."""
+    data = comp.load_components(known.slug)
+    ne555 = next(c for c in data["components"] if c["mpn"] == "NE555P")
+    ne555["web_status"] = {"status": "OBSOLETE", "url": "https://www.ti.com/p", "checked_at": "2026-09-01"}
+    comp.save_components(known.slug, data)
+    service.update_veille(known.slug, batch_size=3)  # contribution réindexée (dk.error + statut web)
+    catalog.sync(known.slug, data["components"], comp.load_notices(known.slug))
+    b = new_watch("Carte B", "BC547;onsemi")
+    d = comp.load_components(b.slug)
+    d["components"] = comp.replace_components([], comp.parse_components("NE555P;Texas Instruments"))
+    d["components"][0]["dk"] = {"status": "Active", "checked_at": "2099-01-01", "error": None}
+    comp.save_components(b.slug, d)
+    catalog.sync(b.slug, d["components"], [])
+    c = next(x for x in comp.load_components(new_watch("Carte C", "NE555P;Texas Instruments").slug)["components"])
+    assert c["dk"]["status"] == "Active" and "web_status" not in c
+
+
+def test_unexpected_shapes_never_block(known, tools):  # noqa: F811
+    """JSON valide mais de forme inattendue (fichier ou base retouchés à la main) : l'archive fautive est
+    ignorée et signalée, la reprise ignore les valeurs illisibles ; rien ne bloque."""
+    archive = paths.archive_dir() / "vieille-carte-20260101-000000"
+    archive.mkdir(parents=True)
+    (archive / "veille.json").write_text(json.dumps({"slug": "vieille-carte", "name": "x", "kind": "composants"}))
+    (archive / "components.json").write_text(json.dumps({"components": ["oops"]}))
+    out = service.rebuild_catalog()
+    assert out["skipped"] == ["vieille-carte-20260101-000000 : AttributeError"] and out["parts"] == 3
+    with db.connect() as con, con:
+        con.execute("UPDATE parts SET dk = '\"x\"', web_status = '[1]'")
+        con.execute("UPDATE notices SET data = '\"pas un avis\"'")
+    c = comp.load_components(new_watch("Carte Y", "LM317T;Texas Instruments").slug)["components"][0]
+    assert c["dk"] is None and c.get("web_status") is None and c["web_checked_at"] == comp.today()
+
+
+def test_corrupt_notices_file_does_not_block_list_edits(known, tools, monkeypatch):  # noqa: F811
+    """`notices.json` illisible : la liste et le nom se modifient comme avant la base (ni reprise ni index)."""
+    from test_ui import create_form
+    (known.dir / "notices.json").write_text("{corrompu")
+    assert service.import_components(known.slug, comp.parse_components("BC547;onsemi"))["added"] == 1
+    assert service.remove_components(known.slug, ["BC547"]) == 1
+    client, csrf = _client(monkeypatch)
+    form = create_form(csrf, name="Nouveau nom", kind="composants", recipients="achats@example.org",
+                       components=comp.format_components(comp.load_components(known.slug)["components"]))
+    r = client.post(f"/veilles/{known.slug}/edit", data=form, follow_redirects=False)
+    assert r.status_code == 303 and store.load(known.slug).name == "Nouveau nom"
+
+
+def test_forget_wipes_the_address_from_the_file(env):
+    contacts.remember(["secret.person@example.org"])
+    assert contacts.forget("secret.person@example.org")
+    assert b"secret.person" not in paths.database().read_bytes()  # PRAGMA secure_delete

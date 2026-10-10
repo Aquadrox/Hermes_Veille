@@ -329,15 +329,17 @@
       }
       drag = null;
     }
+    // Un seul pointeur suivi : un second doigt pendant un glisser est ignoré (sinon fantôme orphelin).
+    function mine(e) { return drag && e.pointerId === drag.id; }
     root.addEventListener("pointerdown", function (e) {
       var chip = e.target.closest("[data-email]");
-      if (!chip || e.button > 0 || e.target.closest(".rcpt-x")) return;
-      drag = {chip: chip, email: chip.getAttribute("data-email"), from: chip.closest("[data-zone]"),
+      if (drag || !chip || e.button > 0 || e.target.closest(".rcpt-x")) return;
+      drag = {chip: chip, email: chip.getAttribute("data-email"), from: chip.closest("[data-zone]"), id: e.pointerId,
               x: e.clientX, y: e.clientY, on: false, timer: null};
       if (e.pointerType !== "mouse") drag.timer = setTimeout(start, HOLD_MS);
     });
     document.addEventListener("pointermove", function (e) {
-      if (!drag) return;
+      if (!mine(e)) return;
       if (!drag.on) {
         if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < 8) return;
         if (e.pointerType !== "mouse") return end();  // le doigt bouge avant l'appui long : c'est un défilement
@@ -346,14 +348,15 @@
       moveTo(e.clientX, e.clientY);
     });
     document.addEventListener("pointerup", function (e) {
-      if (drag && drag.on) {
+      if (!mine(e)) return;
+      if (drag.on) {
         var z = zoneAt(e.clientX, e.clientY);
         if (z === box && drag.from !== box) add(drag.email);
         else if (z === book && drag.from === box) remove(drag.email);
       }
       end();
     });
-    document.addEventListener("pointercancel", end);
+    document.addEventListener("pointercancel", function (e) { if (mine(e)) end(); });
     // Pendant un glisser au doigt, la page ne défile pas (sinon le navigateur annulerait le geste).
     document.addEventListener("touchmove", function (e) { if (drag && drag.on) e.preventDefault(); }, {passive: false});
     root.addEventListener("contextmenu", function (e) { if (drag) e.preventDefault(); });  // menu de l'appui long

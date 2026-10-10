@@ -29,13 +29,15 @@ les références introuvables.
       `add_components` (Telegram) et dans la sortie de `veillectl components add|import`.
   - **Index des fichiers, pas une nouvelle source de vérité.** `components.json` et `notices.json` restent
     la référence : le chien de garde et les sauvegardes sont inchangés.
-    - Chaque veille y a sa contribution (provenance). Une réinitialisation retire ce qu'elle avait apporté ;
-      un archivage le conserve.
+    - Chaque veille y a sa contribution (provenance). Une réinitialisation retire ce qu'elle avait apporté
+      (ce que d'autres veilles en ont déjà repris leur reste : les réinitialiser aussi au besoin) ; un
+      archivage le conserve.
     - Reconstruite à chaque démarrage (`veillectl catalog rebuild`, hook de seed) depuis les veilles
       actives et archivées, sans les copies de réinitialisation. Une base corrompue, ou d'un schéma plus
       récent, est mise de côté (`.veille.db.corrompue-…`) puis recréée.
   - Un échec de la base n'empêche jamais une analyse, une création ou un ajout : il est tracé dans le
-    journal d'audit (`db-error`).
+    journal d'audit (`db-error`). Un verrou tenu ou une erreur d'E/S ne fait jamais mettre la base de côté.
+  - À la reprise, un statut Digi-Key l'emporte sur un statut web venu d'une autre veille (Digi-Key fait foi).
   - Robustesse multi-processus (interface, CLI du job, MCP) :
     - journal DELETE et non WAL : aucun fichier annexe permanent qu'un `docker exec` en root rendrait
       inaccessible à hermes ;
@@ -62,9 +64,9 @@ les références introuvables.
     ni style en ligne.
   - Amélioration progressive : la zone de texte reste le champ envoyé, validé par le serveur comme avant ;
     sans JavaScript, le formulaire est inchangé.
-  - Page Paramètres : liste du carnet et « Oublier » une adresse (données personnelles). Une adresse oubliée
-    reste destinataire des veilles qui l'utilisent. Aucune adresse dans le journal d'audit ; carnet jamais
-    exposé au MCP.
+  - Page Paramètres : liste complète du carnet et « Oublier » une adresse (données personnelles, effacée
+    aussi des pages libres du fichier). Une adresse oubliée reste destinataire des veilles qui l'utilisent.
+    Aucune adresse dans le journal d'audit ; carnet jamais exposé au MCP.
 - **Repli alldatasheet** pour une référence inconnue de Digi-Key et introuvable par la recherche web.
   - Le lot du scan fournit à l'agent la recherche alldatasheet de la référence (MPN encodé), son statut web
     précédent et le site du fabricant déjà trouvé. Une référence restée `UNKNOWN` passe directement par ce

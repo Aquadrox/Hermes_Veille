@@ -137,7 +137,7 @@ def test_status_only_scan_does_not_touch_a_running_analysis(watch):  # noqa: F81
 
 def test_digikey_writes_are_throttled(watch, monkeypatch):  # noqa: F811
     """Boucle Digi-Key (une référence ≈ 0,6 s) : une écriture par seconde au plus, plus les changements d'étape."""
-    service.add_components(watch.slug, comp.parse_components("\n".join(f"R{i};Fab" for i in range(7))))
+    service.import_components(watch.slug, comp.parse_components("\n".join(f"R{i};Fab" for i in range(7))))
     manual(watch.slug)
     clock = iter(1000 + 0.6 * i for i in range(1, 100))  # 0,6 s entre deux références
     monkeypatch.setattr(progress, "time", SimpleNamespace(monotonic=lambda: next(clock)))

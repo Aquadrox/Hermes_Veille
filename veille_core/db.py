@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import json
 import os
 import sqlite3
 from collections.abc import Iterator
@@ -28,8 +29,15 @@ from collections.abc import Iterator
 from . import paths, store
 
 TIMEOUT = 10  # secondes d'attente d'un verrou tenu par un autre processus
-# Échecs de la base (ValueError : JSON stocké illisible) : jamais bloquants pour les fichiers (voir service).
-ERRORS = (sqlite3.Error, OSError, ValueError)
+# Échecs de la base (dont un JSON stocké illisible) : jamais bloquants pour les fichiers (voir service).
+ERRORS = (sqlite3.Error, OSError, json.JSONDecodeError)
+# Seules raisons de mettre la base de côté : un verrou tenu ou une E/S passagère ne le sont pas (le carnet
+# d'adresses, qui n'existe qu'ici, serait perdu pour rien).
+CORRUPT = frozenset({"SQLITE_CORRUPT", "SQLITE_NOTADB"})
+
+
+class SchemaError(sqlite3.DatabaseError):
+    """Base d'un schéma plus récent que l'application (retour à une image plus ancienne)."""
 
 
 def _v1(con: sqlite3.Connection) -> None:
@@ -71,7 +79,7 @@ def _migrate(con: sqlite3.Connection) -> None:
     try:
         version = con.execute("PRAGMA user_version").fetchone()[0]
         if version > len(MIGRATIONS):
-            raise sqlite3.DatabaseError(f"schéma {version} plus récent que l'application ({len(MIGRATIONS)})")
+            raise SchemaError(f"schéma {version} plus récent que l'application ({len(MIGRATIONS)})")
         for n in range(version, len(MIGRATIONS)):
             MIGRATIONS[n](con)
             con.execute(f"PRAGMA user_version = {n + 1}")
@@ -109,7 +117,7 @@ def connect() -> Iterator[sqlite3.Connection]:
 
 def ensure() -> str:
     """Au démarrage : base lisible, intègre et d'un schéma connu ; sinon mise de côté (jamais effacée) et
-    recréée. Renvoie le constat, pour le journal du démarrage."""
+    recréée. Toute autre erreur (verrou, E/S) est levée telle quelle. Renvoie le constat, pour le journal."""
     path = paths.database()
     problem = None
     if path.exists():
@@ -118,7 +126,9 @@ def ensure() -> str:
                 result = con.execute("PRAGMA quick_check").fetchone()[0]
             if result != "ok":
                 problem = f"contrôle d'intégrité : {result[:200]}"
-        except sqlite3.Error as exc:
+        except sqlite3.DatabaseError as exc:
+            if not isinstance(exc, SchemaError) and getattr(exc, "sqlite_errorname", None) not in CORRUPT:
+                raise
             problem = f"{type(exc).__name__} : {exc}"
     if problem is None:
         with connect():  # création ou migration

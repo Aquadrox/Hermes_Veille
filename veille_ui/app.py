@@ -349,9 +349,12 @@ def create_app() -> FastAPI:
                       preview=schedule_ctx(values["freq"]), contacts=service.address_book(), **ctx)
 
     def notice_count(v: store.Veille) -> int:
-        """Avis d'une veille composants (0 sinon) : en hausse après un enregistrement, des avis ont été repris
-        de la base des composants (message dédié)."""
-        return len(components.load_notices(v.slug)) if v.kind == "composants" else 0
+        """Avis d'une veille composants (0 sinon, ou fichier illisible : il n'empêche pas d'enregistrer) ; en
+        hausse après un enregistrement, des avis ont été repris de la base des composants (message dédié)."""
+        try:
+            return len(components.load_notices(v.slug)) if v.kind == "composants" else 0
+        except components.ComponentsError:
+            return 0
 
     @app.get("/veilles/new", response_class=HTMLResponse)
     def new_form(request: Request, template: str = "vierge", kind: str = "veille"):
@@ -624,7 +627,7 @@ def create_app() -> FastAPI:
     # -------------------------------------------------------------- paramètres (interface seule)
     def settings_page(request: Request, status_code: int = 200, /, **ctx):
         return render(request, "settings.html", status_code, alert=service.alert_status(),
-                      contacts=service.address_book(), **ctx)
+                      contacts=service.address_book(limit=None), **ctx)
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_form(request: Request):

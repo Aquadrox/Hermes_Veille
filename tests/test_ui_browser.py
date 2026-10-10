@@ -435,3 +435,21 @@ def test_recipients_without_javascript(env, monkeypatch):
         pg.click("button.primary")
         pg.wait_for_url("**/veilles/veille-sans-js?ok=created")
         assert store.read_recipients("veille-sans-js") == ["a@example.org", "b@example.org"]
+
+
+def test_recipients_second_finger_during_drag(form):
+    """Un second doigt pendant un glisser est ignoré : au relâchement, ni fantôme ni état de glisser ne restent
+    (régression relevée en revue : `drag` écrasé, fantôme orphelin jusqu'au rechargement)."""
+    pg = form
+    pg.locator("[data-recipients]").scroll_into_view_if_needed()
+    cdp = pg.context.new_cdp_session(pg)
+    (x, y), (x2, y2) = (_center(pg, f"[data-book] [data-email='{a}']") for a in ("rssi@example.org", "achats@example.org"))
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y, "id": 1}]})
+    pg.wait_for_timeout(500)  # appui long : glisser commencé
+    assert pg.locator(".rcpt-ghost").count() == 1
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [
+        {"x": x, "y": y, "id": 1}, {"x": x2, "y": y2, "id": 2}]})
+    pg.wait_for_timeout(500)  # l'appui long du second doigt ne démarre rien
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    pg.wait_for_timeout(200)
+    assert pg.locator(".rcpt-ghost, .rcpt-held, .rcpt-dragging").count() == 0 and _recipients(pg) == []

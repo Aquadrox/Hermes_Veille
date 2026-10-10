@@ -92,13 +92,15 @@ def read_audit(limit: int = 50) -> list[dict]:
     return out
 
 
-def _best_effort(what: str, fn, *args, slug: str = ""):
+def _best_effort(what: str, fn, *args, slug: str = "", trace: bool = True):
     """Appel à la base SQLite (index des composants, carnet d'adresses) : un échec est tracé, jamais bloquant.
-    Les fichiers de la veille font foi, et l'index se reconstruit au démarrage (`rebuild_catalog`)."""
+    Les fichiers de la veille font foi, et l'index se reconstruit au démarrage (`rebuild_catalog`).
+    `trace=False` : lecture pour l'affichage d'une page, qui signale elle-même la panne (journal non inondé)."""
     try:
         return fn(*args)
     except db.ERRORS as exc:
-        audit("system", "db-error", slug, f"{what} : {type(exc).__name__}: {exc}"[:300])
+        if trace:
+            audit("system", "db-error", slug, f"{what} : {type(exc).__name__}: {exc}"[:300])
         return None
 
 
@@ -339,10 +341,8 @@ def update_veille(slug: str, *, name: str | None = None, subject: str | None = N
         if components is not None:
             if v.kind != "composants":
                 raise StoreError("seule une veille composants a une liste de composants")
-            data = comp.load_components(slug)
-            before = [comp.key_of(c["mpn"], c["manufacturer"]) for c in data["components"]]
-            reprise = _store_components(slug, data, components)
-            if [comp.key_of(c["mpn"], c["manufacturer"]) for c in data["components"]] != before:
+            reprise = _store_components(slug, comp.load_components(slug), components)
+            if reprise.get("keys_changed"):
                 changes.append("composants" + _reprise_note(reprise))
         if batch_size is not None and _batch_size(batch_size) != v.batch_size:
             v.batch_size = _batch_size(batch_size)
@@ -737,6 +737,8 @@ def _adopt(slug: str, components: list[dict], notices: list[dict], keys: set[str
         for field in ("dk", "web_status", "web_checked_at"):
             if k.get(field) and not c.get(field):
                 c[field] = k[field]
+        if (c.get("dk") or {}).get("status"):  # Digi-Key la connaît : il fait foi (comme au scan), pas de statut web
+            c.pop("web_status", None)
         adopted += [{**n, "mpn": c["mpn"], "manufacturer": c["manufacturer"]} for n in k["notices"]]
     return {"known": len(known), "notices": len(comp.merge(notices, adopted))}
 
@@ -744,22 +746,31 @@ def _adopt(slug: str, components: list[dict], notices: list[dict], keys: set[str
 def _store_components(slug: str, data: dict, wanted: list[dict]) -> dict:
     """La liste de la veille devient `wanted` (appelé SOUS le verrou, `data` relu sous ce verrou) : état des
     références conservées gardé, reprise de la base pour les nouvelles, enregistrement et indexation si une
-    entrée change (pas seulement le nombre). Renvoie la reprise et "changed"."""
+    entrée change (pas seulement le nombre). Renvoie la reprise, "changed" et "keys_changed" (références
+    ajoutées, retirées ou réordonnées, pas seulement une réf. interne).
+
+    `notices.json` illisible : la liste s'enregistre quand même (comme avant la base), sans reprise ni index."""
     def entries(lst):
         return [(c["mpn"], c["manufacturer"], c.get("ref", "")) for c in lst]
     before = data["components"]
     after = comp.replace_components(before, wanted)
     if entries(after) == entries(before):
         return {"changed": False}
-    had = {comp.key_of(c["mpn"], c["manufacturer"]) for c in before}
-    notices = comp.load_notices(slug)
-    reprise = _adopt(slug, after, notices, {k for c in after if (k := comp.key_of(c["mpn"], c["manufacturer"])) not in had})
+    had = [comp.key_of(c["mpn"], c["manufacturer"]) for c in before]
+    keys = [comp.key_of(c["mpn"], c["manufacturer"]) for c in after]
+    try:
+        notices = comp.load_notices(slug)
+    except comp.ComponentsError:
+        notices = None
+    reprise = (_adopt(slug, after, notices, set(keys) - set(had)) if notices is not None
+               else {"known": 0, "notices": 0})
     data["components"] = after
     comp.save_components(slug, data)
     if reprise["notices"]:
         comp.save_notices(slug, notices)
-    _index(slug, after, notices)
-    return {**reprise, "changed": True}
+    if notices is not None:
+        _index(slug, after, notices)
+    return {**reprise, "changed": True, "keys_changed": keys != had}
 
 
 def _edit_components(slug: str, edit, actor: str, action: str) -> tuple[int, dict]:
@@ -788,11 +799,6 @@ def import_components(slug: str, items: list[dict], mode: str = "add", actor: st
     _, reprise = _edit_components(slug, edit, actor, f"components-import-{mode}")
     return {**stats, "total": len(comp.load_components(slug)["components"]),
             "known": reprise.get("known", 0), "notices_known": reprise.get("notices", 0)}
-
-
-def add_components(slug: str, items: list[dict], actor: str = "cli") -> int:
-    """Ajoute des références (doublons ignorés) ; renvoie le nombre réellement ajouté."""
-    return import_components(slug, items, "add", actor)["added"]
 
 
 def remove_components(slug: str, mpns: list[str], actor: str = "cli") -> int:
@@ -888,12 +894,13 @@ def rebuild_catalog(actor: str = "cli") -> dict:
 
 def catalog_stats() -> dict | None:
     """Contenu de la base des composants (page Santé) ; None si elle est indisponible."""
-    return _best_effort("base des composants", catalog.stats)
+    return _best_effort("base des composants", catalog.stats, trace=False)
 
 
-def address_book() -> list[str]:
-    """Adresses proposées à la saisie des destinataires (vide si la base est indisponible)."""
-    return _best_effort("carnet d'adresses", contacts.all_addresses) or []
+def address_book(limit: int | None = contacts.MAX_SHOWN) -> list[str]:
+    """Adresses du carnet (`limit` None : toutes), proposées à la saisie des destinataires ; vide si la base
+    est indisponible."""
+    return _best_effort("carnet d'adresses", contacts.all_addresses, limit, trace=False) or []
 
 
 def forget_contact(address: str, actor: str = "ui") -> bool:
