@@ -7,6 +7,39 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.4.1] — 2026-10-12
+
+Reprises sur incident réseau Digi-Key.
+
+### Corrigé
+
+- **Reprises sur incident réseau Digi-Key.** Un seul `ConnectionResetError` arrêtait la phase Digi-Key
+  (veille « composants-nomenclature-2 », 12/10/2026 : 230 références vérifiées sur 386, les 156 suivantes
+  jamais interrogées) alors que l'API répondait normalement quelques minutes plus tard (230 appels sur 900
+  autorisés : ni quota ni débit en cause).
+  - Panne passagère (connexion réinitialisée, interrompue ou refusée, `URLError`, délai dépassé, réponse
+    tronquée, HTTP 500 / 502 / 503 / 504, HTTP 429), à l'obtention du jeton comme à la recherche : le
+    passage attend puis **reprend à la référence interrompue**. Les références déjà vérifiées ne sont pas
+    réinterrogées.
+  - Attentes progressives et bornées : 5, 10, 20, 30, 45 s puis 60 s (plafond), ± 20 % ; un peu plus de
+    6 min au total au plus. Un 429 respecte toujours le Retry-After (10 s sans en-tête, 60 s au plus) et
+    compte parmi les tentatives.
+  - Un seul compteur par passage, toutes références confondues (la phase est reprise, pas chaque requête) :
+    au 10e échec, la phase est abandonnée (« abandon après 10 tentatives, reprise au prochain passage »).
+    Les références restantes ne sont jamais marquées vérifiées : elles partent au lot de recherche web,
+    comme avant.
+  - Erreurs permanentes jamais réessayées : HTTP 400, 403, 401 après renouvellement du jeton (404 :
+    référence introuvable, comme avant).
+  - Le budget de temps (15 min) et le plafond de 900 appels gardent la priorité : une attente qui les
+    dépasserait n'est pas faite, et l'arrêt est signalé comme avant.
+  - Traçabilité : chaque tentative est journalisée sur la sortie d'erreur du scan
+    (`Digi-Key — tentative 2/10 : … ; reprise dans 10 s`). Le nombre d'incidents (`digikey.incidents`) et
+    l'abandon figurent dans la sortie du scan, dans l'avancement en direct (avertissement « Digi-Key : … »)
+    et dans la ligne d'audit `components-scan`, qui nomme désormais l'arrêt. Des incidents surmontés sont
+    signalés aussi.
+  - Une réponse tronquée (`IncompleteRead`) ou une ligne d'état illisible ne fait plus échouer le scan sur
+    une exception non traitée (plus de lot web dans ce cas).
+
 ## [0.4.0] — 2026-10-10
 
 Base des composants partagée entre veilles, carnet d'adresses des destinataires, repli alldatasheet pour

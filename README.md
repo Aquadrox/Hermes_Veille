@@ -160,6 +160,15 @@ lundi 6h30 — job de la veille thématique rattachée
   (`batch_size`). Avec 300 références et des lots de 40, chacune est recherchée sur le web toutes les
   8 semaines environ, et **en priorité** dès que son statut Digi-Key change ou que Digi-Key ne la
   trouve plus.
+- **Panne passagère de Digi-Key** (connexion coupée, délai dépassé, HTTP 5xx, HTTP 429) : le passage
+  attend puis **reprend à la référence interrompue**, sans réinterroger les précédentes. Les attentes
+  sont de 5, 10, 20, 30 et 45 s, puis 60 s au plus (± 20 %) ; le Retry-After d'un 429 est respecté. Au
+  10e échec d'un même passage (toutes références confondues), la phase est abandonnée et les références
+  restantes partent au lot de recherche web, sans être marquées vérifiées. Elles reprennent au passage
+  suivant. Une erreur permanente (HTTP 400, 403, jeton refusé) arrête la phase sans nouvel essai. Le
+  budget de temps (15 min) et le plafond d'appels gardent la priorité. Chaque tentative est journalisée
+  (`tentative n/10`, erreur, attente). L'abandon, ou des incidents surmontés, sont signalés dans
+  l'avancement, l'audit et la sortie du scan.
 - **À la demande** (interface ou Telegram) : « Lancer l'analyse » / `run_veille_now` exécute tout de
   suite l'analyse complète ; « Vérifier les statuts Digi-Key » / `check_component_statuses` (ou
   `veillectl components scan <slug> --status-only`) relit en arrière-plan le statut de toutes les

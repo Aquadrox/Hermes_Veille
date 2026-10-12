@@ -606,6 +606,11 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
 
     Lancement manuel suivi : avancement publié (référence en cours, puis lot) ; `track_progress` dit
     à l'agent de signaler ses groupes de recherche web (`components_progress`).
+
+    Panne passagère de Digi-Key (réseau, HTTP 5xx ou 429) : le passage attend (`digikey.retry_delay`) puis
+    reprend à la référence interrompue, sans réinterroger les précédentes. Au plus `digikey.MAX_ATTEMPTS`
+    pannes par passage, toutes références confondues ; le budget de temps et MAX_CALLS restent prioritaires.
+    Après abandon, les références non interrogées gardent leur date de vérification : elles partent au lot web.
     """
     _components_veille(slug)
     track = _tracker(slug, "analyse" if plan_batch else "statuts")
@@ -621,20 +626,42 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
         todo = [c for c in sorted(comp.load_components(slug)["components"],
                                   key=lambda c: (c.get("dk") or {}).get("checked_at") or "")
                 if ((c.get("dk") or {}).get("checked_at") or "") != day]
-        for i, c in enumerate(todo):
+        i = failures = 0  # référence en cours ; pannes passagères du passage, toutes références confondues
+        while i < len(todo):
+            c = todo[i]
             if client.calls >= digikey.MAX_CALLS or time.monotonic() - start > budget_s:
                 info["stopped"] = "budget de temps ou d'appels atteint : suite au prochain passage"
                 break
             if track:
                 track.update(throttle=True, step="digikey",
-                             digikey={"done": i, "total": len(todo), "current": c["mpn"]})
+                             digikey=_dk_progress(info, i, len(todo), current=c["mpn"]))
             try:
                 results[comp.key_of(c["mpn"], c["manufacturer"])] = client.status(c["mpn"], c["manufacturer"])
+            except digikey.TransientError as exc:
+                failures += 1
+                info["incidents"] = failures
+                wait = digikey.retry_delay(failures, exc)
+                attempt = f"tentative {failures}/{digikey.MAX_ATTEMPTS} : {exc}"
+                if failures >= digikey.MAX_ATTEMPTS:
+                    info["error"] = f"{exc} : abandon après {failures} tentatives, reprise au prochain passage"
+                elif client.calls >= digikey.MAX_CALLS or time.monotonic() - start + wait > budget_s:  # prioritaires
+                    info["stopped"] = "budget de temps ou d'appels atteint : suite au prochain passage"
+                    info["error"] = (f"{exc} : abandon après {failures} tentative(s), budget de temps ou d'appels "
+                                     "atteint, reprise au prochain passage")
+                attempt += " ; abandon, reprise au prochain passage" if "error" in info else f" ; reprise dans {wait:.0f} s"
+                print(f"Digi-Key — {attempt}", file=sys.stderr, flush=True)  # journal du lancement (stdout : le JSON)
+                if "error" in info:
+                    break
+                if track:
+                    track.update(step="digikey", digikey={"done": i, "total": len(todo), "current": c["mpn"],
+                                                          "note": attempt[:200]})
+                client.pause(wait)
+                continue  # même référence : les précédentes ne sont pas réinterrogées
             except digikey.DigiKeyError as exc:
                 info["error"] = str(exc)
                 break
-        note = info.get("error") or info.get("stopped")  # arrêt : affiché, jamais pris pour un succès
-        dk_progress = {"done": len(results), "total": len(todo), **({"note": note[:200]} if note else {})}
+            i += 1
+        dk_progress = _dk_progress(info, len(results), len(todo))
     with _locked():
         v = _components_veille(slug)
         data, notices = comp.load_components(slug), comp.load_notices(slug)
@@ -679,8 +706,9 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
     known: dict[str, list[str]] = {}
     for n in notices:
         known.setdefault(n["key"], []).append(n.get("number") or n["title"])
-    audit(actor, "components-scan", slug,
-          f"Digi-Key {info['checked']} vérifié(s), {len(new)} avis ; lot web {len(lot)}")
+    note = _dk_note(info)
+    audit(actor, "components-scan", slug, f"Digi-Key {info['checked']} vérifié(s), {len(new)} avis ; lot web "
+                                          f"{len(lot)}" + (f" ; Digi-Key : {note[:200]}" if note else ""))
     return {"slug": slug, "date": day, "track_progress": track is not None and plan_batch,
             "digikey": info, "new_digikey_notices": len(new),
             "batch": [{"mpn": c["mpn"], "manufacturer": c["manufacturer"], "ref": c.get("ref", ""),
@@ -689,6 +717,20 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
                        "digikey_error": (c.get("dk") or {}).get("error"), **_fallback(c),
                        "known": known.get(comp.key_of(c["mpn"], c["manufacturer"]), [])[:20]}
                       for c in lot]}
+
+
+def _dk_note(info: dict) -> str:
+    """Arrêt du passage Digi-Key (erreur, abandon, budget) et pannes surmontées par reprise : affichés, jamais
+    pris pour un succès ni passés sous silence. Vide pour un passage sans incident."""
+    parts = [info.get("error") or info.get("stopped")]
+    if info.get("incidents") and not info.get("error"):  # l'erreur d'un abandon compte déjà les tentatives
+        parts.append(f"{info['incidents']} incident(s) réseau, passage repris après attente")
+    return " ; ".join(p for p in parts if p)
+
+
+def _dk_progress(info: dict, done: int, total: int, **extra) -> dict:
+    note = _dk_note(info)
+    return {"done": done, "total": total, **extra, **({"note": note[:200]} if note else {})}
 
 
 def _fallback(c: dict) -> dict:
