@@ -37,8 +37,12 @@ HEADER_SCAN = 20
 MAX_EMPTY_RUN = 1_000  # lignes vides consécutives : fin des données (feuilles « étirées »)
 MAX_TOTAL_ROWS = 2 * MAX_ROWS  # lignes parcourues, vides comprises : borne CPU et mémoire
 PREVIEW_ROWS = 10
-FIELDS = ("mpn", "manufacturer", "ref")
-LABELS = {"mpn": "MPN (référence fabricant)", "manufacturer": "Fabricant", "ref": "Réf. interne"}
+FIELDS = ("mpn", "manufacturer")
+LABELS = {"mpn": "MPN (référence fabricant)", "manufacturer": "Fabricant"}
+# Colonnes reconnues à leur libellé : les champs importés, plus la réf. interne (code article, ERP). Celle-ci
+# n'est plus importée (0.5.0), mais elle compte pour trouver la ligne d'en-tête et sa colonne n'est jamais
+# prise pour le MPN : la détection reste celle d'avant.
+RECOGNIZED = (*FIELDS, "ref")
 
 # Libellés normalisés (minuscules, sans accents ni ponctuation) -> champ.
 SYNONYMS = {
@@ -294,7 +298,7 @@ def detect_header(rows: list[list[str]]) -> int | None:
     """Index de la ligne d'en-tête (celle qui contient le plus de libellés reconnus), ou None."""
     best, best_score = None, 0
     for i, row in enumerate(rows[:HEADER_SCAN]):
-        score = sum(1 for f in FIELDS if any(_match(c, f) for c in row))
+        score = sum(1 for f in RECOGNIZED if any(_match(c, f) for c in row))
         if score > best_score:
             best, best_score = i, score
     return best
@@ -313,11 +317,11 @@ def _looks_like_mpn(values: list[str]) -> bool:
 
 
 def guess_mapping(rows: list[list[str]], header_row: int | None) -> dict:
-    """{champ: {"col": index | None, "confidence": "exacte" | "probable" | None}}."""
+    """{champ: {"col": index | None, "confidence": "exacte" | "probable" | None}} (champs de FIELDS)."""
     cols = headers(rows, header_row)
     data = rows[header_row + 1:] if header_row is not None else rows
     taken, out = set(), {}
-    for field in FIELDS:  # exact d'abord, puis partiel ; une colonne pour un seul champ
+    for field in RECOGNIZED:  # exact d'abord, puis partiel ; une colonne pour un seul champ
         for level in ("exacte", "probable"):
             col = next((i for i, h in enumerate(cols) if i not in taken and header_row is not None
                         and _match(h, field) == level), None)
@@ -327,7 +331,7 @@ def guess_mapping(rows: list[list[str]], header_row: int | None) -> dict:
                 break
         else:
             out[field] = {"col": None, "confidence": None}
-    if all(out[f]["col"] is None for f in FIELDS):  # aucun libellé reconnu : MPN ; Fabricant ; Réf
+    if all(out[f]["col"] is None for f in RECOGNIZED):  # aucun libellé reconnu : MPN ; Fabricant
         for i, field in enumerate(FIELDS):
             if i < len(cols):
                 out[field] = {"col": i, "confidence": "probable"}
@@ -336,7 +340,7 @@ def guess_mapping(rows: list[list[str]], header_row: int | None) -> dict:
             if i not in taken and _looks_like_mpn([r[i] if i < len(r) else "" for r in data]):
                 out["mpn"] = {"col": i, "confidence": "probable"}
                 break
-    return out
+    return {f: out[f] for f in FIELDS}
 
 
 # --------------------------------------------------------------------------
@@ -383,9 +387,7 @@ def apply(rows: list[list[str]], header_row: int | None, mapping: dict[str, int 
         n = lines[i] if lines and i < len(lines) else i + 1
         if not any(row):
             continue
-        entry, reason = comp.validate_entry(cell(row, "mpn"),
-                                            cell(row, "manufacturer") or default_manufacturer,
-                                            cell(row, "ref"))
+        entry, reason = comp.validate_entry(cell(row, "mpn"), cell(row, "manufacturer") or default_manufacturer)
         if entry:
             out.append(entry)
         else:

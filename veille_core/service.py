@@ -711,7 +711,7 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
                                           f"{len(lot)}" + (f" ; Digi-Key : {note[:200]}" if note else ""))
     return {"slug": slug, "date": day, "track_progress": track is not None and plan_batch,
             "digikey": info, "new_digikey_notices": len(new),
-            "batch": [{"mpn": c["mpn"], "manufacturer": c["manufacturer"], "ref": c.get("ref", ""),
+            "batch": [{"mpn": c["mpn"], "manufacturer": c["manufacturer"],
                        "since": comp.search_since(c), "digikey_status": (c.get("dk") or {}).get("status"),
                        # non nul : Digi-Key ne la trouve pas, l'agent établit lui-même son statut (« statuses »)
                        "digikey_error": (c.get("dk") or {}).get("error"), **_fallback(c),
@@ -789,11 +789,11 @@ def _store_components(slug: str, data: dict, wanted: list[dict]) -> dict:
     """La liste de la veille devient `wanted` (appelé SOUS le verrou, `data` relu sous ce verrou) : état des
     références conservées gardé, reprise de la base pour les nouvelles, enregistrement et indexation si une
     entrée change (pas seulement le nombre). Renvoie la reprise, "changed" et "keys_changed" (références
-    ajoutées, retirées ou réordonnées, pas seulement une réf. interne).
+    ajoutées, retirées ou réordonnées, pas seulement la graphie d'un MPN ou d'un fabricant).
 
     `notices.json` illisible : la liste s'enregistre quand même (comme avant la base), sans reprise ni index."""
     def entries(lst):
-        return [(c["mpn"], c["manufacturer"], c.get("ref", "")) for c in lst]
+        return [(c["mpn"], c["manufacturer"]) for c in lst]
     before = data["components"]
     after = comp.replace_components(before, wanted)
     if entries(after) == entries(before):
@@ -937,6 +937,45 @@ def rebuild_catalog(actor: str = "cli") -> dict:
 def catalog_stats() -> dict | None:
     """Contenu de la base des composants (page Santé) ; None si elle est indisponible."""
     return _best_effort("base des composants", catalog.stats, trace=False)
+
+
+def _catalog_state(key: str | None) -> tuple[dict, list[dict], list[dict]] | None:
+    """(connaissance par clé, références, avis dédoublonnés) de la base des composants, toutes veilles
+    confondues : pour chaque référence, ses statuts les plus récents ; pour chaque avis, sa première date de
+    détection. None si la base est indisponible (lecture d'affichage : la page le signale)."""
+    known = _best_effort("base des composants", catalog.browse, key, trace=False)
+    if known is None:
+        return None
+    parts = [{"mpn": k["mpn"], "manufacturer": k["manufacturer"], "dk": k.get("dk"),
+              "web_status": k.get("web_status"), "web_checked_at": k.get("web_checked_at")} for k in known.values()]
+    found = sorted((n for k in known.values() for n in k["notices"]), key=lambda n: str(n.get("found_at") or ""))
+    return known, parts, comp.merge([], found)
+
+
+def catalog_rows(key: str | None = None) -> list[dict] | None:
+    """Base des composants (page « Composants ») : une ligne par référence déjà analysée, comme la liste d'une
+    veille (`components.group`), avec les veilles qui l'ont analysée (`watches` : slug d'une veille active ou
+    dossier d'archive) ; `key` : cette seule référence. None si la base est indisponible."""
+    state = _catalog_state(key)
+    if state is None:
+        return None
+    known, parts, notices = state
+    rows = comp.group(notices, parts, include_quiet=True)
+    for r in rows:
+        r["watches"] = sorted(known.get(r["key"], {}).get("sources", ()))
+    return rows
+
+
+def catalog_xlsx() -> bytes | None:
+    """Base des composants au format Excel (classeur de l'export d'une veille, plus la colonne « Veilles », nommées
+    comme dans l'interface) ; None si elle est indisponible."""
+    state = _catalog_state(None)
+    if state is None:
+        return None
+    known, parts, notices = state
+    active = {v.slug for v in store.list_all()}
+    return comp.to_xlsx(parts, notices, {key: [s if s in active else catalog.archived_label(s)
+                                               for s in sorted(k["sources"])] for key, k in known.items()})
 
 
 def address_book(limit: int | None = contacts.MAX_SHOWN) -> list[str]:

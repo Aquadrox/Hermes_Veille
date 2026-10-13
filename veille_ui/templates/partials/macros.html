@@ -17,3 +17,8 @@ Lancer « {{ v.name }} » maintenant ? Un rapport sera envoyé aux destinataires
 {% macro source_link(s) -%}
 <a href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ s.label }}</a>
 {%- endmacro %}
+
+{# Base des composants : veilles qui ont analysé une référence (lien si active, libellé de l'archive sinon). #}
+{% macro watch_links(watches, active) -%}
+{% for s in watches %}{% if s in active %}<a href="/veilles/{{ s }}">{{ s }}</a>{% else %}<span class="muted">{{ s|archived }}</span>{% endif %}{{ ", " if not loop.last }}{% endfor %}
+{%- endmacro %}

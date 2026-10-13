@@ -27,7 +27,7 @@ def test_parse_components_formats_header_comments_and_duplicates():
     text = "MPN;Fabricant;Réf\nLM317T ; Texas Instruments ; R-1\n# commentaire\n\nlm317t;texas instruments\nNE555P,TI,\n"
     out = comp.parse_components(text)
     assert [c["mpn"] for c in out] == ["LM317T", "NE555P"]
-    assert out[0] == {"mpn": "LM317T", "manufacturer": "Texas Instruments", "ref": "R-1"}
+    assert out[0] == {"mpn": "LM317T", "manufacturer": "Texas Instruments"}  # 3e colonne (réf. interne) ignorée
     assert len(comp.parse_components(BOM)) == 3  # collage tableur (tabulations)
 
 
@@ -47,10 +47,11 @@ def test_replace_components_keeps_state_of_kept_keys():
     old = comp.replace_components([], comp.parse_components("A1;X;r\nB2;Y"))
     old[0]["web_checked_at"] = "2026-01-01"
     new = comp.replace_components(old, comp.parse_components("a1;x;nouvelle-ref\nC3;Z"))
-    assert new[0]["web_checked_at"] == "2026-01-01" and new[0]["ref"] == "nouvelle-ref"
+    assert new[0]["web_checked_at"] == "2026-01-01" and "ref" not in new[0]
     assert new[1]["web_checked_at"] is None and len(new) == 2
+    assert comp.format_components(new) == "a1 ; x\nC3 ; Z"
     assert comp.parse_components(comp.format_components(new)) == [
-        {"mpn": "a1", "manufacturer": "x", "ref": "nouvelle-ref"}, {"mpn": "C3", "manufacturer": "Z", "ref": ""}]
+        {"mpn": "a1", "manufacturer": "x"}, {"mpn": "C3", "manufacturer": "Z"}]
 
 
 @pytest.mark.parametrize("url,expected", [
@@ -149,12 +150,12 @@ def test_markdown_escapes_untrusted_fields():
                   url="https://ti.com/a_(b)")
     evil[0]["sources"][0]["label"] = "TI](javascript:alert(1))"
     comp.merge(notices, evil)
-    view = comp.digest(comp.replace_components([], comp.parse_components("LM317T;Texas Instruments;R|1")),
+    view = comp.digest(comp.replace_components([], comp.parse_components("LM317T;Texas | Instruments")),
                        notices, notices)
     md = comp.to_markdown(view)
     assert not re.search(r"(?<!\\)<", md) and "\\<img" in md  # aucun « < » non échappé
     assert "](javascript" not in md and "\\]\\(javascript" in md
-    assert "R\\|1" in md and "(https://ti.com/a_%28b%29)" in md
+    assert "Texas \\| Instruments" in md and "(https://ti.com/a_%28b%29)" in md
     assert "::: {.critical}" in md and comp.subject_prefix(view) == "[EOL ×1] "
     html = comp.to_html_email(view, "Titre <b>")
     assert "<img src=http://evil" not in html and "&lt;img" in html and "Titre &lt;b&gt;" in html
@@ -193,13 +194,13 @@ def test_group_one_row_per_component():
     assert [r["mpn"] for r in rows] == ["LM317T", "STM32F103C8T6", "NE555P"]  # critiques, sévérité, sans avis
     lm = rows[0]
     assert lm["types"] == ["EOL", "PCN"] and lm["critical"] and lm["deadline"] == "2027-03-31"
-    assert lm["link"]["url"] == "https://a.org/eol" and lm["worst"]["type"] == "EOL" and lm["ref"] == "R-1"
+    assert lm["link"]["url"] == "https://a.org/eol" and lm["worst"]["type"] == "EOL" and "ref" not in lm
     assert lm["found"] == "2026-02-01" and lm["tracked"]
     assert rows[2]["types"] == [] and rows[2]["link"] is None and not rows[2]["critical"]
     assert [r["mpn"] for r in comp.group(notices, comps)] == ["LM317T", "STM32F103C8T6"]  # sans les silencieux
     # composant retiré de la liste : ses avis restent visibles
     gone = comp.group(notices, comps[1:])
-    assert gone[0]["mpn"] == "LM317T" and not gone[0]["tracked"] and gone[0]["ref"] == ""
+    assert gone[0]["mpn"] == "LM317T" and not gone[0]["tracked"]
     assert not gone[0]["critical"]  # un composant retiré n'est plus une alerte (comme summary / rappel)
     # ancre : stable, sûre, distincte
     keys = {r["key"] for r in rows}
@@ -218,7 +219,7 @@ def test_compact_markdown_links_each_row_to_its_detail():
     assert "[Fin de vie]{.badge .eol} [Modification \\(PCN\\)]{.badge .pcn}" in md  # 2 avis -> 1 ligne
     assert md.index("Nouvelles fins de vie") < md.index("Autres nouveaux avis") < md.index("Rappel") \
         < md.index("Détail par composant")
-    assert "réf. R\\-1" in md and "dernière cde 2027\\-03\\-31" in md
+    assert "réf." not in md and "dernière cde 2027\\-03\\-31" in md  # plus de réf. interne
     text = comp.to_text_email(view)
     assert "- LM317T (Texas Instruments) : Fin de vie, Modification (PCN) — https://a.org/eol" in text
     html = comp.to_html_email(view, "T")
@@ -760,7 +761,7 @@ def test_ui_create_and_edit_components(ui):
     v = store.load("bom-carte-y")
     assert v.kind == "composants" and v.batch_size == 25 and v.schedule == "0 23 * * 0"
     t = client.get("/veilles/bom-carte-y/edit").text
-    assert "LM317T ; TI ; R1" in t and 'name="kind" value="composants"' in t
+    assert "LM317T ; TI\nNE555P ; TI</textarea>" in t and 'name="kind" value="composants"' in t  # ancien format accepté
     bad = create_form(csrf, name="BOM carte Z", kind="composants", components="sans-fabricant")
     r = client.post("/veilles/new", data=bad)
     assert r.status_code == 400 and "ligne 1" in r.text and not store.exists("bom-carte-z")
@@ -900,7 +901,7 @@ def test_chapter_requires_link_and_channel_namespace(watch, tools):
 
 def test_header_and_short_manufacturer_names():
     assert comp.parse_components("# export\nPart Number;Manufacturer\nLM317T;TI") == [
-        {"mpn": "LM317T", "manufacturer": "TI", "ref": ""}]
+        {"mpn": "LM317T", "manufacturer": "TI"}]
     assert comp.same_manufacturer("TI", "ti") and not comp.same_manufacturer("ON", "Infineon")
     assert comp.same_manufacturer("onsemi", "ON Semiconductor onsemi")
 
@@ -1112,14 +1113,15 @@ def test_xlsx_full_list_critical_first_and_safe_cells(watch, tools):
     data = service.components_xlsx(watch.slug)
     ws = _sheet(data)
     rows = list(ws.iter_rows(values_only=True))
-    assert rows[0][:4] == ("Composant", "Fabricant", "Réf. interne", "Critique")
+    assert rows[0][:4] == ("Composant", "Fabricant", "Critique", "Avis")  # plus de réf. interne
+    assert len(rows[0]) == 13 and rows[0][-1] == "Suivi"  # « Veilles » : export de la base seulement
     assert [r[0] for r in rows[1:]] == ["LM317T", "NE555P", "STM32F103C8T6"]
     lm, ne, stm = rows[1:]
-    assert lm[3] == "Oui" and lm[8] == "Last Time Buy" and lm[13] is None and lm[2] == "R-001"
-    assert ne[3] is None and ne[13] == "retiré" and rows[0][10] == "Statut web" and lm[10] is None
-    assert stm[5] == '=HYPERLINK("http://evil/x","clic")' and stm[6] == as_read(2027, 3, 31)
-    assert ws.cell(4, 6).data_type == "s" and "<f>" not in _sheet_xml(data)  # texte, jamais formule
-    assert ws.cell(4, 13).hyperlink.target == "https://st.com/pcn/1"
+    assert lm[2] == "Oui" and lm[7] == "Last Time Buy" and lm[12] is None
+    assert ne[2] is None and ne[12] == "retiré" and rows[0][9] == "Statut web" and lm[9] is None
+    assert stm[4] == '=HYPERLINK("http://evil/x","clic")' and stm[5] == as_read(2027, 3, 31)
+    assert ws.cell(4, 5).data_type == "s" and "<f>" not in _sheet_xml(data)  # texte, jamais formule
+    assert ws.cell(4, 12).hyperlink.target == "https://st.com/pcn/1"
     assert ws.cell(2, 1).fill.fgColor.rgb.endswith("FEF2F2") and ws.freeze_panes == "A2" and ws.auto_filter.ref
     assert ws.page_setup.orientation == "landscape" and ws.sheet_properties.pageSetUpPr.fitToPage
 
@@ -1132,10 +1134,10 @@ def test_xlsx_unsafe_link_illegal_chars_and_odd_values():
                      "product_url": "javascript:alert(1)"}, "web_checked_at": "2026-10-01\n"}]
     data = comp.to_xlsx(comps, [])
     ws = _sheet(data)  # relu sans erreur : fichier bien formé
-    assert [c.value for c in ws[2]][:3] == ["2026-01-01", "X", "42"] and ws.cell(2, 1).data_type == "s"
-    assert ws.cell(2, 9).value == "Obsolete" and ws.cell(2, 10).value == "2026-13-45"  # date invalide : texte
-    assert ws.cell(2, 12).value == "2026-10-01\n" and ws.cell(2, 12).data_type == "s"
-    assert ws.cell(2, 13).value is None and ws.cell(2, 13).hyperlink is None
+    assert [c.value for c in ws[2]][:3] == ["2026-01-01", "X", None] and ws.cell(2, 1).data_type == "s"  # réf. ignorée
+    assert ws.cell(2, 8).value == "Obsolete" and ws.cell(2, 9).value == "2026-13-45"  # date invalide : texte
+    assert ws.cell(2, 11).value == "2026-10-01\n" and ws.cell(2, 11).data_type == "s"
+    assert ws.cell(2, 12).value is None and ws.cell(2, 12).hyperlink is None
     assert _sheet(comp.to_xlsx([], [])).max_row == 1  # liste vide : en-tête seul
 
 

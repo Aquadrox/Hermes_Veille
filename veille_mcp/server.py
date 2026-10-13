@@ -52,15 +52,15 @@ Gestion des veilles technologiques automatisées (rapports PDF envoyés par e-ma
   de zéro (copie archivée) ; il exige de répéter le slug : confirme avec l'utilisateur avant.
 - Heures exprimées à l'heure de Paris.
 - Veilles COMPOSANTS (`kind` = composants) : surveillance des avis PCN et des fins de vie (EOL,
-  PDN, obsolescence, dernière commande LTB, NRND) d'une liste de références « MPN ; Fabricant ;
-  Réf. interne ». `list_notices` donne les avis détectés (fins de vie en tête, avec leurs liens
+  PDN, obsolescence, dernière commande LTB, NRND) d'une liste de références « MPN ; Fabricant ».
+  `list_notices` donne les avis détectés (fins de vie en tête, avec leurs liens
   sources) ; `list_components` l'état de chaque référence. Les FINS DE VIE sont l'information la
   plus critique : présente-les toujours en premier. `include_components` (sur une veille
   thématique) ajoute ces avis en chapitre de son e-mail.
 - IMPORT d'une nomenclature (CSV ou Excel) : dépose le fichier reçu dans le dossier d'import du
   serveur (chemin donné par `preview_component_import` s'il est introuvable), appelle
-  `preview_component_import`, MONTRE la correspondance proposée (colonnes MPN / Fabricant /
-  Réf. interne, aperçu, lignes ignorées) et attends l'accord de l'utilisateur ou ses corrections
+  `preview_component_import`, MONTRE la correspondance proposée (colonnes MPN / Fabricant,
+  aperçu, lignes ignorées) et attends l'accord de l'utilisateur ou ses corrections
   avant `import_components` (mode add par défaut ; replace remplace toute la liste).
 - Clés d'API des distributeurs (Digi-Key) : JAMAIS par la conversation. Elles se saisissent dans
   l'interface web, page « Sources » ; `health` indique seulement si elles sont configurées.
@@ -264,7 +264,7 @@ def preview_schedule(frequency: Frequency = "weekly", time: str = "08:00",
 
 
 def list_components(slug: str) -> list[dict]:
-    """Références suivies par une veille composants : MPN, fabricant, réf. interne, statut
+    """Références suivies par une veille composants : MPN, fabricant, statut
     Digi-Key, statut établi par la recherche web (référence inconnue de Digi-Key : ACTIVE, NRND,
     LTB, OBSOLETE ou UNKNOWN, avec sa source ; repli alldatasheet : fiche consultée et site du
     fabricant), avis le plus critique, dates des dernières vérifications (Digi-Key et web)."""
@@ -275,7 +275,7 @@ def list_components(slug: str) -> list[dict]:
     for c in comps:
         dk, w = c.get("dk") or {}, worst.get(components.key_of(c["mpn"], c["manufacturer"]))
         web = c.get("web_status") or {}
-        out.append({"mpn": c["mpn"], "manufacturer": c["manufacturer"], "ref": c.get("ref", ""),
+        out.append({"mpn": c["mpn"], "manufacturer": c["manufacturer"],
                     "digikey_status": dk.get("status"), "digikey_error": dk.get("error"),
                     "digikey_checked_at": dk.get("checked_at"), "web_status": web.get("status"),
                     "web_status_url": web.get("url"), "web_status_datasheet": web.get("datasheet"),
@@ -303,29 +303,26 @@ def list_notices(slug: str | None = None, type: NoticeType | None = None, since:
 
 
 def _import_proposal(filename: str, sheet: str | None, header_row: int | None, mpn_column: str | None,
-                     manufacturer_column: str | None, ref_column: str | None,
-                     default_manufacturer: str | None) -> dict:
+                     manufacturer_column: str | None, default_manufacturer: str | None) -> dict:
     try:
         path = bom_import.import_path(filename)
     except StoreError as exc:
         where = _host_path(paths.imports_dir()) or str(paths.imports_dir())
         raise ToolError(f"{exc} — dossier d'import sur le serveur : {where}") from None
-    columns = {f: v for f, v in (("mpn", mpn_column), ("manufacturer", manufacturer_column),
-                                 ("ref", ref_column)) if v is not None}
+    columns = {f: v for f, v in (("mpn", mpn_column), ("manufacturer", manufacturer_column)) if v is not None}
     return _guard(lambda: bom_import.propose_options(bom_import.read_path(path, sheet), header_row, columns,
                                                      default_manufacturer or ""))
 
 
 def preview_component_import(filename: str, sheet: str | None = None, header_row: int | None = None,
                              mpn_column: str | None = None, manufacturer_column: str | None = None,
-                             ref_column: str | None = None, default_manufacturer: str | None = None) -> dict:
+                             default_manufacturer: str | None = None) -> dict:
     """Analyse une nomenclature (CSV ou Excel) déposée dans le dossier d'import et PROPOSE la
-    correspondance des colonnes (MPN, fabricant, réf. interne), reconnue par règles, sans rien
+    correspondance des colonnes (MPN, fabricant), reconnue par règles, sans rien
     enregistrer : feuilles, en-têtes, colonnes retenues et leur confiance, aperçu, lignes ignorées.
     `header_row` : 0 = pas d'en-tête, n = ligne n (omis = détection) ; colonnes : libellé, lettre ou
     numéro, pour corriger la proposition."""
-    p = _import_proposal(filename, sheet, header_row, mpn_column, manufacturer_column, ref_column,
-                         default_manufacturer)
+    p = _import_proposal(filename, sheet, header_row, mpn_column, manufacturer_column, default_manufacturer)
     return {"filename": filename, "sheets": p["sheets"], "sheet": p["sheet"],
             "header_row": p["header_row"] + 1 if p["header_row"] is not None else 0,
             "columns": [f"{bom_import.column_name(i)} : {c}" for i, c in enumerate(p["columns"])],
@@ -391,8 +388,8 @@ def create_veille(name: str, subject: str, recipients: list[str], frequency: Fre
     (les champs <NOM DE LA VEILLE> et <DOMAINE> du modèle « vierge » sont remplis avec `name`
     et `subject` ; complète ensuite la section « Couverture » avec `edit_brief`).
     Fréquence par défaut : chaque lundi à 8h (veille composants : dimanche 23h, heures creuses).
-    `kind="composants"` : veille PCN / fins de vie ; `components_list` = lignes « MPN ; Fabricant ;
-    Réf. interne » (le modèle de brief « composants » est appliqué). `include_components` : slug
+    `kind="composants"` : veille PCN / fins de vie ; `components_list` = lignes « MPN ; Fabricant »
+    (le modèle de brief « composants » est appliqué). `include_components` : slug
     d'une veille composants dont les avis seront ajoutés en chapitre de l'e-mail de cette veille.
     `paused=True` crée la veille sans la planifier."""
     if kind == "composants" and frequency is None and cron is None and time is None and day_of_week is None:
@@ -487,8 +484,8 @@ def edit_brief(slug: str, find: str, replace: str) -> dict:
 
 
 def add_components(slug: str, components_list: list[str]) -> dict:
-    """Ajoute des références à une veille composants : lignes « MPN ; Fabricant ; Réf. interne »
-    (réf. facultative). Les doublons sont ignorés. Ce que les autres veilles savent déjà de ces
+    """Ajoute des références à une veille composants : lignes « MPN ; Fabricant ». Les doublons
+    sont ignorés. Ce que les autres veilles savent déjà de ces
     références (statuts, avis) est repris de la base des composants : `known` références
     reconnues, `notices_known` avis repris (envoyés au prochain e-mail de la veille)."""
     items = _guard(components.parse_components, "\n".join(components_list))
@@ -505,14 +502,12 @@ def remove_components(slug: str, mpns: list[str]) -> dict:
 
 def import_components(slug: str, filename: str, mode: ImportMode = "add", sheet: str | None = None,
                       header_row: int | None = None, mpn_column: str | None = None,
-                      manufacturer_column: str | None = None, ref_column: str | None = None,
-                      default_manufacturer: str | None = None) -> dict:
+                      manufacturer_column: str | None = None, default_manufacturer: str | None = None) -> dict:
     """Importe dans une veille composants la nomenclature du dossier d'import, avec la
     correspondance validée par l'utilisateur (mêmes options que `preview_component_import`, à
     appeler d'abord). `mode` : add (ajout, doublons ignorés) ou replace (la liste devient celle du
     fichier ; l'historique des avis est conservé). Les lignes invalides sont ignorées."""
-    p = _import_proposal(filename, sheet, header_row, mpn_column, manufacturer_column, ref_column,
-                         default_manufacturer)
+    p = _import_proposal(filename, sheet, header_row, mpn_column, manufacturer_column, default_manufacturer)
     if p["error"]:
         raise ToolError(p["error"])
     st = _guard(service.import_components, slug, p["components"], mode, actor=_actor())

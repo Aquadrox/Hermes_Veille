@@ -1,0 +1,61 @@
+{# Tableau des composants, commun à la liste d'une veille (`v`) et à la base des composants (sans `v` : colonne
+   « Veilles » en plus). Recherche plein texte et filtres par colonne (texte : contient ; liste : valeur exacte),
+   détail chargé au clic (app.js). Fins de vie en tête et en rouge. Contexte : app.table_ctx. #}
+{% from "partials/macros.html" import badge, source_link, watch_links %}
+{% set all_veilles = v is not defined %}
+<div class="comp-tools">
+  <input type="search" id="comp-search" placeholder="Rechercher : MPN, fabricant, statut, avis, mot-clé…"
+         aria-label="Rechercher dans les composants" autocomplete="off">
+  <span class="small muted" id="comp-count" aria-live="polite">{{ comp_rows|length }} / {{ comp_rows|length }}</span>
+</div>
+<div class="table-wrap">
+<table class="comps" id="comp-table" data-limit="{{ COMP_ROWS_SHOWN }}">
+  <thead>
+    <tr><th>Composant</th><th class="opt">Fabricant</th><th class="opt">Statut</th><th>Avis</th><th>Échéance</th><th class="opt">Détecté</th>{% if all_veilles %}<th class="opt">Veilles</th>{% endif %}<th>Lien</th></tr>
+    <tr class="filters">
+      <th><input type="search" data-col="0" placeholder="Composant" aria-label="Filtrer par composant" autocomplete="off"></th>
+      <th class="opt"><input type="search" data-col="1" placeholder="Fabricant" aria-label="Filtrer par fabricant" autocomplete="off"></th>
+      <th><select data-col="2" aria-label="Filtrer par statut">
+        <option value="">Statut : tous</option>
+        {% for s in statuses %}<option value="{{ s }}">{{ "Statut inconnu" if s == "—" else s }}</option>{% endfor %}
+      </select></th>
+      <th><select data-types aria-label="Filtrer par type d'avis">
+        <option value="">Avis : tous</option>
+        <option value="critical">Fin de vie / dernière cde</option>
+        <option value="notice">Avec avis</option>
+        <option value="none">Sans avis</option>
+        {% for t, label in NOTICE_TYPES.items() %}<option value="{{ t }}">{{ label[0] }}</option>{% endfor %}
+      </select></th>
+      <th><input type="search" data-col="4" placeholder="Échéance" aria-label="Filtrer par échéance" autocomplete="off"></th>
+      <th class="opt"><input type="search" data-col="5" placeholder="Détecté" aria-label="Filtrer par date de détection" autocomplete="off"></th>
+      {% if all_veilles %}<th><select data-col="6" aria-label="Filtrer par veille">
+        <option value="">Veille : toutes</option>
+        {% for s in watches %}<option value="{{ s }}">{{ s if s in active else s|archived }}</option>{% endfor %}
+      </select></th>{% endif %}
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in comp_rows %}
+    {# au-delà de la limite : masquées dès le rendu (mise en page légère), app.js gère ensuite #}
+    <tr class="comp{% if r.critical %} crit{% endif %}"{% if loop.index > COMP_ROWS_SHOWN %} hidden{% endif %}
+        data-types="{{ r.types|join(' ') }}"
+        data-detail="{% if all_veilles %}/composants/detail?key={{ r.key|urlencode }}{% else %}/veilles/{{ v.slug }}/components/{{ r.anchor }}{% endif %}"
+        data-q="{{ r.dk.status or '' }}{% if r.web %} {{ web_status_label(r.web) }}{% endif %}{% for n in r.notices %} {{ NOTICE_TYPES[n.type][0] }} {{ n.title }} {{ n.number }} {{ n.summary }}{% endfor %}">
+      <td class="c-mpn"><button type="button" class="link comp-toggle" aria-expanded="false" aria-controls="d-{{ r.anchor }}"><strong>{{ r.mpn }}</strong></button>{% if not r.tracked %} <span class="muted small">(retiré)</span>{% endif %}</td>
+      <td class="opt">{{ r.manufacturer }}</td>
+      <td class="opt">{{ r.status }}</td>
+      <td class="c-types">{% for t in r.types %}{{ badge(t) }} {% else %}<span class="muted">—</span>{% endfor %}</td>
+      <td class="c-due nowrap">{% if r.deadline %}<strong>{{ r.deadline }}</strong>{% else %}—{% endif %}</td>
+      <td class="opt nowrap">{{ r.found or "—" }}</td>
+      {% if all_veilles %}<td class="opt" data-tags="{{ r.watches|join('|') }}">{{ watch_links(r.watches, active) }}</td>{% endif %}
+      <td class="c-link">{% if r.link %}{{ source_link(r.link) }}{% else %}—{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="{{ 8 if all_veilles else 7 }}" class="muted">{% if all_veilles %}Aucune référence analysée pour l'instant : elles apparaissent ici après la première analyse d'une veille composants.{% else %}Aucun composant suivi : <a href="/veilles/{{ v.slug }}/edit">ajouter ou importer une liste</a>.{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="muted" id="comp-empty" hidden>Aucun composant ne correspond aux filtres.</p>
+<p class="small muted" id="comp-more"{% if comp_rows|length <= COMP_ROWS_SHOWN %} hidden{% endif %}><span>{{ comp_rows|length - COMP_ROWS_SHOWN }} autre(s) composant(s) correspondent : affine la recherche ou </span><button type="button" class="link">tout afficher</button>.</p>

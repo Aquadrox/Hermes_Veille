@@ -21,6 +21,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from veille_core import (
     bom_import,
+    catalog,
     components,
     credentials,
     deepseek,
@@ -39,6 +40,7 @@ from . import auth
 HERE = Path(__file__).resolve().parent
 ACTOR = "ui"
 ANCHOR_RE = re.compile(r"c-[0-9a-f]{10}")  # identifiant d'un composant (components.anchor), fullmatch
+KEY_MAX = 200  # clé d'un composant (components.key_of : fabricant normalisé | MPN), base des composants
 COMP_ROWS_SHOWN = 200  # liste des composants : lignes affichées avant « tout afficher » (mobile)
 USER_ERRORS = (StoreError, schedule.ScheduleError, service.ServiceError, hermes.HermesError)
 
@@ -134,6 +136,7 @@ templates.env.filters["dt"] = fmt_dt
 templates.env.filters["size"] = fmt_size
 templates.env.filters["usd"] = fmt_usd
 templates.env.filters["num"] = fmt_int
+templates.env.filters["archived"] = catalog.archived_label
 templates.env.globals["status_class"] = status_class
 templates.env.globals["DAYS"] = schedule.DAYS
 templates.env.globals["NOTICE_TYPES"] = components.TYPES
@@ -218,6 +221,27 @@ def schedule_ctx(freq: dict) -> dict:
 
 def component_watches() -> list[store.Veille]:
     return [x for x in store.list_all() if x.kind == "composants"]
+
+
+def active_watches() -> set[str]:
+    """Slugs des veilles composants actives (les autres sources de la base sont des archives)."""
+    return {v.slug for v in component_watches()}
+
+
+def table_ctx(rows: list[dict]) -> dict:
+    """Contexte du tableau des composants (partials/comp_table.html) : lignes et leur statut (calculé une fois),
+    décomptes, statuts proposés au filtre (« — » : statut inconnu)."""
+    for r in rows:
+        r["status"] = components.status_label(r) or "—"
+    return {"comp_rows": rows, "statuses": sorted({r["status"] for r in rows}),
+            "critical_count": sum(1 for r in rows if r["critical"]),
+            "notice_total": sum(len(r["notices"]) for r in rows)}
+
+
+def xlsx_response(data: bytes, name: str) -> Response:
+    """Classeur Excel en téléchargement, nommé `<date>-<name>.xlsx` (name : slug validé ou nom fixe)."""
+    return Response(data, media_type=components.XLSX_TYPE, headers={
+        "Content-Disposition": f'attachment; filename="{components.xlsx_name(name, components.today())}"'})
 
 
 def pdf_from_values(values: dict) -> dict:
@@ -394,11 +418,8 @@ def create_app() -> FastAPI:
     def components_ctx(v: store.Veille) -> dict:
         if v.kind != "composants":
             return {}
-        rows = component_rows(v.slug)
-        return {"digikey_configured": credentials.status("digikey")["configured"], "comp_rows": rows,
-                "critical_count": sum(1 for r in rows if r["critical"] and r["tracked"]),
-                "notice_total": sum(len(r["notices"]) for r in rows),
-                "linked": [x.slug for x in service._linked_veilles(v.slug)]}
+        return {"digikey_configured": credentials.status("digikey")["configured"],
+                "linked": [x.slug for x in service._linked_veilles(v.slug)], **table_ctx(component_rows(v.slug))}
 
     @app.get("/veilles/{slug}", response_class=HTMLResponse)
     def detail(request: Request, slug: str):
@@ -583,9 +604,35 @@ def create_app() -> FastAPI:
             return PlainTextResponse(str(exc), status_code=500)
         except USER_ERRORS:
             return PlainTextResponse("veille composants introuvable", status_code=404)
-        name = components.xlsx_name(slug, components.today())
-        return Response(data, media_type=components.XLSX_TYPE,
-                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+        return xlsx_response(data, slug)
+
+    # -------------------------------------------------------------- base des composants (toutes les veilles)
+    @app.get("/composants", response_class=HTMLResponse)
+    def catalog_page(request: Request):
+        rows = service.catalog_rows()
+        if rows is None:  # base indisponible : signalé sur la page (journal d'audit non inondé)
+            return render(request, "catalog.html", 503, comp_rows=None)
+        active = active_watches()
+        watches = sorted({s for r in rows for s in r["watches"]}, key=lambda s: (s not in active, s))
+        return render(request, "catalog.html", active=active, watches=watches, **table_ctx(rows))
+
+    @app.get("/composants/detail", response_class=HTMLResponse)
+    def catalog_detail(request: Request, key: str = ""):
+        """Détail d'une référence de la base, chargé au clic (app.js) : cette seule clé est lue."""
+        rows = service.catalog_rows(key) if 0 < len(key) <= KEY_MAX else []
+        if rows is None:
+            return PlainTextResponse("base des composants indisponible", status_code=503)
+        row = next((r for r in rows if r["key"] == key), None)
+        if row is None:
+            return PlainTextResponse("composant introuvable", status_code=404)
+        return render(request, "partials/component_detail.html", r=row, active=active_watches())
+
+    @app.get("/composants.xlsx")
+    def catalog_export():
+        data = service.catalog_xlsx()
+        if data is None:
+            return PlainTextResponse("base des composants indisponible", status_code=503)
+        return xlsx_response(data, "base-composants")
 
     # -------------------------------------------------------------- fichiers
     @app.get("/veilles/{slug}/reports/{name}")

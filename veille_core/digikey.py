@@ -45,13 +45,10 @@ RETRY_AFTER = 10    # HTTP 429 sans en-tête Retry-After exploitable (s)
 # avant. HTTPException : réponse tronquée (IncompleteRead) ou ligne d'état illisible, après une coupure.
 TRANSIENT = (ConnectionError, TimeoutError, urllib.error.URLError, http.client.HTTPException)
 
-# Statut Digi-Key (minuscules) -> type d'avis. Active / Preliminary : pas d'avis.
-STATUS_TYPES = {
-    "obsolete": "OBSOLETE",
-    "last time buy": "LTB",
-    "not for new designs": "NRND",
-    "discontinued at digi-key": "AUTRE",
-}
+# Statut Digi-Key (minuscules) -> type d'avis : les statuts de cycle de vie qui sont aussi un type d'avis (NRND, LTB,
+# OBSOLETE), plus « Discontinued at Digi-Key ». Active / Preliminary : pas d'avis.
+STATUS_TYPES = {**{s: t for s, t in components.DK_LIFECYCLE.items() if t in components.TYPES},
+                "discontinued at digi-key": "AUTRE"}
 
 
 class DigiKeyError(RuntimeError):

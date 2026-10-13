@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Composants — Veilles{% endblock %}
+{% block content %}
+<div class="head">
+  <h1>Base des composants</h1>
+  {% if comp_rows %}<a class="button" href="/composants.xlsx" download>Exporter (Excel)</a>{% endif %}
+</div>
+{% if comp_rows is none %}
+<section class="card"><p class="err">Base des composants momentanément indisponible (en cours d'écriture ou de
+  reconstruction) : recharger la page dans quelques instants. Si le problème persiste, elle se reconstruit au
+  prochain démarrage, ou par <code>veillectl catalog rebuild</code>.</p></section>
+{% else %}
+<section class="card" id="composants">
+  <div class="head">
+    <p class="small muted">{{ comp_rows|length|num }} référence(s) analysée(s) · {{ notice_total|num }} avis ·
+      {{ watches|length }} veille(s) composants, actives et archivées</p>
+    {% if critical_count %}<span class="badge eol">⚠ {{ critical_count }} en fin de vie ou dernière commande</span>{% endif %}
+  </div>
+  {% include "partials/comp_table.html" %}
+  <p class="small muted">Tout ce que les veilles composants ont déjà établi (statuts Digi-Key et web, avis PCN et
+    fins de vie), une ligne par référence : le statut le plus récent, chaque avis une fois, à sa première date de
+    détection. Index des fichiers des veilles, reconstruit à chaque démarrage ; une veille réinitialisée en est
+    retirée.</p>
+</section>
+{% endif %}
+{% endblock %}

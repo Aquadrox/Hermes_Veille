@@ -219,6 +219,46 @@ def test_export_button_downloads_xlsx(data, watch, page):  # noqa: F811
     assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")  # pas de défilement horizontal
 
 
+def test_base_page_filters_and_detail_mobile(data, watch, monkeypatch):  # noqa: F811
+    """Base des composants (PWA) : filtre de veille EXACT (« composants-carte-x » ne retient pas
+    « composants-carte-x-2 »), filtre de statut, recherche, détail lu par sa clé (MPN avec « + ») ; filtres
+    lisibles sur 2 colonnes, sans défilement horizontal ; aucune erreur JS ni violation CSP."""
+    from veille_core import components as comp
+    other = service.create_veille(name="Composants carte X 2", subject="s", schedule_expr=service.COMPONENTS_SCHEDULE,
+                                  recipients=["a@example.org"], brief="# b", kind="composants",
+                                  components=comp.parse_components("MAX232CPE+;Analog Devices\nLM317T;Texas Instruments"))
+    service.components_scan(other.slug, client=FakeClient({
+        "MAX232CPE+": {"status": "Obsolete", "product_url": None},
+        "LM317T": {"status": "Last Time Buy", "product_url": "https://www.digikey.com/p/1"}}))
+    with _browser(monkeypatch, "/composants") as pg:
+        everything = ["MAX232CPE+", "LM317T", "STM32F103C8T6", "NE555P"]
+        assert _visible(pg, everything) == everything and pg.text_content("#comp-count") == "4 / 4"
+        pg.select_option("select[data-col='6']", watch.slug)
+        assert _visible(pg, ["LM317T", "STM32F103C8T6", "NE555P"]) == ["LM317T", "STM32F103C8T6", "NE555P"]
+        pg.select_option("select[data-col='6']", other.slug)
+        assert _visible(pg, ["MAX232CPE+", "LM317T"]) == ["MAX232CPE+", "LM317T"]
+        pg.select_option("select[data-col='6']", "")
+        pg.select_option("select[data-col='2']", "Obsolète")  # « Obsolete » de Digi-Key, libellé commun
+        assert _visible(pg, ["MAX232CPE+"]) == ["MAX232CPE+"]
+        pg.select_option("select[data-col='2']", "Actif")  # valeur exacte, pas une sous-chaîne
+        assert _visible(pg, ["STM32F103C8T6", "NE555P"]) == ["STM32F103C8T6", "NE555P"]
+        pg.select_option("select[data-col='2']", "")
+        lefts = "els => els.filter(e => e.offsetParent).map(e => Math.round(e.getBoundingClientRect().left))"
+        for width in (320, 360, 390):  # Composant, Statut, Avis, Échéance, Veille : 2 colonnes sur tout téléphone
+            pg.set_viewport_size({"width": width, "height": 844})
+            filters = pg.eval_on_selector_all("tr.filters > th", lefts)
+            assert len(filters) == 5 and len(set(filters)) == 2, (width, filters)
+            assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), width
+        pg.set_viewport_size({"width": 390, "height": 844})
+        pg.fill("#comp-search", "max232")
+        assert _visible(pg, ["MAX232CPE+"]) == ["MAX232CPE+"]
+        pg.locator("tr.comp .comp-toggle").first.click()
+        detail = pg.locator("tr.detail:not([hidden])")
+        detail.get_by_text("Analysé par").wait_for()
+        assert "Analog Devices" in detail.text_content() and "Obsolete" in detail.text_content()
+        assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
 def test_layout_full_width_on_desktop(data, page):
     """Grand écran : cartes pleine largeur (plus de colonne de 1 200 px), texte courant plafonné
     (~110 caractères) mais pas les encadrés ; mobile (PWA) : marges de 16 px, sans défilement horizontal."""

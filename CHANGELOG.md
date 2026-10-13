@@ -7,6 +7,70 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.5.0] — 2026-10-13
+
+Page « Composants » : tout ce qui a déjà été analysé, toutes veilles confondues. Liste de composants au format
+`MPN ; Fabricant` (la réf. interne n'est plus utilisée).
+
+### Ajouté
+
+- **Page « Composants »** (menu de l'interface, `/composants`) : la base des composants consultable.
+  - Une ligne par référence déjà analysée, toutes veilles composants confondues (actives et archivées) : statut
+    le plus récent, avis dédoublonnés (chacun une fois, à sa première date de détection), échéance, veilles qui
+    l'ont analysée (une veille archivée est nommée « slug (archivée le AAAA-MM-JJ) », dans l'interface comme
+    dans l'export).
+  - Même tableau que la liste d'une veille : recherche plein texte (MPN, fabricant, statut, intitulés et
+    résumés des avis), filtre par colonne, fins de vie en tête et en rouge, détail au toucher. En plus : filtre
+    **par veille**.
+  - Détail chargé à la demande pour la seule référence touchée (lecture de la base par sa clé).
+  - **Export Excel** de toute la base : le classeur de l'export d'une veille, plus une colonne « Veilles ».
+  - Base momentanément indisponible (verrou, reconstruction) : signalé sur la page (HTTP 503, « recharger dans
+    quelques instants »), sans inonder le journal d'audit.
+  - Un avis de forme inattendue dans la base (fichier retouché à la main, même celui d'une veille archivée) est
+    ignoré : il ne bloque ni la page, ni l'export, ni la reprise à l'ajout de références (qui pouvait échouer
+    sur un tel avis).
+  - Liens vers la page depuis la liste d'une veille et la carte « Base des composants » de la page Santé.
+- **Filtres par liste** dans le tableau des composants (valeur exacte, pas une sous-chaîne) : **statut** (page
+  d'une veille et page Composants) et **veille** (page Composants). Sur mobile (PWA), ils restent visibles,
+  sur deux colonnes lisibles, de 320 à 430 px.
+- Colonne **Statut** dans la liste d'une veille, à la place de « Réf. ».
+  - Libellé commun aux statuts Digi-Key et web : « Obsolete » (Digi-Key) et « OBSOLETE » (web) donnent
+    « Obsolète », un seul choix du filtre. Un statut Digi-Key sans équivalent (« Preliminary »…) reste tel
+    quel, et le terme Digi-Key d'origine reste cherchable.
+  - Digi-Key fait foi s'il connaît la référence. S'il ne la trouve plus, le statut établi par la recherche web
+    l'emporte sur son ancien statut, qui n'est affiché qu'à défaut.
+  - « Statut inconnu » : aucun statut connu.
+
+### Modifié
+
+- **Liste de composants : `MPN ; Fabricant`.** La réf. interne n'est plus demandée, enregistrée ni affichée.
+  - Rétrocompatible : les anciennes listes `MPN ; Fabricant ; Réf. interne` restent acceptées partout
+    (formulaire, `--file`, `components add`, Telegram). Les colonnes suivantes sont ignorées et la liste est
+    réaffichée au nouveau format.
+  - Les `components.json` existants restent lus tels quels. Aucune migration : une réf. déjà enregistrée
+    n'est plus lue, et ré-enregistrer la même liste ne réécrit rien.
+  - Import CSV / Excel : seules les colonnes MPN et Fabricant sont proposées. Une colonne de réf. interne
+    (« Code article », « Réf. interne »…) reste reconnue pour trouver la ligne d'en-tête et n'est jamais prise
+    pour le MPN : la détection est inchangée.
+  - Retirée de l'interface (liste, détail, formulaire d'import), du PDF, de l'e-mail et de l'export Excel
+    (colonne « Réf. interne »).
+  - Le lot de recherche web envoyé à l'agent ne contient plus la réf. : 136 octets par référence au lieu
+    de 153 (−11 % sur cette partie du prompt).
+- Tableau des composants mutualisé (`partials/comp_table.html`) entre la page d'une veille et la page
+  Composants. La lecture de la base est mutualisée aussi (`catalog._gather`, utilisée par la reprise et par
+  la page).
+  - Elle se fait dans un même instantané (une transaction de lecture) : les statuts et les avis ne peuvent plus
+    provenir de deux états différents quand une autre veille écrit entre les deux requêtes.
+  - Correspondance statut Digi-Key → type d'avis (`digikey.STATUS_TYPES`) dérivée de la même table que les
+    libellés de statut (`components.DK_LIFECYCLE`) : inchangée.
+
+### Supprimé
+
+- MCP : paramètre `ref_column` de `preview_component_import` et `import_components`. Un agent qui
+  l'envoie encore n'est pas refusé : le paramètre est ignoré. Champ `ref` de `list_components`.
+- CLI : option `--ref` de `veillectl components import`, retirée de l'aide. Un script qui la passe encore
+  n'échoue pas : elle est acceptée puis ignorée.
+
 ## [0.4.1] — 2026-10-12
 
 Reprises sur incident réseau Digi-Key.

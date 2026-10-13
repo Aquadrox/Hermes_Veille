@@ -37,8 +37,8 @@
     <h2>Composants suivis</h2>
     <details class="import"{% if not values.components %} open{% endif %}>
       <summary>Importer un fichier (CSV ou Excel)</summary>
-      <p class="small muted">Export de nomenclature ou d'ERP : les colonnes MPN, fabricant et réf. interne sont
-        reconnues automatiquement (sans service externe), puis proposées pour vérification.</p>
+      <p class="small muted">Export de nomenclature ou d'ERP : les colonnes MPN et fabricant sont reconnues
+        automatiquement (sans service externe), puis proposées pour vérification.</p>
       <div class="actions">
         <input type="file" name="import_file" accept=".csv,.txt,.tsv,.xlsx,.xlsm">
         <button type="button" hx-post="/fragments/import" hx-encoding="multipart/form-data" hx-params="import_file"

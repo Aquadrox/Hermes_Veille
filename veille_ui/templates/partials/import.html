@@ -4,7 +4,7 @@
    d'en-tête signalent leur changement (import_changed) pour relancer la détection. #}
 {% macro refresh() %}hx-post="/fragments/import/preview" hx-trigger="change"{% endmacro %}
 <div id="import-panel" class="import-panel"
-     hx-params="import_token,import_sheet,import_header,import_mpn,import_manufacturer,import_ref,import_default_mfr,import_mode,import_changed"
+     hx-params="import_token,import_sheet,import_header,import_mpn,import_manufacturer,import_default_mfr,import_mode,import_changed"
      hx-target="#import-panel" hx-swap="outerHTML">
   {% if error %}<p class="flash err">{{ error }}</p>{% endif %}
   {% if p %}
@@ -25,7 +25,7 @@
     <label>{{ LABELS[f] }}
       {% if m.confidence == "exacte" or m.confidence == "choisie" %}<span class="badge ok">{{ "reconnue" if m.confidence == "exacte" else "choisie" }}</span>
       {% elif m.confidence == "probable" %}<span class="badge paused">à vérifier</span>
-      {% elif f != "ref" %}<span class="badge bad">à choisir</span>{% endif %}
+      {% else %}<span class="badge bad">à choisir</span>{% endif %}
       <select name="import_{{ f }}" {{ refresh() }}>
         <option value=""{% if m.col is none %} selected{% endif %}>(aucune)</option>
         {% for c in p.columns %}<option value="#{{ loop.index }}"{% if m.col == loop.index0 %} selected{% endif %}>{{ column_name(loop.index0) }} — {{ c }}</option>{% endfor %}
@@ -42,9 +42,9 @@
     <span class="muted small">({% for r in p.rejected[:8] %}l. {{ r.line }} : {{ r.reason }}{{ ", " if not loop.last }}{% endfor %}{{ " …" if p.rejected|length > 8 }})</span>{% endif %}</p>
   <div class="table-wrap">
   <table class="list">
-    <thead><tr><th>MPN</th><th>Fabricant</th><th>Réf. interne</th></tr></thead>
+    <thead><tr><th>MPN</th><th>Fabricant</th></tr></thead>
     <tbody>{% for c in p.preview %}
-      <tr><td data-label="MPN"><strong>{{ c.mpn }}</strong></td><td data-label="Fabricant">{{ c.manufacturer }}</td><td data-label="Réf.">{{ c.ref or "—" }}</td></tr>
+      <tr><td data-label="MPN"><strong>{{ c.mpn }}</strong></td><td data-label="Fabricant">{{ c.manufacturer }}</td></tr>
     {% endfor %}</tbody>
   </table>
   </div>
@@ -53,7 +53,7 @@
     <label class="inline-choice"><input type="radio" name="import_mode" value="add"{% if mode != "replace" %} checked{% endif %}> Ajouter à la liste</label>
     <label class="inline-choice"><input type="radio" name="import_mode" value="replace"{% if mode == "replace" %} checked{% endif %}> Remplacer la liste</label>
     <button type="button" class="primary" hx-post="/fragments/import/apply" hx-trigger="click"
-            hx-params="import_token,import_sheet,import_header,import_mpn,import_manufacturer,import_ref,import_default_mfr,import_mode,components"
+            hx-params="import_token,import_sheet,import_header,import_mpn,import_manufacturer,import_default_mfr,import_mode,components"
             hx-target="#components-field" hx-swap="outerHTML">Appliquer à la liste ci-dessous</button>
   </div>
   {% endif %}

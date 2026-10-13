@@ -13,7 +13,7 @@ Veille composants (PCN / fins de vie) :
   veillectl create --kind composants --name N --schedule "0 23 * * 0" --recipients a@x [--components-file bom.csv]
   veillectl edit <slug> [--components-file F] [--include-components <slug-composants>|""] [--batch-size N]
   veillectl components list|notices <slug> [--type EOL]
-  veillectl components add <slug> (--file bom.csv | "MPN;Fabricant;Réf" …)
+  veillectl components add <slug> (--file bom.csv | "MPN;Fabricant" …)
   veillectl components remove <slug> MPN …
   veillectl components import <slug> bom.xlsx [--dry-run] [--replace] [--mpn COL] [--manufacturer COL] …
   veillectl components scan <slug>                                  (étape 1 du job)
@@ -71,7 +71,7 @@ def _show(slug: str) -> int:
 
 
 def _components_file(path: str | None) -> list[dict] | None:
-    """Fichier de composants : texte « MPN ; Fabricant ; Réf » (inchangé) ou Excel (colonnes
+    """Fichier de composants : texte « MPN ; Fabricant » (inchangé) ou Excel (colonnes
     reconnues automatiquement ; une ligne invalide est une erreur, comme pour le texte)."""
     if not path:
         return None
@@ -100,14 +100,13 @@ def _print_proposal(p: dict) -> None:
     for r in p["rejected"][:10]:
         print(f"  ligne {r['line']} : {r['reason']}")
     for c in p["preview"]:
-        print(f"  {c['mpn']:<28} {c['manufacturer']:<24} {c['ref']}")
+        print(f"  {c['mpn']:<28} {c['manufacturer']}")
 
 
 def _import(args) -> int:
     if not args.items:
         raise store.StoreError("chemin du fichier à importer manquant")
-    columns = {f: v for f, v in (("mpn", args.mpn), ("manufacturer", args.manufacturer), ("ref", args.ref))
-               if v is not None}
+    columns = {f: v for f, v in (("mpn", args.mpn), ("manufacturer", args.manufacturer)) if v is not None}
     p = bom_import.propose_options(bom_import.read_path(Path(args.items[0]), args.sheet), args.header_row,
                                    columns, args.default_manufacturer or "")
     _print_proposal(p)
@@ -132,7 +131,7 @@ def _components(args) -> int:
     if args.action == "list":
         for c in components.load_components(service._components_veille(slug).slug)["components"]:
             dk = c.get("dk") or {}
-            print(f"{c['mpn']:<28} {c['manufacturer']:<24} {c.get('ref', ''):<14} "
+            print(f"{c['mpn']:<28} {c['manufacturer']:<24} "
                   f"Digi-Key {dk.get('status') or dk.get('error') or '—':<22} web {c.get('web_checked_at') or 'jamais'}")
     elif args.action == "notices":
         for n in service.notices(slug, args.type):
@@ -243,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     p_create.add_argument("--model")
     p_create.add_argument("--paused", action="store_true")
     p_create.add_argument("--kind", choices=store.KINDS, default="veille")
-    p_create.add_argument("--components-file", help="composants : « MPN ; Fabricant ; Réf » par ligne")
+    p_create.add_argument("--components-file", help="composants : « MPN ; Fabricant » par ligne")
     p_create.add_argument("--include-components", help="veille : slug de la veille composants en chapitre")
     p_create.add_argument("--batch-size", type=int)
 
@@ -263,9 +262,9 @@ def main(argv: list[str] | None = None) -> int:
     p_comp.add_argument("action", choices=("list", "notices", "add", "remove", "import", "scan", "progress",
                                            "finalize", "chapter", "reset"))
     p_comp.add_argument("slug")
-    p_comp.add_argument("items", nargs="*", help="add : lignes « MPN;Fabricant;Réf » ; remove, progress : MPN ; "
+    p_comp.add_argument("items", nargs="*", help="add : lignes « MPN;Fabricant » ; remove, progress : MPN ; "
                                                   "finalize : fichier JSON")
-    p_comp.add_argument("--file", help="add : fichier « MPN ; Fabricant ; Réf » (collage tableur accepté)")
+    p_comp.add_argument("--file", help="add : fichier « MPN ; Fabricant » (collage tableur accepté)")
     p_comp.add_argument("--type", choices=tuple(components.TYPES), help="notices : filtre par type")
     p_comp.add_argument("--for", dest="for_slug", help="chapter : veille qui reçoit le chapitre")
     p_comp.add_argument("--append", help="chapter : rapport Markdown du jour de cette veille")
@@ -274,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
     imp.add_argument("--header-row", help="ligne d'en-tête (défaut : détectée ; 0 = aucune)")
     imp.add_argument("--mpn", help="colonne du MPN : libellé, lettre (A…) ou numéro")
     imp.add_argument("--manufacturer", help="colonne du fabricant")
-    imp.add_argument("--ref", help="colonne de la réf. interne")
+    imp.add_argument("--ref", help=argparse.SUPPRESS)  # colonne de la réf. interne (avant 0.5.0) : acceptée, ignorée
     imp.add_argument("--default-manufacturer", help="fabricant si la colonne ou la cellule est vide")
     imp.add_argument("--replace", action="store_true", help="remplacer la liste (défaut : ajouter)")
     imp.add_argument("--dry-run", action="store_true", help="afficher la proposition sans rien enregistrer")

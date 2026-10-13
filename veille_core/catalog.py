@@ -9,17 +9,22 @@ du dossier d'une veille archivée.
 - `archive` : l'archivage conserve la contribution, sous le nom de l'archive.
 - `rebuild` : tout est reconstruit depuis les fichiers (au démarrage, ou `veillectl catalog rebuild`).
 - `knowledge` : à l'ajout de références dans une veille, ce qu'en savent les AUTRES sources.
+- `browse` : tout ce qui a déjà été analysé, toutes veilles confondues (page « Composants » de l'interface).
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import re
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 from . import components as comp
 from . import db, paths, store
 
 CHUNK = 500  # clés par requête (borne le nombre de paramètres SQLite)
+ARCHIVE_RE = re.compile(r"(.+)-(\d{4})(\d{2})(\d{2})-\d{6}")  # dossier d'archive d'une veille (service.archive)
 
 
 def _json(value) -> str | None:
@@ -63,29 +68,76 @@ def _newest(known: dict, field: str, value) -> None:
         known[field] = value
 
 
+def archived_label(source: str) -> str:
+    """Source qui n'est plus une veille active (dossier d'archive) : « slug (archivée le AAAA-MM-JJ) »."""
+    m = ARCHIVE_RE.fullmatch(source)
+    return f"{m[1]} (archivée le {m[2]}-{m[3]}-{m[4]})" if m else f"{source} (archivée)"
+
+
+def _usable(notice, key: str) -> bool:
+    """Avis de la base exploitable tel quel (fusion, affichage, rapport), sinon ignoré : un fichier retouché à la
+    main, même celui d'une veille archivée, ne bloque ni la reprise ni la page « Composants »."""
+    sources = notice.get("sources") if isinstance(notice, dict) else None
+    return (isinstance(sources, list) and bool(sources) and notice.get("key") == key
+            and notice.get("type") in comp.TYPES
+            and all(isinstance(notice.get(f), str) for f in ("mpn", "manufacturer", "title", "found_at"))
+            and all(isinstance(s, dict) and isinstance(s.get("url"), str) and isinstance(s.get("label"), str)
+                    for s in sources))
+
+
+@contextlib.contextmanager
+def _snapshot() -> Iterator[sqlite3.Connection]:
+    """Connexion de lecture : `parts` et `notices` lues dans un même instantané (une autre veille peut écrire
+    entre deux requêtes ; elle attend la fin de la lecture, quelques millisecondes)."""
+    with db.connect() as con:
+        con.execute("BEGIN")
+        try:
+            yield con
+        finally:
+            con.rollback()
+
+
+def _gather(con: sqlite3.Connection, where: str, params: tuple, out: dict[str, dict]) -> None:
+    """Ajoute à `out` ce que savent les lignes des tables `parts` et `notices` qui vérifient `where` (clause
+    écrite ici, jamais venue de l'extérieur : les valeurs passent par `params`) : {clé: {"mpn", "manufacturer",
+    "dk", "web_status", "web_checked_at" (les plus récents), "notices" (tous, à dédoublonner par
+    components.merge), "sources"}}."""
+    for source, key, mpn, mfr, dk, web, checked in con.execute(
+            "SELECT source, key, mpn, manufacturer, dk, web_status, web_checked_at FROM parts "
+            f"WHERE {where} ORDER BY rowid", params):
+        known = out.setdefault(key, {"mpn": mpn, "manufacturer": mfr, "notices": [], "sources": set()})
+        known["sources"].add(source)
+        _newest(known, "dk", json.loads(dk) if dk else None)
+        _newest(known, "web_status", json.loads(web) if web else None)
+        if isinstance(checked, str) and checked > (known.get("web_checked_at") or ""):
+            known["web_checked_at"] = checked
+    for source, key, data in con.execute(f"SELECT source, key, data FROM notices WHERE {where} ORDER BY rowid",
+                                         params):
+        notice = json.loads(data)
+        if _usable(notice, key):
+            known = out.setdefault(key, {"mpn": notice["mpn"], "manufacturer": notice["manufacturer"],
+                                         "notices": [], "sources": set()})
+            known["sources"].add(source)
+            known["notices"].append(notice)
+
+
 def knowledge(keys, exclude: str) -> dict[str, dict]:
-    """Ce que les sources autres que `exclude` savent des références `keys` : {clé: {"dk", "web_status",
-    "web_checked_at" (les plus récents), "notices" (tous, à dédoublonner par components.merge)}}."""
+    """Ce que les sources autres que `exclude` savent des références `keys` (forme : voir `_gather`)."""
     keys = list(dict.fromkeys(keys))
     out: dict[str, dict] = {}
-    with db.connect() as con:
+    with _snapshot() as con:
         for i in range(0, len(keys), CHUNK):
             chunk = keys[i:i + CHUNK]
-            marks = ", ".join("?" * len(chunk))
-            for key, dk, web, checked in con.execute(
-                    f"SELECT key, dk, web_status, web_checked_at FROM parts WHERE source != ? AND key IN ({marks}) "
-                    "ORDER BY rowid", (exclude, *chunk)):
-                known = out.setdefault(key, {"notices": []})
-                _newest(known, "dk", json.loads(dk) if dk else None)
-                _newest(known, "web_status", json.loads(web) if web else None)
-                if isinstance(checked, str) and checked > (known.get("web_checked_at") or ""):
-                    known["web_checked_at"] = checked
-            for key, data in con.execute(
-                    f"SELECT key, data FROM notices WHERE source != ? AND key IN ({marks}) ORDER BY rowid",
-                    (exclude, *chunk)):
-                notice = json.loads(data)
-                if isinstance(notice, dict) and notice.get("key") == key and notice.get("sources"):
-                    out.setdefault(key, {"notices": []})["notices"].append(notice)
+            _gather(con, f"source != ? AND key IN ({', '.join('?' * len(chunk))})", (exclude, *chunk), out)
+    return out
+
+
+def browse(key: str | None = None) -> dict[str, dict]:
+    """Tout ce que la base sait, toutes sources confondues (veilles actives et archivées), ou ce qu'elle sait
+    de la seule référence `key` (forme : voir `_gather`)."""
+    out: dict[str, dict] = {}
+    with _snapshot() as con:
+        _gather(con, "key = ?" if key is not None else "1", (key,) if key is not None else (), out)
     return out
 
 

@@ -35,7 +35,9 @@
   });
   document.addEventListener("DOMContentLoaded", syncFreq);
 
-  // Liste des composants : recherche plein texte + filtre par colonne, en temps réel.
+  // Liste des composants (d'une veille, ou base des composants) : recherche plein texte + filtre par
+  // colonne, en temps réel : un champ texte cherche dans la cellule, une liste déroulante veut la valeur
+  // exacte (une des valeurs `data-tags="a|b"` de la cellule, sinon son texte).
   // Textes normalisés une seule fois (casse et accents ignorés). Seules les lignes qui changent
   // d'état sont touchées et au plus `data-limit` lignes sont affichées : la mise en page reste
   // légère sur mobile, même avec des milliers de références.
@@ -68,15 +70,22 @@
     function cells(r) {  // textes par colonne : calculés au premier filtre de colonne seulement
       return r.cells || (r.cells = Array.prototype.map.call(r.tr.cells, function (td) { return norm(td.textContent); }));
     }
+    function tags(r, i) {  // valeurs exactes d'une colonne (liste déroulante) : au premier filtre sur cette colonne
+      var t = r.tags || (r.tags = []), td = r.tr.cells[i];
+      return t[i] || (t[i] = norm(td.getAttribute("data-tags") || td.textContent.trim()).split("|"));
+    }
+    function match(r, f) {
+      return f.exact ? tags(r, f.i).indexOf(f.v) !== -1 : cells(r)[f.i].indexOf(f.v) !== -1;
+    }
     function apply() {
       var words = norm(search.value).split(/\s+/).filter(Boolean);
       var colFilters = Array.prototype.map.call(cols, function (el) {
-        return {i: +el.getAttribute("data-col"), v: norm(el.value.trim())};
+        return {i: +el.getAttribute("data-col"), v: norm(el.value.trim()), exact: el.tagName === "SELECT"};
       }).filter(function (f) { return f.v; });
       var type = typeSel.value, matched = 0;
       rows.forEach(function (r) {
         var ok = words.every(function (w) { return r.text.indexOf(w) !== -1; }) &&
-          colFilters.every(function (f) { return cells(r)[f.i].indexOf(f.v) !== -1; }) &&
+          colFilters.every(function (f) { return match(r, f); }) &&
           (!type || (type === "critical" ? r.crit : type === "notice" ? r.types.length > 0 :
                      type === "none" ? r.types.length === 0 : r.types.indexOf(type) !== -1));
         if (ok) matched++;
