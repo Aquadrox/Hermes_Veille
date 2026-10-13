@@ -99,15 +99,15 @@ def same_manufacturer(a: str, b: str) -> bool:
     return bool(na) and (na == nb or (len(na) >= 4 and na in nb))
 
 
-def validate_entry(mpn, manufacturer, ref="") -> tuple[dict | None, str]:
+def validate_entry(mpn, manufacturer) -> tuple[dict | None, str]:
     """Une référence -> (entrée normalisée, "") ou (None, motif du rejet). Règle unique pour la
     saisie manuelle et l'import de fichiers."""
-    mpn, mfr, ref = (" ".join(str(x or "").split()) for x in (mpn, manufacturer, ref))
+    mpn, mfr = (" ".join(str(x or "").split()) for x in (mpn, manufacturer))
     if not MPN_RE.match(mpn):
         return None, "MPN vide ou invalide" if mpn else "MPN vide"
     if not norm_mfr(mfr) or len(mfr) > 80:
         return None, "fabricant manquant ou invalide"
-    return {"mpn": mpn, "manufacturer": mfr, "ref": ref[:64]}, ""
+    return {"mpn": mpn, "manufacturer": mfr}, ""
 
 
 def unique(entries: list[dict]) -> list[dict]:
@@ -124,9 +124,10 @@ def unique(entries: list[dict]) -> list[dict]:
 
 
 def parse_components(text: str) -> list[dict]:
-    """Une référence par ligne : « MPN ; Fabricant ; Réf. interne » (tabulation, ; ou ,).
+    """Une référence par ligne : « MPN ; Fabricant » (tabulation, ; ou ,).
 
-    Le collage depuis un tableur (tabulations) fonctionne tel quel ; `#` commente une ligne ;
+    Le collage depuis un tableur (tabulations) fonctionne tel quel ; les colonnes suivantes sont
+    ignorées (anciennes listes « MPN ; Fabricant ; Réf. interne » comprises) ; `#` commente une ligne ;
     une ligne d'en-tête « MPN… » est ignorée ; doublons fusionnés (même fabricant et MPN).
     """
     out, bad, first = [], [], True
@@ -140,20 +141,20 @@ def parse_components(text: str) -> list[dict]:
         first = False
         if header:  # ligne d'en-tête d'un export de tableur
             continue
-        entry, _ = validate_entry(*(parts + ["", ""])[:3])
+        entry, _ = validate_entry(*(parts + [""])[:2])
         if entry is None:
             bad.append(f"ligne {n}")
         else:
             out.append(entry)
     if bad:
-        raise ComponentsError("format attendu « MPN ; Fabricant ; Réf. interne » : "
+        raise ComponentsError("format attendu « MPN ; Fabricant » : "
                               + ", ".join(bad[:10]) + (" …" if len(bad) > 10 else ""))
     return unique(out)
 
 
 def format_components(components: list[dict]) -> str:
     """Inverse de parse_components (formulaire d'édition)."""
-    return "\n".join(" ; ".join(filter(None, (c["mpn"], c["manufacturer"], c.get("ref")))) for c in components)
+    return "\n".join(f"{c['mpn']} ; {c['manufacturer']}" for c in components)
 
 
 def combine(current: list[dict], items: list[dict], mode: str = "add") -> tuple[list[dict], dict]:
@@ -173,25 +174,26 @@ def combine(current: list[dict], items: list[dict], mode: str = "add") -> tuple[
 
 def _fresh(c: dict, added_at: str | None = None) -> dict:
     """Référence sans aucun état de veille (ni vérification, ni statut)."""
-    return {"mpn": c["mpn"], "manufacturer": c["manufacturer"], "ref": c.get("ref", ""),
+    return {"mpn": c["mpn"], "manufacturer": c["manufacturer"],
             "added_at": added_at or today(), "web_checked_at": None, "dk": None}
 
 
 def replace_components(current: list[dict], wanted: list[dict]) -> list[dict]:
-    """Nouvelle liste ; l'état (vérifications, statut Digi-Key) des références conservées est gardé."""
+    """Nouvelle liste ; l'état (vérifications, statut Digi-Key) des références conservées est gardé. Une réf.
+    interne d'avant la 0.5.0 n'est plus lue (aucune migration : elle reste dans l'état de sa référence)."""
     by_key = {key_of(c["mpn"], c["manufacturer"]): c for c in current}
     out = []
     for w in wanted:
         old = by_key.get(key_of(w["mpn"], w["manufacturer"]))
         if old:
-            out.append({**old, "mpn": w["mpn"], "manufacturer": w["manufacturer"], "ref": w.get("ref", "")})
+            out.append({**old, "mpn": w["mpn"], "manufacturer": w["manufacturer"]})
         else:
             out.append(_fresh(w))
     return out
 
 
 def reset_state(components: list[dict]) -> list[dict]:
-    """Même liste (références, réf. internes, dates d'ajout), sans aucun état : tout sera revérifié."""
+    """Même liste (références, dates d'ajout), sans aucun état : tout sera revérifié."""
     return [_fresh(c, c.get("added_at")) for c in components]
 
 
@@ -575,6 +577,12 @@ def web_status_label(web: dict) -> str:
     return f"{label} (alldatasheet)" if label and web.get("datasheet") else label
 
 
+def status_label(row: dict) -> str:
+    """Statut de cycle de vie d'une ligne de `group` : celui de Digi-Key (il fait foi), sinon celui établi par
+    la recherche web ; vide si aucun n'est connu."""
+    return row["dk"].get("status") or web_status_label(row["web"])
+
+
 def _status_link(dk: dict, web: dict) -> dict | None:
     """Lien d'un composant sans avis : sa fiche Digi-Key, sinon la fiche trouvée par la recherche web."""
     if dk.get("product_url"):
@@ -606,7 +614,7 @@ def group(notices: list[dict], components: list[dict], include_quiet: bool = Fal
         rows.append({
             "key": key, "anchor": anchor(key), "tracked": bool(c), "dk": dk, "web": web,
             "mpn": c.get("mpn") or worst["mpn"], "manufacturer": c.get("manufacturer") or worst["manufacturer"],
-            "ref": c.get("ref") or "", "web_checked_at": c.get("web_checked_at"), "notices": ns, "worst": worst, "link": link,
+            "web_checked_at": c.get("web_checked_at"), "notices": ns, "worst": worst, "link": link,
             "types": list(dict.fromkeys(n["type"] for n in ns)),
             "critical": bool(c) and any(n["type"] in CRITICAL for n in ns),
             "deadline": next((d for n in ns if (d := n.get("ltb_date") or n.get("eol_date"))), ""),
@@ -692,10 +700,7 @@ def _md_table(rows: list[dict]) -> list[str]:
 
 
 def _md_detail(r: dict) -> list[str]:
-    head = f"**{md_escape(r['mpn'])}** — {md_escape(r['manufacturer'])}"
-    if r["ref"]:
-        head += f" · réf. {md_escape(r['ref'])}"
-    out = [f"::: {{#{r['anchor']} .comp}}", head, ""]
+    out = [f"::: {{#{r['anchor']} .comp}}", f"**{md_escape(r['mpn'])}** — {md_escape(r['manufacturer'])}", ""]
     for n in r["notices"]:
         line = f"- {_md_badges([n['type']])} **{md_escape(n['title'])}**"
         if n.get("number"):
@@ -773,8 +778,7 @@ def to_html_email(view: dict, title: str, ui_hint: str = "") -> str:
         body = []
         for r in rows:
             link = (f'<a href="{esc(r["link"]["url"])}">{esc(r["link"]["label"])}</a>' if r["link"] else "—")
-            who = (f"<b>{esc(r['mpn'])}</b><br><small>{esc(r['manufacturer'])}"
-                   f"{' · ' + esc(r['ref']) if r['ref'] else ''}</small>")
+            who = f"<b>{esc(r['mpn'])}</b><br><small>{esc(r['manufacturer'])}</small>"
             avis = f'{badges(r["types"])}<br><small>{esc(r["worst"]["title"])}</small>'
             cells = (who, avis, f'<span style="white-space:nowrap">{esc(r["deadline"] or "—")}</span>', link)
             tint = "background:#fef2f2;" if r["critical"] else ""
@@ -820,7 +824,7 @@ def to_text_email(view: dict) -> str:
 XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # Caractères interdits en XML 1.0 (openpyxl ne refuse que les contrôles : U+FFFE / U+FFFF corrompraient le fichier).
 _XLSX_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
-_XLSX_COLUMNS = (("Composant", 24), ("Fabricant", 22), ("Réf. interne", 14), ("Critique", 9), ("Avis", 28),
+_XLSX_COLUMNS = (("Composant", 24), ("Fabricant", 22), ("Critique", 9), ("Avis", 28),
                  ("Avis principal", 48), ("Échéance", 12), ("Détecté", 12), ("Statut Digi-Key", 20),
                  ("Vérifié Digi-Key", 15), ("Statut web", 18), ("Recherche web", 15), ("Lien", 48), ("Suivi", 9))
 _XLSX_DATES = frozenset(i for i, (name, _) in enumerate(_XLSX_COLUMNS, 1)
@@ -847,8 +851,9 @@ def _xlsx_cell(value, is_date: bool) -> str | dt.date:
     return _XLSX_ILLEGAL.sub("", value)
 
 
-def to_xlsx(components: list[dict], notices: list[dict]) -> bytes:
-    """Classeur Excel d'une ligne par composant (critiques en tête, filtre automatique).
+def to_xlsx(components: list[dict], notices: list[dict], sources: dict[str, list[str]] | None = None) -> bytes:
+    """Classeur Excel d'une ligne par composant (critiques en tête, filtre automatique). `sources` (base des
+    composants) : {clé: veilles qui ont analysé la référence}, en dernière colonne « Veilles ».
 
     Les textes viennent du web : chaque cellule texte est forcée en type CHAÎNE, une valeur
     « =… » n'est jamais une formule ; seuls les liens validés par `normalize_url` sont cliquables.
@@ -861,8 +866,9 @@ def to_xlsx(components: list[dict], notices: list[dict]) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Composants"
-    ws.append([name for name, _ in _XLSX_COLUMNS])
-    for i, (_, width) in enumerate(_XLSX_COLUMNS, 1):
+    columns = _XLSX_COLUMNS + ((("Veilles", 40),) if sources is not None else ())
+    ws.append([name for name, _ in columns])
+    for i, (_, width) in enumerate(columns, 1):
         ws.cell(1, i).font = Font(bold=True, color="FFFFFF")
         ws.cell(1, i).fill = PatternFill("solid", fgColor="0F766E")
         ws.column_dimensions[ws.cell(1, i).column_letter].width = width
@@ -871,11 +877,11 @@ def to_xlsx(components: list[dict], notices: list[dict]) -> bytes:
     for n, r in enumerate(group(notices, components, include_quiet=True), 2):
         dk, link = r["dk"], r["link"]
         url = normalize_url(link["url"]) if link else None
-        values = (r["mpn"], r["manufacturer"], r["ref"], "Oui" if r["critical"] else "",
+        values = (r["mpn"], r["manufacturer"], "Oui" if r["critical"] else "",
                   ", ".join(TYPES[t][0] for t in r["types"]), r["worst"]["title"] if r["worst"] else "",
                   r["deadline"], r["found"], dk.get("status") or dk.get("error"), dk.get("checked_at"),
                   web_status_label(r["web"]), r["web_checked_at"], url,
-                  "" if r["tracked"] else "retiré")
+                  "" if r["tracked"] else "retiré") + ((", ".join(sources.get(r["key"], ())),) if sources is not None else ())
         for col, value in enumerate(values, 1):
             cell = ws.cell(n, col, _xlsx_cell(value, col in _XLSX_DATES))
             if cell.data_type == "f":  # « =… » venu du web : texte, jamais formule

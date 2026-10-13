@@ -51,7 +51,7 @@ def test_csv_separators(sep):
     text = sep.join(["Manufacturer Part Number", "Manufacturer", "Internal P/N"]) + "\n" \
         + sep.join(["LM317T", "Texas Instruments", "R-1"]) + "\n"
     p = propose(text.encode(), "bom.csv")
-    assert p["components"] == [{"mpn": "LM317T", "manufacturer": "Texas Instruments", "ref": "R-1"}]
+    assert p["components"] == [{"mpn": "LM317T", "manufacturer": "Texas Instruments"}]  # réf. interne ignorée
 
 
 def test_csv_encodings():
@@ -66,8 +66,9 @@ def test_xlsx_title_rows_numbers_and_distributor_column():
     p = propose(xlsx(("BOM", BOM_ROWS)))
     assert p["header_row"] == 2  # lignes de titre ignorées
     cols = {f: p["columns"][m["col"]] for f, m in p["mapping"].items()}
-    assert cols == {"mpn": "Mfr. P/N", "manufacturer": "Fabricant", "ref": "Code article"}  # pas Digi-Key
-    assert p["components"][0] == {"mpn": "RC0603FR-0710KL", "manufacturer": "Yageo", "ref": "100234"}  # pas 100234.0
+    assert cols == {"mpn": "Mfr. P/N", "manufacturer": "Fabricant"}  # pas Digi-Key, ni la réf. interne
+    assert p["components"][0] == {"mpn": "RC0603FR-0710KL", "manufacturer": "Yageo"}
+    assert bom_import.read_table(xlsx(("BOM", BOM_ROWS)), "b.xlsx")["rows"][3][6] == "100234"  # pas 100234.0
     assert len(p["components"]) == 3  # doublon LM317T fusionné
     assert p["rejected"] == [{"line": 8, "reason": "fabricant manquant ou invalide"}]
 
@@ -91,33 +92,34 @@ def test_positional_fallback_keeps_legacy_files():
     assert p["header_row"] is None
     assert [c["mpn"] for c in p["components"]] == ["LM317T", "NE555P"]
     p = propose(b"MPN;Fabricant;Ref\nLM317T;TI;R-1\n", "bom.csv")
-    assert p["components"] == [{"mpn": "LM317T", "manufacturer": "TI", "ref": "R-1"}]
+    assert p["components"] == [{"mpn": "LM317T", "manufacturer": "TI"}]
 
 
 def test_value_based_mpn_guess_and_user_override():
     data = b"Reference;Marque;Commentaire\nLM317T;TI;x\nNE555P;TI;y\nSTM32F103C8T6;ST;z\n"
     p = propose(data, "b.csv")
     assert p["mapping"]["mpn"] == {"col": 0, "confidence": "probable"}  # forme des valeurs
-    p = propose(data, "b.csv", columns={"mpn": "A", "manufacturer": "Marque", "ref": "3"})
-    assert [p["mapping"][f]["confidence"] for f in ("mpn", "manufacturer", "ref")] == ["choisie"] * 3
-    assert p["components"][0] == {"mpn": "LM317T", "manufacturer": "TI", "ref": "x"}
+    p = propose(data, "b.csv", columns={"mpn": "A", "manufacturer": "Marque", "ref": "3"})  # « ref » : ignorée
+    assert {f: m["confidence"] for f, m in p["mapping"].items()} == {"mpn": "choisie", "manufacturer": "choisie"}
+    assert p["components"][0] == {"mpn": "LM317T", "manufacturer": "TI"}
     for bad in ({"mpn": "Z"}, {"mpn": "inconnue"}, {"mpn": "99"}):
         with pytest.raises(bom_import.BomImportError, match="colonne"):
             propose(data, "b.csv", columns=bad)
     with pytest.raises(bom_import.BomImportError, match="ligne d'en-tête"):
         propose(data, "b.csv", header="abc")
-    p = propose(data, "b.csv", header=0, columns={"mpn": "A", "manufacturer": "B", "ref": "0"})  # pas d'en-tête
-    assert p["components"][0] == {"mpn": "Reference", "manufacturer": "Marque", "ref": ""}  # ligne 1 = donnée
-    assert len(p["components"]) == 4 and p["mapping"]["ref"]["col"] is None
+    p = propose(data, "b.csv", header=0, columns={"mpn": "A", "manufacturer": "B"})  # pas d'en-tête
+    assert p["components"][0] == {"mpn": "Reference", "manufacturer": "Marque"}  # ligne 1 = donnée
+    assert len(p["components"]) == 4
 
 
 @pytest.mark.parametrize("label,field", [
     ("MPN", "mpn"), ("Manufacturer Part Number", "mpn"), ("Mfr PN", "mpn"), ("Réf. fabricant", "mpn"),
     ("Part Number", "mpn"), ("Fabricant", "manufacturer"), ("Marque", "manufacturer"), ("MFR", "manufacturer"),
+    # réf. interne : plus importée, mais reconnue (en-tête, et jamais prise pour le MPN)
     ("Réf. interne", "ref"), ("Code article", "ref"), ("Item #", "ref"), ("Internal Part Number", "ref"),
 ])
 def test_synonyms(label, field):
-    assert {f for f in bom_import.FIELDS if bom_import._match(label, f)} == {field}
+    assert {f for f in bom_import.RECOGNIZED if bom_import._match(label, f)} == {field}
 
 
 @pytest.mark.parametrize("label", ["Digi-Key Part Number", "Mouser #", "Supplier Part Number", "Farnell code",
@@ -253,7 +255,7 @@ def test_service_import_add_and_replace_keeps_state(watch):
     assert st == {"added": 0, "existing": 2, "removed": 1, "total": 2, "known": 0, "notices_known": 0}
     cs = comp.load_components(watch.slug)["components"]
     assert [c["mpn"] for c in cs] == ["LM317T", "NE555P"] and cs[0]["web_checked_at"] == "2026-01-01"
-    assert cs[0]["ref"] == "NEW"  # remplacement : la réf. du fichier fait foi
+    assert "ref" not in cs[1]  # nouvelle référence : plus de réf. interne
     # remplacement à taille égale : bien enregistré (régression : seul le nombre était comparé)
     service.import_components(watch.slug, comp.parse_components("X1;Y\nX2;Y"), "replace")
     assert [c["mpn"] for c in comp.load_components(watch.slug)["components"]] == ["X1", "X2"]
@@ -273,7 +275,7 @@ def test_cli_import(watch, tmp_path, capsys):
     assert cli.main(["components", "import", watch.slug, str(f), "--default-manufacturer", "Murata"]) == 0
     assert "3 ajouté(s), 1 déjà présent(s), 0 retiré(s) — 5 composant(s)" in capsys.readouterr().out
     assert cli.main(["components", "import", watch.slug, str(f), "--replace", "--mpn", "E",
-                     "--manufacturer", "Fabricant", "--ref", "0", "--default-manufacturer", "Murata"]) == 0
+                     "--manufacturer", "Fabricant", "--default-manufacturer", "Murata"]) == 0
     assert "1 retiré(s)" in capsys.readouterr().out  # BC547 absent du fichier
     assert cli.main(["components", "import", watch.slug, str(f), "--mpn", "Désignation"]) == 0
     assert cli.main(["components", "import", watch.slug, str(f), "--manufacturer", "", "--dry-run"]) == 1
@@ -367,13 +369,14 @@ def test_ui_preview_remap_and_sheet_change(ui):
 def test_ui_apply_add_replace_then_create(ui):
     client, csrf, h = ui
     _, token = upload(client, h)
+    # « import_ref » : envoyé par une page restée ouverte d'avant la 0.5.0, ignoré
     base = {"import_token": token, "import_sheet": "BOM", "import_header": "3", "import_mpn": "#5",
             "import_manufacturer": "#4", "import_ref": "#7", "import_default_mfr": "Murata"}
     r = client.post("/fragments/import/apply", data={**base, "import_mode": "add",
                                                      "components": "LM317T ; Texas Instruments ; OLD\nBC547;onsemi"},
                     headers=h)
     text = re.search(r"<textarea[^>]*>(.*?)</textarea>", r.text, re.S).group(1)
-    assert text.splitlines()[:2] == ["LM317T ; Texas Instruments ; OLD", "BC547 ; onsemi"]
+    assert text.splitlines()[:2] == ["LM317T ; Texas Instruments", "BC547 ; onsemi"]  # ancienne liste reformatée
     assert "3 ajouté(s), 1 déjà présent(s)" in r.text
     r = client.post("/fragments/import/apply", data={**base, "import_mode": "replace", "components": text}, headers=h)
     replaced = re.search(r"<textarea[^>]*>(.*?)</textarea>", r.text, re.S).group(1)
@@ -456,10 +459,10 @@ def test_unrecognized_header_row_is_not_imported():
 
 def test_hash_column_reference_is_unambiguous():
     data = b"MPN;Fabricant;1\nLM317T;TI;x\n"
-    p = propose(data, "b.csv", columns={"mpn": "#1", "manufacturer": "#2", "ref": "#0"})
-    assert p["components"] == [{"mpn": "LM317T", "manufacturer": "TI", "ref": ""}]
-    p = propose(data, "b.csv", columns={"ref": "1"})  # un libellé « 1 » existe : il est désigné
-    assert p["mapping"]["ref"]["col"] == 2
+    p = propose(data, "b.csv", columns={"mpn": "#1", "manufacturer": "#2"})
+    assert p["components"] == [{"mpn": "LM317T", "manufacturer": "TI"}]
+    p = propose(data, "b.csv", columns={"mpn": "1"})  # un libellé « 1 » existe : il est désigné
+    assert p["mapping"]["mpn"]["col"] == 2
     with pytest.raises(bom_import.BomImportError, match="hors du tableau"):
         propose(data, "b.csv", columns={"mpn": "#9"})
 

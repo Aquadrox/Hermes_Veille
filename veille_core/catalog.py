@@ -9,6 +9,7 @@ du dossier d'une veille archivée.
 - `archive` : l'archivage conserve la contribution, sous le nom de l'archive.
 - `rebuild` : tout est reconstruit depuis les fichiers (au démarrage, ou `veillectl catalog rebuild`).
 - `knowledge` : à l'ajout de références dans une veille, ce qu'en savent les AUTRES sources.
+- `browse` : tout ce qui a déjà été analysé, toutes veilles confondues (page « Composants » de l'interface).
 """
 from __future__ import annotations
 
@@ -63,29 +64,47 @@ def _newest(known: dict, field: str, value) -> None:
         known[field] = value
 
 
+def _gather(con: sqlite3.Connection, where: str, params: tuple, out: dict[str, dict]) -> None:
+    """Ajoute à `out` ce que savent les lignes des tables `parts` et `notices` qui vérifient `where` (clause
+    écrite ici, jamais venue de l'extérieur : les valeurs passent par `params`) : {clé: {"mpn", "manufacturer",
+    "dk", "web_status", "web_checked_at" (les plus récents), "notices" (tous, à dédoublonner par
+    components.merge), "sources"}}."""
+    for source, key, mpn, mfr, dk, web, checked in con.execute(
+            "SELECT source, key, mpn, manufacturer, dk, web_status, web_checked_at FROM parts "
+            f"WHERE {where} ORDER BY rowid", params):
+        known = out.setdefault(key, {"mpn": mpn, "manufacturer": mfr, "notices": [], "sources": set()})
+        known["sources"].add(source)
+        _newest(known, "dk", json.loads(dk) if dk else None)
+        _newest(known, "web_status", json.loads(web) if web else None)
+        if isinstance(checked, str) and checked > (known.get("web_checked_at") or ""):
+            known["web_checked_at"] = checked
+    for source, key, data in con.execute(f"SELECT source, key, data FROM notices WHERE {where} ORDER BY rowid",
+                                         params):
+        notice = json.loads(data)
+        if isinstance(notice, dict) and notice.get("key") == key and notice.get("sources"):
+            known = out.setdefault(key, {"mpn": notice.get("mpn"), "manufacturer": notice.get("manufacturer"),
+                                         "notices": [], "sources": set()})
+            known["sources"].add(source)
+            known["notices"].append(notice)
+
+
 def knowledge(keys, exclude: str) -> dict[str, dict]:
-    """Ce que les sources autres que `exclude` savent des références `keys` : {clé: {"dk", "web_status",
-    "web_checked_at" (les plus récents), "notices" (tous, à dédoublonner par components.merge)}}."""
+    """Ce que les sources autres que `exclude` savent des références `keys` (forme : voir `_gather`)."""
     keys = list(dict.fromkeys(keys))
     out: dict[str, dict] = {}
     with db.connect() as con:
         for i in range(0, len(keys), CHUNK):
             chunk = keys[i:i + CHUNK]
-            marks = ", ".join("?" * len(chunk))
-            for key, dk, web, checked in con.execute(
-                    f"SELECT key, dk, web_status, web_checked_at FROM parts WHERE source != ? AND key IN ({marks}) "
-                    "ORDER BY rowid", (exclude, *chunk)):
-                known = out.setdefault(key, {"notices": []})
-                _newest(known, "dk", json.loads(dk) if dk else None)
-                _newest(known, "web_status", json.loads(web) if web else None)
-                if isinstance(checked, str) and checked > (known.get("web_checked_at") or ""):
-                    known["web_checked_at"] = checked
-            for key, data in con.execute(
-                    f"SELECT key, data FROM notices WHERE source != ? AND key IN ({marks}) ORDER BY rowid",
-                    (exclude, *chunk)):
-                notice = json.loads(data)
-                if isinstance(notice, dict) and notice.get("key") == key and notice.get("sources"):
-                    out.setdefault(key, {"notices": []})["notices"].append(notice)
+            _gather(con, f"source != ? AND key IN ({', '.join('?' * len(chunk))})", (exclude, *chunk), out)
+    return out
+
+
+def browse(key: str | None = None) -> dict[str, dict]:
+    """Tout ce que la base sait, toutes sources confondues (veilles actives et archivées), ou ce qu'elle sait
+    de la seule référence `key` (forme : voir `_gather`)."""
+    out: dict[str, dict] = {}
+    with db.connect() as con:
+        _gather(con, "key = ?" if key is not None else "1", (key,) if key is not None else (), out)
     return out
 
 

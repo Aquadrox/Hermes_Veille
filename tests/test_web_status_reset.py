@@ -80,7 +80,7 @@ def test_reset_state_keeps_the_list_only():
     cs = comps("LM317T;Texas Instruments;R-1")
     cs[0].update(added_at="2025-01-01", web_checked_at="2026-10-01", dk={"status": "Active"},
                  web_status={"status": "ACTIVE", "url": None, "checked_at": "2026-10-01"})
-    assert comp.reset_state(cs) == [{"mpn": "LM317T", "manufacturer": "Texas Instruments", "ref": "R-1",
+    assert comp.reset_state(cs) == [{"mpn": "LM317T", "manufacturer": "Texas Instruments",
                                      "added_at": "2025-01-01", "web_checked_at": None, "dk": None}]
 
 
@@ -194,8 +194,7 @@ def test_reset_starts_over_and_keeps_a_copy(searched):
     dest = service.reset_components(searched.slug, actor="test")
     data = comp.load_components(searched.slug)
     assert comp.load_notices(searched.slug) == [] and data["batch"] == []
-    assert [(c["mpn"], c["ref"]) for c in data["components"]] == [
-        ("LM317T", "R-001"), ("STM32F103C8T6", "U-12"), ("NE555P", "")]
+    assert [c["mpn"] for c in data["components"]] == ["LM317T", "STM32F103C8T6", "NE555P"]
     assert all(c["dk"] is None and c["web_checked_at"] is None and "web_status" not in c for c in data["components"])
     assert [c["added_at"] for c in data["components"]] == added
     # copie préalable intacte dans les archives, rapports et destinataires conservés
@@ -283,15 +282,15 @@ def test_ui_reset_absent_from_thematic_veille(ui):  # noqa: F811
 def test_ui_shows_web_status_detail_search_and_excel(ui, searched):  # noqa: F811
     client, _ = ui
     t = client.get(f"/veilles/{searched.slug}").text
-    assert re.search(r'data-q="[^"]* Actif', t)  # la recherche plein texte trouve « actif »
+    assert '<td class="opt">Actif</td>' in t and '<option value="Actif">Actif</option>' in t  # colonne et filtre
     ne = comp.anchor(comp.key_of("NE555P", "Texas Instruments"))
     d = client.get(f"/veilles/{searched.slug}/components/{ne}").text
     assert "introuvable chez Digi-Key" in d and "Statut constaté sur le web" in d
     assert 'href="https://www.ti.com/p/ne555p" target="_blank" rel="noopener noreferrer">Actif</a>' in d
     from test_components import _sheet
     rows = {r[0]: r for r in _sheet(service.components_xlsx(searched.slug)).iter_rows(values_only=True)}
-    assert rows["NE555P"][8] == "introuvable chez Digi-Key" and rows["NE555P"][10] == "Actif"
-    assert rows["NE555P"][12] == "https://www.ti.com/p/ne555p"  # lien : la fiche trouvée sur le web
+    assert rows["NE555P"][7] == "introuvable chez Digi-Key" and rows["NE555P"][9] == "Actif"
+    assert rows["NE555P"][11] == "https://www.ti.com/p/ne555p"  # lien : la fiche trouvée sur le web
 
 
 def test_mcp_reset_requires_the_slug_twice(searched):

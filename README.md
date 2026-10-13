@@ -73,12 +73,16 @@ Fonctions :
   lancement en cours (rafraîchi en direct ; veille composants : avancement étape par étape), coût des exécutions,
   historique d'exécution Hermes, e-mail de test, **archivage** (rien n'est effacé) ;
 - **veille composants** : **liste unique de tous les composants**, une ligne chacun (types d'avis en
-  badges, fins de vie en rouge et en tête, échéance, lien vers la source), avec **recherche en temps
-  réel** (mots-clés sur MPN, fabricant, réf., intitulés et résumés des avis, statut Digi-Key) et un
-  **filtre par colonne** ; un clic sur un composant déplie son détail (avis complets, sources, état
-  Digi-Key). Même présentation compacte dans le PDF (tableau puis « Détail par composant », MPN
+  badges, fins de vie en rouge et en tête, statut, échéance, lien vers la source), avec **recherche en temps
+  réel** (mots-clés sur MPN, fabricant, statut, intitulés et résumés des avis) et un
+  **filtre par colonne** (texte, ou liste pour le statut et le type d'avis) ; un clic sur un composant déplie
+  son détail (avis complets, sources, état Digi-Key). Même présentation compacte dans le PDF (tableau puis « Détail par composant », MPN
   cliquable) et l'e-mail ; boutons « Lancer l'analyse »
   (complète) et « Vérifier les statuts Digi-Key » (immédiat, sans LLM ni e-mail) — voir plus bas ;
+- **composants** (base des composants) : **tout ce qui a déjà été analysé**, toutes veilles composants
+  confondues (actives et archivées), une ligne par référence : statut le plus récent, avis (chacun une fois,
+  à sa première détection), veilles qui l'ont analysée. Même tableau que la liste d'une veille (recherche,
+  filtres, détail au toucher), plus un filtre **par veille** ; export Excel avec la colonne « Veilles » ;
 - **sources** : clés d'API des distributeurs (Digi-Key), saisie masquée et test de connexion ;
 - **paramètres** : adresse(s) des alertes du chien de garde, avec e-mail de test ; carnet d'adresses
   (« Oublier » une adresse) ;
@@ -110,11 +114,12 @@ lundi 6h30 — job de la veille thématique rattachée
                                            liste Excel jointe
 ```
 
-- **Liste** : `MPN ; Fabricant ; Réf. interne`, une par ligne, collage depuis un tableur accepté
+- **Liste** : `MPN ; Fabricant`, une par ligne, collage depuis un tableur accepté
   (interface, `veillectl components add --file bom.csv`, ou Telegram : « Ajoute le LM317T de Texas
-  Instruments à la veille composants »).
+  Instruments à la veille composants »). Les colonnes suivantes sont ignorées : les anciennes listes
+  `MPN ; Fabricant ; Réf. interne` restent valables (la réf. interne n'est plus utilisée depuis la 0.5.0).
 - **Import d'une nomenclature CSV ou Excel** (`.csv`, `.xlsx`, `.xlsm`) : dans le formulaire de la
-  veille, « Importer un fichier ». Les colonnes MPN, Fabricant et Réf. interne sont reconnues par
+  veille, « Importer un fichier ». Les colonnes MPN et Fabricant sont reconnues par
   règles (libellés FR / EN usuels, forme des valeurs ; aucun service externe), puis **proposées** :
   feuille, ligne d'en-tête, colonnes et fabricant par défaut se corrigent avant d'appliquer, avec un
   aperçu et les lignes ignorées. « Ajouter à la liste » ou « Remplacer la liste », puis enregistrer
@@ -150,7 +155,7 @@ lundi 6h30 — job de la veille thématique rattachée
 - **Base des composants** (`veilles/.veille.db`) : ce que les veilles savent de chaque référence (statuts
   Digi-Key et web, dernière recherche web, avis) est partagé. Une référence ajoutée à une veille (création,
   ajout, import ; interface, CLI ou Telegram) **reprend les avis déjà connus** des autres veilles, actives ou
-  archivées : ils partent avec son premier e-mail. Ses statuts et sa date de recherche web sont repris
+  archivées : ils partent avec son premier e-mail. Elle se consulte dans l'interface, page **Composants**. Ses statuts et sa date de recherche web sont repris
   aussi, ce qui évite de la rechercher à nouveau sur le web en priorité (économie de tokens). La base n'est
   qu'un **index** des fichiers des veilles (qui font foi) : reconstruite à chaque démarrage
   (`veillectl catalog rebuild`), elle retire ce qu'une veille réinitialisée avait apporté (ce que d'autres
