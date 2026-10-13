@@ -947,34 +947,35 @@ def _catalog_state(key: str | None) -> tuple[dict, list[dict], list[dict]] | Non
     if known is None:
         return None
     parts = [{"mpn": k["mpn"], "manufacturer": k["manufacturer"], "dk": k.get("dk"),
-              "web_status": k.get("web_status"), "web_checked_at": k.get("web_checked_at")}
-             for k in known.values() if isinstance(k["mpn"], str) and isinstance(k["manufacturer"], str)]
+              "web_status": k.get("web_status"), "web_checked_at": k.get("web_checked_at")} for k in known.values()]
     found = sorted((n for k in known.values() for n in k["notices"]), key=lambda n: str(n.get("found_at") or ""))
     return known, parts, comp.merge([], found)
 
 
 def catalog_rows(key: str | None = None) -> list[dict] | None:
     """Base des composants (page « Composants ») : une ligne par référence déjà analysée, comme la liste d'une
-    veille (`components.group`), avec les veilles qui l'ont analysée (`sources`) ; `key` : cette seule
-    référence. None si la base est indisponible."""
+    veille (`components.group`), avec les veilles qui l'ont analysée (`watches` : slug d'une veille active ou
+    dossier d'archive) ; `key` : cette seule référence. None si la base est indisponible."""
     state = _catalog_state(key)
     if state is None:
         return None
     known, parts, notices = state
     rows = comp.group(notices, parts, include_quiet=True)
     for r in rows:
-        r["sources"] = sorted(known.get(r["key"], {}).get("sources", ()))
+        r["watches"] = sorted(known.get(r["key"], {}).get("sources", ()))
     return rows
 
 
 def catalog_xlsx() -> bytes | None:
-    """Base des composants au format Excel (classeur de l'export d'une veille, plus la colonne « Veilles ») ;
-    None si elle est indisponible."""
+    """Base des composants au format Excel (classeur de l'export d'une veille, plus la colonne « Veilles », nommées
+    comme dans l'interface) ; None si elle est indisponible."""
     state = _catalog_state(None)
     if state is None:
         return None
     known, parts, notices = state
-    return comp.to_xlsx(parts, notices, {key: sorted(k["sources"]) for key, k in known.items()})
+    active = {v.slug for v in store.list_all()}
+    return comp.to_xlsx(parts, notices, {key: [s if s in active else catalog.archived_label(s)
+                                               for s in sorted(k["sources"])] for key, k in known.items()})
 
 
 def address_book(limit: int | None = contacts.MAX_SHOWN) -> list[str]:

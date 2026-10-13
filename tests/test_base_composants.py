@@ -112,10 +112,10 @@ def test_browse_and_rows_merge_every_watch(env):
                                                                                           "Texas Instruments", 2)
     assert set(catalog.browse(LM)) == {LM} and catalog.browse("inconnue|X") == {}
     rows = {r["mpn"]: r for r in service.catalog_rows()}
-    assert set(rows) == {"LM317T", "NE555P"} and rows["LM317T"]["sources"] == ["carte-a", "carte-b"]
+    assert set(rows) == {"LM317T", "NE555P"} and rows["LM317T"]["watches"] == ["carte-a", "carte-b"]
     assert len(rows["LM317T"]["notices"]) == 1 and rows["LM317T"]["found"] == "2026-09-15"
-    assert rows["LM317T"]["critical"] and comp.status_label(rows["LM317T"]) == "Obsolete"
-    assert rows["NE555P"]["notices"] == [] and rows["NE555P"]["sources"] == ["carte-a"]
+    assert rows["LM317T"]["critical"] and comp.status_label(rows["LM317T"]) == "Obsolète"
+    assert rows["NE555P"]["notices"] == [] and rows["NE555P"]["watches"] == ["carte-a"]
     assert [r["mpn"] for r in service.catalog_rows(LM)] == ["LM317T"]
 
 
@@ -126,7 +126,7 @@ def test_base_unavailable_is_reported_never_a_crash(known, monkeypatch):  # noqa
         raise sqlite3.OperationalError("disk I/O error")
     monkeypatch.setattr(db, "connect", broken)
     r = client.get("/composants")
-    assert r.status_code == 503 and "Base des composants indisponible" in r.text
+    assert r.status_code == 503 and "momentanément indisponible" in r.text
     assert client.get("/composants/detail", params={"key": LM}).status_code == 503
     assert client.get("/composants.xlsx").status_code == 503
     assert service.catalog_rows() is None and service.catalog_xlsx() is None
@@ -155,7 +155,9 @@ def test_page_lists_every_analysed_reference(base, monkeypatch):
     assert f'<option value="{archived}">carte-b (archivée le 20' in t
     assert f'<option value="{watch_.slug}">{watch_.slug}</option>' in t
     assert f'data-tags="{archived}|{watch_.slug}"' in t  # LM317T : ses deux veilles, filtre exact
-    assert '<option value="Last Time Buy">Last Time Buy</option>' in t and '<option value="Obsolete">' in t
+    # statuts Digi-Key et web sous un même libellé : un seul choix par statut
+    assert '<option value="Dernière commande">Dernière commande</option>' in t and '<option value="Obsolète">' in t
+    assert '<option value="Obsolete">' not in t and 'data-q="Last Time Buy ' in t  # le terme Digi-Key reste cherchable
     assert f'data-detail="/composants/detail?key={quote(LM)}"' in t
     assert "style=" not in t and not re.search(r"<script(?![^>]*\bsrc=)", t)  # CSP : rien en ligne
     assert 'href="/composants"' in client.get("/health").text and 'href="/composants"' in client.get(
@@ -185,7 +187,9 @@ def test_export_names_the_watches_of_each_reference(base, monkeypatch):
     rows = list(_sheet(r.content).iter_rows(values_only=True))
     assert rows[0][-1] == "Veilles" and len(rows[0]) == 14
     by = {row[0]: row for row in rows[1:]}
-    assert by["LM317T"][-1] == f"{archived}, {watch_.slug}" and by["BC547"][-1] == archived
+    label = catalog.archived_label(archived)  # comme dans l'interface
+    assert label.startswith("carte-b (archivée le 20")
+    assert by["LM317T"][-1] == f"{label}, {watch_.slug}" and by["BC547"][-1] == label
 
 
 def test_empty_base(env, monkeypatch):
@@ -202,3 +206,73 @@ def test_untrusted_texts_are_escaped(known, tools, monkeypatch):  # noqa: F811
     assert "<img src=x" not in t and "&lt;img src=x onerror=alert(1)&gt;" in t and "<script>alert" not in t
     d = client.get("/composants/detail", params={"key": comp.key_of("NE555P", "Texas Instruments")}).text
     assert "<script>alert" not in d and "&lt;script&gt;alert(1)&lt;/script&gt;" in d
+
+
+@pytest.mark.parametrize("dk,web,label", [
+    ({"status": "Obsolete"}, {}, "Obsolète"),  # libellé commun aux statuts Digi-Key et web
+    ({"status": "Preliminary"}, {}, "Preliminary"),  # statut Digi-Key sans équivalent : tel quel
+    ({"status": "Active"}, {"status": "OBSOLETE"}, "Actif"),  # Digi-Key la connaît : il fait foi
+    # Digi-Key ne la trouve plus : la recherche web l'emporte sur son ancien statut, conservé à défaut
+    ({"status": "Active", "error": "introuvable chez Digi-Key"}, {"status": "UNKNOWN"}, "Introuvable"),
+    ({"status": "Active", "error": "introuvable chez Digi-Key"}, {}, "Actif"),
+    ({"error": "introuvable chez Digi-Key"}, {"status": "ACTIVE", "datasheet": "https://www.alldatasheet.com/x"},
+     "Actif (alldatasheet)"),
+    ({}, {}, ""),
+])
+def test_status_label(dk, web, label):
+    assert comp.status_label({"dk": dk, "web": web}) == label
+
+
+def test_stale_digikey_status_and_web_status_stay_searchable(known, monkeypatch):  # noqa: F811
+    """NE555P : Digi-Key ne la trouve pas, la recherche web la dit introuvable. Colonne et filtre « Introuvable »
+    (pas un ancien statut Digi-Key) ; « introuvable » se cherche comme avant."""
+    data = comp.load_components(known.slug)
+    ne = next(c for c in data["components"] if c["mpn"] == "NE555P")
+    ne["dk"]["status"] = "Active"  # dernier statut connu avant que Digi-Key ne la perde
+    ne["web_status"] = {"status": "UNKNOWN", "url": None, "checked_at": "2026-10-10"}
+    comp.save_components(known.slug, data)
+    client, _ = _client(monkeypatch)
+    t = client.get(f"/veilles/{known.slug}").text
+    row = re.search(r'<tr class="comp"[^>]*data-q="Active Introuvable"[^>]*>.*?</tr>', t, re.S).group(0)
+    assert "NE555P" in row and '<td class="opt">Introuvable</td>' in row
+    assert '<option value="Introuvable">Introuvable</option>' in t
+
+
+def test_malformed_notice_of_an_archive_never_breaks_the_base(known, tools):  # noqa: F811
+    """Avis retouché à la main dans une veille archivée (sans type, source sans lien) : ignoré par la page, l'export
+    et la reprise, au lieu d'une erreur 500 pour toutes les veilles."""
+    other = new_watch("Carte B", "BC547;onsemi")
+    service.components_scan(other.slug, client=FakeClient({"BC547": {"status": "Obsolete", "product_url": None}}))
+    dest = service.archive(other.slug)
+    notices = json.loads((dest / "notices.json").read_text())["notices"]
+    bad = [{k: v for k, v in notices[0].items() if k != "type"} | {"id": "x1"},
+           {**notices[0], "id": "x2", "sources": [{"label": "sans lien"}]}, {**notices[0], "id": "x3", "found_at": None}]
+    (dest / "notices.json").write_text(json.dumps({"notices": notices + bad}))
+    service.rebuild_catalog()
+    bc = comp.key_of("BC547", "onsemi")
+    assert len(catalog.browse(bc)[bc]["notices"]) == 1  # seul l'avis bien formé
+    assert [r["mpn"] for r in service.catalog_rows() if r["mpn"] == "BC547"] == ["BC547"]
+    assert service.catalog_xlsx()
+    assert len(comp.load_notices(new_watch("Carte C", "BC547;onsemi").slug)) == 1  # reprise : idem
+
+
+def test_reads_are_one_snapshot_and_leave_no_transaction(known, monkeypatch):  # noqa: F811
+    """`parts` et `notices` lues dans une même transaction de lecture, refermée ensuite (les écrivains
+    n'attendent que la durée de la lecture)."""
+    seen = []
+    real = catalog._gather
+
+    def spy(con, *a):
+        seen.append(con.in_transaction)
+        return real(con, *a)
+    monkeypatch.setattr(catalog, "_gather", spy)
+    assert catalog.browse() and catalog.knowledge([LM], "autre")
+    assert seen == [True, True]
+    service.import_components(known.slug, comp.parse_components("BC547;onsemi"))  # écriture possible ensuite
+
+
+def test_cli_still_accepts_the_legacy_ref_option(known, tmp_path, capsys):  # noqa: F811
+    f = tmp_path / "bom.csv"
+    f.write_text("MPN;Fabricant;Réf. interne\nBC547;onsemi;R-9\n")
+    assert cli.main(["components", "import", known.slug, str(f), "--ref", "C"]) == 0  # acceptée, ignorée
+    assert "1 ajouté(s)" in capsys.readouterr().out

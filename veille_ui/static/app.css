@@ -200,9 +200,8 @@ pre.log { max-height: 420px; overflow: auto; background: var(--bg); border: 1px 
      horizontal ; colonnes secondaires dans le détail, filtres libellés par leur placeholder. */
   table.comps, table.comps thead, table.comps tbody { display: block; }
   table.comps thead tr:first-child, table.comps tr.filters th:empty { display: none; }
-  /* filtres : autant de colonnes que la largeur en permet (2 sur un téléphone), listes lisibles en entier */
-  table.comps tr.filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr)); gap: .3rem;
-    padding: .35rem; }
+  /* filtres sur 2 colonnes (téléphones de 320 à 430 px) : listes lisibles en entier */
+  table.comps tr.filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .3rem; padding: .35rem; }
   table.comps tr.filters th { padding: 0; border: 0; }
   table.comps tr.filters input, table.comps tr.filters select { min-width: 0; }
   table.comps tr.comp { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: .5rem;

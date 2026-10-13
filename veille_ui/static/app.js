@@ -70,13 +70,12 @@
     function cells(r) {  // textes par colonne : calculés au premier filtre de colonne seulement
       return r.cells || (r.cells = Array.prototype.map.call(r.tr.cells, function (td) { return norm(td.textContent); }));
     }
-    function tags(r) {  // valeurs exactes par colonne (listes déroulantes) : au premier filtre par liste seulement
-      return r.tags || (r.tags = Array.prototype.map.call(r.tr.cells, function (td) {
-        return norm(td.getAttribute("data-tags") || td.textContent.trim()).split("|");
-      }));
+    function tags(r, i) {  // valeurs exactes d'une colonne (liste déroulante) : au premier filtre sur cette colonne
+      var t = r.tags || (r.tags = []), td = r.tr.cells[i];
+      return t[i] || (t[i] = norm(td.getAttribute("data-tags") || td.textContent.trim()).split("|"));
     }
     function match(r, f) {
-      return f.exact ? tags(r)[f.i].indexOf(f.v) !== -1 : cells(r)[f.i].indexOf(f.v) !== -1;
+      return f.exact ? tags(r, f.i).indexOf(f.v) !== -1 : cells(r)[f.i].indexOf(f.v) !== -1;
     }
     function apply() {
       var words = norm(search.value).split(/\s+/).filter(Boolean);

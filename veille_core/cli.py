@@ -273,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
     imp.add_argument("--header-row", help="ligne d'en-tête (défaut : détectée ; 0 = aucune)")
     imp.add_argument("--mpn", help="colonne du MPN : libellé, lettre (A…) ou numéro")
     imp.add_argument("--manufacturer", help="colonne du fabricant")
+    imp.add_argument("--ref", help=argparse.SUPPRESS)  # colonne de la réf. interne (avant 0.5.0) : acceptée, ignorée
     imp.add_argument("--default-manufacturer", help="fabricant si la colonne ou la cellule est vide")
     imp.add_argument("--replace", action="store_true", help="remplacer la liste (défaut : ajouter)")
     imp.add_argument("--dry-run", action="store_true", help="afficher la proposition sans rien enregistrer")

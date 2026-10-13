@@ -46,6 +46,9 @@ CRITICAL = frozenset(t for t, (_, sev) in TYPES.items() if sev <= 1)
 # Un statut qui est aussi un type d'avis (NRND, LTB, OBSOLETE) crée l'avis correspondant.
 WEB_STATUSES = {"ACTIVE": "Actif", "NRND": TYPES["NRND"][0], "LTB": TYPES["LTB"][0],
                 "OBSOLETE": TYPES["OBSOLETE"][0], "UNKNOWN": "Introuvable"}
+# Statut Digi-Key (minuscules) -> même statut de cycle de vie (WEB_STATUSES) : « Obsolete » (Digi-Key) et « OBSOLETE »
+# (recherche web) s'affichent et se filtrent sous un seul libellé. Les autres (« Preliminary »…) restent tels quels.
+DK_LIFECYCLE = {"active": "ACTIVE", "not for new designs": "NRND", "last time buy": "LTB", "obsolete": "OBSOLETE"}
 # Origines des avis tirés d'un statut de cycle de vie : identifiés par leur intitulé, pas par leur lien
 # (le même statut cité avec une autre fiche n'est pas un nouvel avis).
 STATUS_ORIGINS = ("digikey", "statut-web")
@@ -578,9 +581,13 @@ def web_status_label(web: dict) -> str:
 
 
 def status_label(row: dict) -> str:
-    """Statut de cycle de vie d'une ligne de `group` : celui de Digi-Key (il fait foi), sinon celui établi par
-    la recherche web ; vide si aucun n'est connu."""
-    return row["dk"].get("status") or web_status_label(row["web"])
+    """Statut de cycle de vie d'une ligne de `group` (colonne et filtre « Statut ») : celui de Digi-Key s'il connaît
+    la référence (il fait foi) ; s'il ne la trouve plus, celui établi par la recherche web, à défaut son dernier
+    statut connu. Libellé commun quand il existe (WEB_STATUSES) ; vide si aucun statut n'est connu."""
+    dk, web = row["dk"], row["web"]
+    if dk.get("status") and not (dk.get("error") and web.get("status")):
+        return WEB_STATUSES.get(DK_LIFECYCLE.get(dk["status"].lower()), dk["status"])
+    return web_status_label(web)
 
 
 def _status_link(dk: dict, web: dict) -> dict | None:

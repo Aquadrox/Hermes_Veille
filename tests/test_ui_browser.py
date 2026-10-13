@@ -238,12 +238,18 @@ def test_base_page_filters_and_detail_mobile(data, watch, monkeypatch):  # noqa:
         pg.select_option("select[data-col='6']", other.slug)
         assert _visible(pg, ["MAX232CPE+", "LM317T"]) == ["MAX232CPE+", "LM317T"]
         pg.select_option("select[data-col='6']", "")
-        pg.select_option("select[data-col='2']", "Active")  # valeur exacte, pas une sous-chaîne
+        pg.select_option("select[data-col='2']", "Obsolète")  # « Obsolete » de Digi-Key, libellé commun
+        assert _visible(pg, ["MAX232CPE+"]) == ["MAX232CPE+"]
+        pg.select_option("select[data-col='2']", "Actif")  # valeur exacte, pas une sous-chaîne
         assert _visible(pg, ["STM32F103C8T6", "NE555P"]) == ["STM32F103C8T6", "NE555P"]
         pg.select_option("select[data-col='2']", "")
-        filters = pg.eval_on_selector_all("tr.filters > th:not([hidden])", "els => els.filter(e => e.offsetParent)"
-                                          ".map(e => Math.round(e.getBoundingClientRect().left))")
-        assert len(filters) == 5 and len(set(filters)) == 2  # Composant, Statut, Avis, Échéance, Veille : 2 colonnes
+        lefts = "els => els.filter(e => e.offsetParent).map(e => Math.round(e.getBoundingClientRect().left))"
+        for width in (320, 360, 390):  # Composant, Statut, Avis, Échéance, Veille : 2 colonnes sur tout téléphone
+            pg.set_viewport_size({"width": width, "height": 844})
+            filters = pg.eval_on_selector_all("tr.filters > th", lefts)
+            assert len(filters) == 5 and len(set(filters)) == 2, (width, filters)
+            assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), width
+        pg.set_viewport_size({"width": 390, "height": 844})
         pg.fill("#comp-search", "max232")
         assert _visible(pg, ["MAX232CPE+"]) == ["MAX232CPE+"]
         pg.locator("tr.comp .comp-toggle").first.click()

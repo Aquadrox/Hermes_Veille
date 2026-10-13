@@ -75,7 +75,8 @@ Fonctions :
 - **veille composants** : **liste unique de tous les composants**, une ligne chacun (types d'avis en
   badges, fins de vie en rouge et en tête, statut, échéance, lien vers la source), avec **recherche en temps
   réel** (mots-clés sur MPN, fabricant, statut, intitulés et résumés des avis) et un
-  **filtre par colonne** (texte, ou liste pour le statut et le type d'avis) ; un clic sur un composant déplie
+  **filtre par colonne** (texte, ou liste pour le statut et le type d'avis ; statuts Digi-Key et web sous un
+  même libellé, « Obsolète »…) ; un clic sur un composant déplie
   son détail (avis complets, sources, état Digi-Key). Même présentation compacte dans le PDF (tableau puis « Détail par composant », MPN
   cliquable) et l'e-mail ; boutons « Lancer l'analyse »
   (complète) et « Vérifier les statuts Digi-Key » (immédiat, sans LLM ni e-mail) — voir plus bas ;

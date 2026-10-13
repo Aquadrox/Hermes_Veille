@@ -1,7 +1,7 @@
 {# Tableau des composants, commun à la liste d'une veille (`v`) et à la base des composants (sans `v` : colonne
    « Veilles » en plus). Recherche plein texte et filtres par colonne (texte : contient ; liste : valeur exacte),
    détail chargé au clic (app.js). Fins de vie en tête et en rouge. Contexte : app.table_ctx. #}
-{% from "partials/macros.html" import badge, source_link %}
+{% from "partials/macros.html" import badge, source_link, watch_links %}
 {% set all_veilles = v is not defined %}
 <div class="comp-tools">
   <input type="search" id="comp-search" placeholder="Rechercher : MPN, fabricant, statut, avis, mot-clé…"
@@ -17,7 +17,7 @@
       <th class="opt"><input type="search" data-col="1" placeholder="Fabricant" aria-label="Filtrer par fabricant" autocomplete="off"></th>
       <th><select data-col="2" aria-label="Filtrer par statut">
         <option value="">Statut : tous</option>
-        {% for s in statuses %}<option value="{{ s }}">{{ "Non vérifié" if s == "—" else s }}</option>{% endfor %}
+        {% for s in statuses %}<option value="{{ s }}">{{ "Statut inconnu" if s == "—" else s }}</option>{% endfor %}
       </select></th>
       <th><select data-types aria-label="Filtrer par type d'avis">
         <option value="">Avis : tous</option>
@@ -30,7 +30,7 @@
       <th class="opt"><input type="search" data-col="5" placeholder="Détecté" aria-label="Filtrer par date de détection" autocomplete="off"></th>
       {% if all_veilles %}<th><select data-col="6" aria-label="Filtrer par veille">
         <option value="">Veille : toutes</option>
-        {% for s in sources %}<option value="{{ s }}">{{ s if s in active else s|archived }}</option>{% endfor %}
+        {% for s in watches %}<option value="{{ s }}">{{ s if s in active else s|archived }}</option>{% endfor %}
       </select></th>{% endif %}
       <th></th>
     </tr>
@@ -41,14 +41,14 @@
     <tr class="comp{% if r.critical %} crit{% endif %}"{% if loop.index > COMP_ROWS_SHOWN %} hidden{% endif %}
         data-types="{{ r.types|join(' ') }}"
         data-detail="{% if all_veilles %}/composants/detail?key={{ r.key|urlencode }}{% else %}/veilles/{{ v.slug }}/components/{{ r.anchor }}{% endif %}"
-        data-q="{% for n in r.notices %} {{ NOTICE_TYPES[n.type][0] }} {{ n.title }} {{ n.number }} {{ n.summary }}{% endfor %}">
+        data-q="{{ r.dk.status or '' }}{% if r.web %} {{ web_status_label(r.web) }}{% endif %}{% for n in r.notices %} {{ NOTICE_TYPES[n.type][0] }} {{ n.title }} {{ n.number }} {{ n.summary }}{% endfor %}">
       <td class="c-mpn"><button type="button" class="link comp-toggle" aria-expanded="false" aria-controls="d-{{ r.anchor }}"><strong>{{ r.mpn }}</strong></button>{% if not r.tracked %} <span class="muted small">(retiré)</span>{% endif %}</td>
       <td class="opt">{{ r.manufacturer }}</td>
-      <td class="opt">{{ status_label(r) or "—" }}</td>
+      <td class="opt">{{ r.status }}</td>
       <td class="c-types">{% for t in r.types %}{{ badge(t) }} {% else %}<span class="muted">—</span>{% endfor %}</td>
       <td class="c-due nowrap">{% if r.deadline %}<strong>{{ r.deadline }}</strong>{% else %}—{% endif %}</td>
       <td class="opt nowrap">{{ r.found or "—" }}</td>
-      {% if all_veilles %}<td class="opt" data-tags="{{ r.sources|join('|') }}">{% for s in r.sources %}{% if s in active %}<a href="/veilles/{{ s }}">{{ s }}</a>{% else %}<span class="muted">{{ s|archived }}</span>{% endif %}{{ ", " if not loop.last }}{% endfor %}</td>{% endif %}
+      {% if all_veilles %}<td class="opt" data-tags="{{ r.watches|join('|') }}">{{ watch_links(r.watches, active) }}</td>{% endif %}
       <td class="c-link">{% if r.link %}{{ source_link(r.link) }}{% else %}—{% endif %}</td>
     </tr>
   {% else %}

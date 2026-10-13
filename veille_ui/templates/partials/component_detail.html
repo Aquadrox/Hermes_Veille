@@ -1,11 +1,11 @@
 {# Détail d'un composant (ligne dépliée de la liste) : identité, statut Digi-Key (ou établi par la
    recherche web si Digi-Key ne connaît pas la référence), avis complets ; base des composants : veilles qui
    l'ont analysé. #}
-{% from "partials/macros.html" import badge, source_link %}
+{% from "partials/macros.html" import badge, source_link, watch_links %}
 <div class="comp-detail">
   <p><strong>{{ r.mpn }}</strong> — {{ r.manufacturer }}
     {% if not r.tracked %}<span class="muted small">(retiré de la liste suivie)</span>{% endif %}</p>
-  {% if r.sources %}<p class="small muted">Analysé par : {% for s in r.sources %}{% if s in active %}<a href="/veilles/{{ s }}">{{ s }}</a>{% else %}{{ s|archived }}{% endif %}{{ ", " if not loop.last }}{% endfor %}</p>{% endif %}
+  {% if r.watches %}<p class="small muted">Analysé par : {{ watch_links(r.watches, active) }}</p>{% endif %}
   <p class="small muted">Statut Digi-Key :
     {% if r.dk.product_url %}{{ source_link({"url": r.dk.product_url, "label": r.dk.status or "fiche"}) }}{% else %}{{ r.dk.status or "—" }}{% endif %}
     · vérifié {{ r.dk.checked_at or "jamais" }} · recherche web {{ r.web_checked_at or "jamais" }}
