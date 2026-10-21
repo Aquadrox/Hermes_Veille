@@ -8,6 +8,7 @@
 #   3. les gabarits des veilles + un hook de seed   (réconciliation à chaque boot)
 #   4. veille_core / veillectl, l'interface web     (venv séparé, service s6)
 #   5. veille-mcp : serveur MCP pour piloter les veilles depuis Hermes (Telegram)
+#   6. veille-guard : plugin Hermes, garde-fou des veilles contre l'injection de prompt
 #
 # Tout l'état vit dans le volume /opt/data ; l'image reste stateless et
 # remplaçable par un simple `docker compose pull && up -d`.
@@ -70,6 +71,11 @@ COPY veille_mcp/ /opt/veille-app/veille_mcp/
 COPY --chmod=0755 docker/bin/ /usr/local/bin/
 # Service s6-rc (même schéma que le `dashboard` amont), ajouté au bundle `user`.
 COPY --chmod=0755 docker/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
+
+# ── 6. Garde-fou contre l'injection de prompt ─────────────────────────────────
+# Plugin Hermes « intégré » (propriété root, lecture seule : l'agent ne peut pas le modifier),
+# activé par le hook de seed ; ses règles sont dans veille_core/guard.py.
+COPY docker/hermes-plugins/veille-guard/ /opt/hermes/plugins/veille-guard/
 
 ENV TZ=Europe/Paris \
     VEILLE_DEFAULTS=/opt/hermes/veille-defaults

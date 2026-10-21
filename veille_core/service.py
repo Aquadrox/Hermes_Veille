@@ -67,15 +67,7 @@ def _locked():
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
-def audit(actor: str, action: str, slug: str = "", detail: str = "") -> None:
-    line = json.dumps({"at": store.now_iso(), "actor": actor, "action": action,
-                       "slug": slug, "detail": detail}, ensure_ascii=False)
-    try:
-        paths.audit_log().parent.mkdir(parents=True, exist_ok=True)
-        with open(paths.audit_log(), "a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-    except OSError:
-        pass
+audit = store.audit
 
 
 def read_audit(limit: int = 50) -> list[dict]:
@@ -517,7 +509,7 @@ def archive(slug: str, actor: str = "cli") -> Path:
 
 def brevo_script() -> str:
     return os.environ.get(
-        "BREVO_SCRIPT", str(paths.hermes_home() / "skills/email/brevo-email/scripts/brevo_send.py"))
+        "BREVO_SCRIPT", str(paths.bundled_skills_dir() / "email/brevo-email/scripts/brevo_send.py"))
 
 
 def _brevo(args: list[str], timeout: int = 120) -> str:
@@ -1060,13 +1052,15 @@ def _write_xlsx(rdir: Path, slug: str, data: dict, notices: list[dict], stamp: s
     return path
 
 
-def _build_pdf(v: Veille, md: Path, pdf: Path, subtitle: str, meta: str) -> None:
+def _build_pdf(v: Veille, md: Path, pdf: Path, subtitle: str, meta: str,
+               data: Path | None = None, toc_depth: int = 1) -> None:
     script = os.environ.get(
-        "BUILD_REPORT", str(paths.hermes_home() / "skills/productivity/styled-pdf-report/scripts/build_report.py"))
+        "BUILD_REPORT", str(paths.bundled_skills_dir() / "productivity/styled-pdf-report/scripts/build_report.py"))
     title = v.pdf.title or v.name
     cmd = [sys.executable, script, "--md", str(md), "--out", str(pdf), "--title", title,
            "--subtitle", subtitle, "--meta", meta, "--header", v.pdf.header or title,
-           "--footer", v.pdf.footer, "--accent", v.pdf.accent, "--toc-depth", "1"]
+           "--footer", v.pdf.footer, "--accent", v.pdf.accent, "--toc-depth", str(toc_depth),
+           *(["--data", str(data)] if data else [])]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -1180,12 +1174,8 @@ def components_chapter(slug: str, for_slug: str, report_md: Path,
     Idempotent : relancé sur le même fichier, le chapitre précédent (toujours en fin) est remplacé.
     """
     target = store.load(for_slug)
-    rdir = store.veille_dir(for_slug) / "rapports"
-    path = report_md.resolve()
-    if path.parent != rdir.resolve() or not store.REPORT_RE.match(path.name) \
-            or not path.name.endswith(".md") or not path.is_file():
-        raise StoreError(f"rapport Markdown invalide pour la veille {for_slug} : {report_md} "
-                         f"(attendu : {rdir}/AAAA-MM-JJ-HHhMM-veille.md, fichier existant)")
+    path = _report_md(for_slug, report_md)
+    rdir = path.parent
     try:
         _components_veille(slug)
     except StoreError:
@@ -1212,6 +1202,79 @@ def components_chapter(slug: str, for_slug: str, report_md: Path,
     xlsx = _write_xlsx(rdir, slug, data, notices, path.name.removesuffix("-veille.md"), actor)
     audit(actor, "components-chapter", slug, f"{for_slug} : {len(new)} avis")
     return comp.subject_prefix(view).strip(), xlsx
+
+
+# --------------------------------------------------------------------------
+# Publication d'une veille thématique : PDF et e-mail sans l'agent
+# --------------------------------------------------------------------------
+MAIL_MAX_BYTES = 50_000
+MAIL_LIMITS = {"period": 100, "summary": 1500}
+WORDS_PER_MINUTE = 200
+
+
+def _report_md(slug: str, report_md: Path) -> Path:
+    """Rapport Markdown d'une veille : dans SON dossier rapports/, nom horodaté, fichier existant."""
+    rdir = store.veille_dir(slug) / "rapports"
+    path = report_md.resolve()
+    if path.parent != rdir.resolve() or not store.REPORT_RE.match(path.name) \
+            or not path.name.endswith(".md") or not path.is_file():
+        raise StoreError(f"rapport Markdown invalide pour la veille {slug} : {report_md} "
+                         f"(attendu : {rdir}/AAAA-MM-JJ-HHhMM-veille.md, fichier existant)")
+    return path
+
+
+def _mail_text(value, limit: int, one_line: bool) -> str:
+    """Texte de l'agent pour l'objet ou le corps de l'e-mail : sans caractère de contrôle ni
+    invisible, espaces normalisés, borné."""
+    if not isinstance(value, str):
+        return ""
+    lines = [" ".join("".join(ch for ch in ln if ch.isprintable()).split()) for ln in value.splitlines()]
+    text = " ".join(lines) if one_line else "\n".join(ln for ln in lines if ln)
+    return text[:limit].strip()
+
+
+def _mail_fields(path: Path) -> tuple[str, str]:
+    """Période couverte et messages clés écrits par l'agent dans <D>-mail.json."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.loads(fh.read(MAIL_MAX_BYTES))  # lecture bornée : au-delà, JSON invalide
+    except FileNotFoundError:
+        raise StoreError(f"fichier introuvable : {path} (période et messages clés de l'e-mail)") from None
+    except (OSError, ValueError) as exc:
+        raise StoreError(f"JSON invalide ({exc}) : corriger {path.name} et relancer") from None
+    raw = raw if isinstance(raw, dict) else {}
+    period = _mail_text(raw.get("period"), MAIL_LIMITS["period"], one_line=True)
+    if not period:
+        raise StoreError(f"{path.name} : « period » manquante (ex. « Semaine 42 · 12–16 octobre 2026 »)")
+    return period, _mail_text(raw.get("summary"), MAIL_LIMITS["summary"], one_line=False)
+
+
+def report_publish(slug: str, report_md: Path, actor: str = "job") -> str:
+    """Dernières étapes d'une veille thématique : chapitre composants, PDF, envoi aux destinataires.
+
+    L'agent, exposé au contenu du web, n'écrit que des fichiers de son dossier rapports/ (rapport,
+    graphique, période et messages clés) : destinataires, pièces jointes, mise en page et objet
+    viennent de la veille, jamais de lui.
+    """
+    v = store.load(slug)
+    if v.kind != "veille":
+        raise StoreError(f"{slug} est une veille composants : elle se publie par `veillectl components finalize`")
+    md = _report_md(slug, report_md)
+    stem = md.name.removesuffix("-veille.md")
+    period, summary = _mail_fields(md.with_name(f"{stem}-mail.json"))
+    prefix, xlsx = (components_chapter(v.components, slug, md, actor) or ("", None)) if v.components else ("", None)
+    pdf, charts = md.with_name(f"{stem}-veille.pdf"), md.with_name(f"{stem}-charts.json")
+    minutes = max(1, round(len(md.read_text(encoding="utf-8").split()) / WORDS_PER_MINUTE))
+    _build_pdf(v, md, pdf, subtitle=period,
+               meta=f"Période : {period} | Temps de lecture : ~{minutes} min | Public : {v.pdf.audience}",
+               data=charts if charts.is_file() else None, toc_depth=2)
+    text = summary or f"Rapport de la veille « {v.name} » en pièce jointe."
+    if prefix:
+        text += f"\n\nComposants suivis {prefix} : détail dans le chapitre « Composants » du rapport."
+    out = _brevo(["--bcc-file", str(v.dir / "recipients.txt"), "--subject", f"{prefix} {v.name} — {period}".strip(),
+                  "--text", text, "--attach", str(pdf), *(["--attach", str(xlsx)] if xlsx else []), "--verify"])
+    audit(actor, "report-publish", slug, pdf.name + (f" + {xlsx.name}" if xlsx else ""))
+    return f"OK: PDF généré -> {pdf}\n{out}"
 
 
 # --------------------------------------------------------------------------
@@ -1352,8 +1415,11 @@ def _reconcile(v: Veille, jobs: list[dict]) -> str:
         store.save(v)
     if render.write(v):
         actions.append("prompt re-rendu")
+    # Avant la 0.6.0 : brevo-email et styled-pdf-report attachés (« skill » : ancien champ de Hermes).
+    stale_skills = bool(job.get("skills") or job.get("skill"))
     if (job.get("prompt") != render.short_prompt(v) or job.get("workdir") != str(v.dir)
-            or job.get("name") != job_name(v)):
-        hermes.edit(v.job_id, name=job_name(v), prompt=render.short_prompt(v), workdir=str(v.dir))
+            or job.get("name") != job_name(v) or stale_skills):
+        hermes.edit(v.job_id, name=job_name(v), prompt=render.short_prompt(v), workdir=str(v.dir),
+                    clear_skills=stale_skills)
         actions.append("job réaligné")
     return f"{v.slug}: " + ("→ " + ", ".join(actions) if actions else "ok")

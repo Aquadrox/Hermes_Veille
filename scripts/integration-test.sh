@@ -8,6 +8,7 @@
 # réconciliation idempotente au redémarrage, interface (session, CSRF, Host, pause /
 # reprise effectives côté Hermes), mise à jour simulée (conteneur RECRÉÉ : veilles,
 # rapports, jobs et historique conservés), garde-fou du dossier de données absent,
+# garde-fou contre l'injection de prompt (plugin, outils, mémoire, skills),
 # watchdog (aucune alerte sur un volume sain).
 set -euo pipefail
 
@@ -93,6 +94,17 @@ contains "$(as_root ls "$DATA/veilles/industrie-4-0/rapports/")" '-veille\.pdf$'
 as_root test -f "$DATA/veilles/industrie-4-0/recipients.txt" || fail "recipients.txt absent"
 contains "$(hx hermes cron list)" 'industrie-4-0' || fail "job non renommé"
 ok "même job, historique et destinataires conservés, lien data/veille en place"
+
+# --- 4 bis. Garde-fou contre l'injection de prompt (posé par le seed à chaque démarrage) ---
+log "garde-fou : outils des exécutions planifiées, mémoire, plugin, skills retirés du job"
+contains "$(docker logs "$NAME" 2>&1)" 'plugin veille-guard activé' || fail "plugin veille-guard non activé au démarrage"
+PROBE="$(docker exec -i -u hermes "$NAME" /opt/hermes/.venv/bin/python - "$LEGACY_JOB" \
+    /opt/data/veilles/industrie-4-0/rapports < "$REPO_DIR/scripts/guard-probe.py" 2>&1)" || fail "garde-fou : $PROBE"
+contains "$PROBE" 'outils cron : file, terminal, web$' || fail "outils des exécutions planifiées : $PROBE"
+contains "$(as_root cat "$DATA/config.yaml")" 'memory_enabled: false' || fail "mémoire persistante non coupée"
+SKILLS="$(as_root python3 -c "import json,sys; d=json.load(open(sys.argv[1])); j=(d['jobs'] if isinstance(d,dict) else d)[0]; print(j.get('skills') or j.get('skill') or [])" "$DATA/cron/jobs.json")"
+[ "$SKILLS" = "[]" ] || fail "skills encore attachés au job migré : $SKILLS"
+ok "plugin actif (refus vérifié), outils web/fichiers/terminal, mémoire coupée, skills retirés"
 
 # --- 5. Interface ---
 log "interface web"

@@ -19,7 +19,6 @@ from pathlib import Path
 
 from . import paths
 
-SKILLS = ("brevo-email", "styled-pdf-report")
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _CREATED = re.compile(r"Created job:\s*([0-9a-zA-Z_-]+)")
 
@@ -175,9 +174,8 @@ def job_status(job: dict | None) -> dict:
 # --------------------------------------------------------------------------
 def create(*, name: str, schedule: str, prompt: str, workdir: str,
            model: str | None = None, provider: str | None = None, paused: bool = False) -> str:
+    # Aucun skill attaché : PDF et e-mail sont produits par `veillectl`, jamais par l'agent.
     args = ["create", schedule, prompt, "--name", name, "--workdir", workdir, "--deliver", "local"]
-    for skill in SKILLS:
-        args += ["--skill", skill]
     if model:
         args += ["--model", model]
     if provider:
@@ -196,12 +194,14 @@ def create(*, name: str, schedule: str, prompt: str, workdir: str,
 
 def edit(job_id: str, *, name: str | None = None, schedule: str | None = None,
          prompt: str | None = None, workdir: str | None = None,
-         model: str | None = None, provider: str | None = None) -> None:
+         model: str | None = None, provider: str | None = None, clear_skills: bool = False) -> None:
     args = ["edit", job_id]
     for flag, value in (("--name", name), ("--schedule", schedule), ("--prompt", prompt),
                         ("--workdir", workdir), ("--model", model), ("--provider", provider)):
         if value is not None:
             args += [flag, value]
+    if clear_skills:
+        args.append("--clear-skills")
     if len(args) > 2:
         _cli(*args)
 

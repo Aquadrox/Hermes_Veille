@@ -274,9 +274,12 @@ def tools(env, tmp_path, monkeypatch):
     """Faux PDF (fichier > 20 Ko) et faux envoi Brevo qui enregistre ses arguments."""
     pdf = tmp_path / "fake_pdf.py"
     pdf.write_text(textwrap.dedent("""
-        import sys
+        import json, os, sys
         a = sys.argv
         open(a[a.index("--out") + 1], "wb").write(b"%PDF" + b"x" * 30000)
+        if os.environ.get("FAKE_PDF_LOG"):
+            with open(os.environ["FAKE_PDF_LOG"], "a") as fh:
+                fh.write(json.dumps(a[1:]) + "\\n")
         print("OK: PDF généré")
     """))
     brevo = tmp_path / "fake_brevo.py"
@@ -337,7 +340,7 @@ def test_old_veille_json_without_kind_and_unchanged_prompt(env):
     old = store.load(v.slug)
     assert old.kind == "veille" and old.components is None and service.describe(old)["components"] is None
     prompt = render.render(old)
-    assert "6 bis" not in prompt and '"value_label":"..."}]}]}.\n\n7. GÉNÈRE' in prompt
+    assert '"value_label":"..."}]}]}.\n\n7. E-MAIL' in prompt and "components chapter" not in prompt
     assert not render.write(old)  # prompt identique à celui de la création : rien à réécrire
 
 
@@ -350,8 +353,9 @@ def test_link_veille_to_components(watch):
                               recipients=["a@example.org"], brief="# b\n", include_components=watch.slug)
     assert store.load(v.slug).components == watch.slug
     prompt = (v.dir / "job-prompt.md").read_text()
-    assert (f"veillectl components chapter {watch.slug} --for {v.slug} --append {v.dir}/rapports/D-veille.md"
-            in prompt)
+    # le chapitre est ajouté par `veillectl report publish` (déterministe), jamais par l'agent
+    assert f"veillectl report publish {v.slug} {v.dir}/rapports/D-veille.md" in prompt
+    assert "components chapter" not in prompt
     # les avis antérieurs au rattachement ne sont pas réexpédiés
     assert comp.pending(comp.load_notices(watch.slug), comp.chapter_channel(v.slug)) == []
     assert comp.delivery_days(comp.load_notices(watch.slug), comp.chapter_channel(v.slug)) == set()
@@ -362,7 +366,7 @@ def test_link_veille_to_components(watch):
     with pytest.raises(store.StoreError, match="veille inconnue"):
         service.update_veille(v.slug, include_components="inconnue")
     service.update_veille(v.slug, include_components="")
-    assert store.load(v.slug).components is None and "6 bis" not in (v.dir / "job-prompt.md").read_text()
+    assert store.load(v.slug).components is None and (v.dir / "job-prompt.md").read_text() == prompt
 
 
 def test_scan_without_digikey(watch):
@@ -1081,7 +1085,7 @@ def test_prompts_fix_the_timestamp_once(watch):
     for x in (watch, v):
         prompt = (x.dir / "job-prompt.md").read_text()
         assert "`date +%Y-%m-%d-%Hh%M`" in prompt and "UNE SEULE FOIS" in prompt and "${" not in prompt
-    assert f"--append {v.dir}/rapports/D-veille.md" in (v.dir / "job-prompt.md").read_text()
+    assert f"veillectl report publish {v.slug} {v.dir}/rapports/D-veille.md" in (v.dir / "job-prompt.md").read_text()
 
 
 # --------------------------------------------------------------------------
@@ -1187,7 +1191,7 @@ def test_xlsx_failure_never_blocks_the_mail(watch, tools, monkeypatch):
     assert cli.main(["components", "chapter", watch.slug, "--for", v.slug, "--append", str(md)]) == 0
 
 
-def test_chapter_writes_xlsx_and_prompt_attaches_it(watch, tools, capsys):
+def test_chapter_writes_xlsx(watch, tools, capsys):
     v = service.create_veille(name="Veille Indus", subject="s", schedule_expr="30 6 * * 1",
                               recipients=["a@example.org"], brief="# b\n", include_components=watch.slug)
     finalize(watch, [cand(["LM317T"])])
@@ -1200,8 +1204,6 @@ def test_chapter_writes_xlsx_and_prompt_attaches_it(watch, tools, capsys):
     assert f"PIECE_JOINTE={xlsx}" in capsys.readouterr().out  # relance : même fichier, remplacé
     assert sorted(p.name for p in (v.dir / "rapports").glob("*.xlsx")) == [xlsx.name]
     assert not list((watch.dir / "rapports").glob("*.xlsx"))  # rattachée : rien chez la veille composants
-    prompt = (v.dir / "job-prompt.md").read_text()
-    assert "PIECE_JOINTE=<chemin>" in prompt and "--attach <chemin>" in prompt
 
 
 def test_ui_export_xlsx(ui, watch):

@@ -7,6 +7,77 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.6.0] — 2026-10-21
+
+Protection contre l'injection de prompt : l'agent, qui lit le web, ne peut plus que chercher, lire les
+fichiers de sa veille, écrire ses fichiers de sortie et lancer les commandes de son job.
+
+### Sécurité
+
+- **Garde-fou `veille-guard`** : plugin Hermes livré dans l'image (`/opt/hermes/plugins`, lecture
+  seule), activé à chaque démarrage ; règles dans `veille_core/guard.py`. Avant chaque appel d'outil
+  d'une exécution planifiée, par listes blanches (tout le reste est refusé) :
+  - outils : `web_search`, `web_extract`, `read_file`, `search_files`, `write_file`, `patch`,
+    `terminal`, avec leurs seuls paramètres attendus (ni mode V4A de `patch`, ni `cross_profile`,
+    ni arrière-plan) ;
+  - fichiers : lecture de `config.md`, `job-prompt.md` et `rapports/` de **sa** veille ; écriture des
+    seuls `rapports/<D>-{veille.md, charts.json, mail.json, pcn.json}` ; chemins absolus, liens
+    symboliques résolus ;
+  - terminal : `date`, `ls` de ses rapports, `veillectl components scan|progress|finalize` et
+    `veillectl report publish` pour **son** slug et ses fichiers, sans guillemets ni caractère spécial
+    du shell ;
+  - exécution identifiée par sa tâche `cron:<job>:…`, stable même quand Hermes renomme la session en
+    compressant le contexte ; exécution planifiée non identifiable : aucun outil ;
+  - une erreur du garde-fou, ou son import impossible, refuse l'appel (Hermes, lui, laisserait passer
+    un hook en échec) ; chaque refus est inscrit au journal d'audit (page Santé, origine
+    « veille-guard »), sans la liste des commandes permises que reçoit l'agent.
+- **Contenu externe marqué** comme non fiable dans le contexte de l'agent (résultats web, anciens
+  rapports, sorties de commande) : encadrement, caractères invisibles retirés, marqueurs neutralisés.
+  Règles de sécurité en tête des deux gabarits de prompt.
+- **Chaîne PDF fermée** (`build_report.py`) : un Markdown piégé pouvait joindre n'importe quel fichier
+  lisible au PDF envoyé (`<a rel="attachment" href="file:///opt/data/.env">`) et faire appeler des
+  adresses externes. Plus de `--embed-resources` (qui lisait lui-même les fichiers désignés) ;
+  WeasyPrint refuse toute ressource sauf `data:` (WeasyPrint 61 à 70).
+- **Outils des exécutions planifiées réduits**, réappliqués à chaque démarrage : `web`, `file`,
+  `terminal` (ni navigateur, ni exécution de code, ni mémoire, ni délégation, ni gestion des skills) ;
+  mémoire persistante coupée ; `approvals.cron_mode: deny` ; pont `tool_call` désactivé.
+- **Scripts de l'image** : `veillectl` (et l'interface) exécutent `brevo_send.py` et `build_report.py`
+  depuis `/opt/hermes/skills` (lecture seule), plus depuis le volume, où l'agent pouvait les modifier
+  et où la synchronisation de Hermes conserve une copie modifiée.
+- **MCP** (Telegram) : `read_report` et `get_run_log` encadrent le texte venu du web comme non fiable ;
+  les instructions du serveur demandent de n'y appliquer aucune consigne.
+
+### Ajouté
+
+- **`veillectl report publish <slug> <rapports/D-veille.md>`** : étape finale de la veille thématique,
+  sans l'agent. Ajoute le chapitre composants s'il y en a un, produit le PDF (titre, en-tête, pied,
+  accent de la veille ; sous-titre = période ; temps de lecture calculé ; graphique de
+  `D-charts.json`) et l'envoie aux seuls destinataires de la veille, en copie cachée, avec le PDF et la
+  liste Excel des composants. Période et messages clés viennent de `D-mail.json` (écrit par l'agent),
+  nettoyés et bornés (100 et 1 500 caractères).
+- `scripts/guard-probe.py` : contrat du garde-fou avec Hermes (smoke test, test d'intégration).
+
+### Modifié
+
+- Prompt de la veille thématique : l'agent n'appelle plus `build_report.py` ni `brevo_send.py`, ni
+  `veillectl components chapter` ; il écrit `D-mail.json` puis lance `veillectl report publish`.
+- Les jobs n'ont plus de skill attaché ; la réconciliation retire `brevo-email` et
+  `styled-pdf-report` des jobs existants (`hermes cron edit --clear-skills`).
+- En-tête et pied de page du PDF échappés pour le CSS : un guillemet ne fait plus disparaître l'en-tête.
+
+### Mesures
+
+- Exécution planifiée réelle (`hermes cron run`, Hermes v2026.9.24, faux LLM local) : requête
+  initiale 62,4 → 19,6 Ko (−69 %) ; 24 → 8 outils exposés (schémas 42,1 → 13,1 Ko) ; prompt système
+  7,6 → 4,8 Ko. `id`, `cat /opt/data/.env` et `/proc/self/environ` refusés, `ls` des rapports permis.
+- Rendu PDF identique au pixel près sur un rapport type (4 pages, WeasyPrint 66 et 70).
+
+### Déploiement
+
+- Rien à faire : le démarrage applique la configuration, active le plugin et retire les skills des
+  jobs. Vérifier dans les logs `[seed-veille] plugin veille-guard activé`.
+- Recommandé côté hôte (Telegram) : garder l'approbation des commandes du Hermes de l'hôte.
+
 ## [0.5.0] — 2026-10-13
 
 Page « Composants » : tout ce qui a déjà été analysé, toutes veilles confondues. Liste de composants au format

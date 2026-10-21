@@ -84,8 +84,64 @@ def test_bar_chart_svg_escapes_labels():
     assert "&lt;b&gt;" in svg and svg.count("<rect") == 2
 
 
-@pytest.mark.skipif(not (shutil.which("pandoc") and shutil.which("weasyprint")),
-                    reason="pandoc/weasyprint absents (couvert par le smoke test de l'image)")
+def test_css_string_cannot_escape_the_literal():
+    assert builder.css_string('a "b"\\ </style>\nc') == 'a \\"b\\"\\\\ \\3c /style> c'
+
+
+def test_weasyprint_python_reads_the_shebang(tmp_path, monkeypatch):
+    exe = tmp_path / "weasyprint"
+    exe.write_text("#!/usr/bin/env python3.12 -s\nimport weasyprint\n")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert builder.weasyprint_python() == ["/usr/bin/env", "python3.12", "-s"]
+    exe.write_bytes(b"\x7fELF binaire")
+    assert builder.weasyprint_python() == [sys.executable]
+
+
+needs_pdf_chain = pytest.mark.skipif(not (shutil.which("pandoc") and shutil.which("weasyprint")),
+                                     reason="pandoc/weasyprint absents (couvert par le smoke test de l'image)")
+
+
+@needs_pdf_chain
+def test_build_pdf_fetches_nothing_the_markdown_points_to(tmp_path):
+    """Injection de prompt : le Markdown de l'agent ne peut ni joindre un fichier au PDF, ni appeler l'extérieur."""
+    import http.server
+    import threading
+
+    hits = []
+
+    class Probe(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            hits.append(self.path)
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Probe)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}"
+    secret = tmp_path / "fake.env"
+    secret.write_text("BREVO_API_KEY=xkeysib-secret\n")
+    md = tmp_path / "r.md"
+    md.write_text(
+        f'# R\n\n<a rel="attachment" href="file://{secret}">a</a>\n\n<link rel="attachment" href="{secret}">\n\n'
+        f'<object data="{secret}"></object>\n\n![l]({secret}) ![d]({url}/img)\n\n'
+        f'[x](file://{secret}){{rel="attachment"}}\n\n::: {{style="background: url({url}/css)"}}\nt\n:::\n\n'
+        f'<style>@import url("{url}/import");</style>\n')
+    out = tmp_path / "r.pdf"
+    try:
+        subprocess.run([sys.executable, str(SKILLS / "productivity/styled-pdf-report/scripts/build_report.py"),
+                        "--md", str(md), "--out", str(out), "--title", "X"], check=True, capture_output=True)
+    finally:
+        server.shutdown()
+    pdf = out.read_bytes()
+    assert pdf.startswith(b"%PDF") and b"/EmbeddedFile" not in pdf
+    assert hits == []
+
+
+@needs_pdf_chain
 def test_build_pdf(tmp_path):
     md = tmp_path / "r.md"
     md.write_text("## Titre\n\n<div class=\"chart-slot\"></div>\n")
