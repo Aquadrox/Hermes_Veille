@@ -129,7 +129,8 @@ def test_build_pdf_fetches_nothing_the_markdown_points_to(tmp_path):
         f'# R\n\n<a rel="attachment" href="file://{secret}">a</a>\n\n<link rel="attachment" href="{secret}">\n\n'
         f'<object data="{secret}"></object>\n\n![l]({secret}) ![d]({url}/img)\n\n'
         f'[x](file://{secret}){{rel="attachment"}}\n\n::: {{style="background: url({url}/css)"}}\nt\n:::\n\n'
-        f'<style>@import url("{url}/import");</style>\n')
+        f'<style>@import url("{url}/import");</style>\n\n'
+        '<a rel="attachment" href="data:application/octet-stream;base64,TVogZmFrZQ==" download="facture.exe">f</a>\n')
     out = tmp_path / "r.pdf"
     try:
         subprocess.run([sys.executable, str(SKILLS / "productivity/styled-pdf-report/scripts/build_report.py"),

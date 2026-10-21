@@ -19,25 +19,30 @@ fichiers de sa veille, écrire ses fichiers de sortie et lancer les commandes de
   d'une exécution planifiée, par listes blanches (tout le reste est refusé) :
   - outils : `web_search`, `web_extract`, `read_file`, `search_files`, `write_file`, `patch`,
     `terminal`, avec leurs seuls paramètres attendus (ni mode V4A de `patch`, ni `cross_profile`,
-    ni arrière-plan) ;
+    ni arrière-plan, ni durée au-delà de `TERMINAL_MAX_FOREGROUND_TIMEOUT`, 1 200 s dans l'image :
+    Hermes passerait la commande en arrière-plan, au résultat illisible) ;
   - fichiers : lecture de `config.md`, `job-prompt.md` et `rapports/` de **sa** veille ; écriture des
     seuls `rapports/<D>-{veille.md, charts.json, mail.json, pcn.json}` ; chemins absolus, liens
-    symboliques résolus ;
+    symboliques résolus ; ceux d'un rapport déjà publié ne se modifient plus (historique relu par
+    les exécutions suivantes) ;
   - terminal : `date`, `ls` de ses rapports, `veillectl components scan|progress|finalize` et
     `veillectl report publish` pour **son** slug et ses fichiers, sans guillemets ni caractère spécial
     du shell ;
   - exécution identifiée par sa tâche `cron:<job>:…`, stable même quand Hermes renomme la session en
-    compressant le contexte ; exécution planifiée non identifiable : aucun outil ;
+    compressant le contexte ; exécution planifiée non identifiable, ou job qui n'est pas celui d'une
+    veille : aucun outil ;
   - une erreur du garde-fou, ou son import impossible, refuse l'appel (Hermes, lui, laisserait passer
     un hook en échec) ; chaque refus est inscrit au journal d'audit (page Santé, origine
-    « veille-guard »), sans la liste des commandes permises que reçoit l'agent.
+    « veille-guard »), sans la liste des commandes permises que reçoit l'agent ;
+  - plugin impossible à activer au démarrage : exécutions planifiées réduites à la recherche web.
 - **Contenu externe marqué** comme non fiable dans le contexte de l'agent (résultats web, anciens
   rapports, sorties de commande) : encadrement, caractères invisibles retirés, marqueurs neutralisés.
   Règles de sécurité en tête des deux gabarits de prompt.
 - **Chaîne PDF fermée** (`build_report.py`) : un Markdown piégé pouvait joindre n'importe quel fichier
-  lisible au PDF envoyé (`<a rel="attachment" href="file:///opt/data/.env">`) et faire appeler des
-  adresses externes. Plus de `--embed-resources` (qui lisait lui-même les fichiers désignés) ;
-  WeasyPrint refuse toute ressource sauf `data:` (WeasyPrint 61 à 70).
+  lisible au PDF envoyé (`<a rel="attachment" href="file:///opt/data/.env">`), y glisser un fichier
+  encodé (`data:`, ex. un exécutable) et faire appeler des adresses externes. Plus de
+  `--embed-resources` (qui lisait lui-même les fichiers désignés) ; WeasyPrint ne charge plus aucune
+  ressource (vérifié avec WeasyPrint 62.3 — Debian 13 —, 66 et 70).
 - **Outils des exécutions planifiées réduits**, réappliqués à chaque démarrage : `web`, `file`,
   `terminal` (ni navigateur, ni exécution de code, ni mémoire, ni délégation, ni gestion des skills) ;
   mémoire persistante coupée ; `approvals.cron_mode: deny` ; pont `tool_call` désactivé.
@@ -54,7 +59,8 @@ fichiers de sa veille, écrire ses fichiers de sortie et lancer les commandes de
   accent de la veille ; sous-titre = période ; temps de lecture calculé ; graphique de
   `D-charts.json`) et l'envoie aux seuls destinataires de la veille, en copie cachée, avec le PDF et la
   liste Excel des composants. Période et messages clés viennent de `D-mail.json` (écrit par l'agent),
-  nettoyés et bornés (100 et 1 500 caractères).
+  nettoyés et bornés (100 et 1 500 caractères), passés au script d'envoi sous la forme
+  `--option=valeur`. Pas deux envois à moins de 30 min pour une même veille (`.dernier-envoi`).
 - `scripts/guard-probe.py` : contrat du garde-fou avec Hermes (smoke test, test d'intégration).
 
 ### Modifié
@@ -70,7 +76,7 @@ fichiers de sa veille, écrire ses fichiers de sortie et lancer les commandes de
 - Exécution planifiée réelle (`hermes cron run`, Hermes v2026.9.24, faux LLM local) : requête
   initiale 62,4 → 19,6 Ko (−69 %) ; 24 → 8 outils exposés (schémas 42,1 → 13,1 Ko) ; prompt système
   7,6 → 4,8 Ko. `id`, `cat /opt/data/.env` et `/proc/self/environ` refusés, `ls` des rapports permis.
-- Rendu PDF identique au pixel près sur un rapport type (4 pages, WeasyPrint 66 et 70).
+- Rendu PDF identique au pixel près sur un rapport type (4 pages, WeasyPrint 62.3, 66 et 70).
 
 ### Déploiement
 

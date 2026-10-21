@@ -31,7 +31,7 @@ UNTRUSTED_CLOSE = "<<<FIN DU CONTENU EXTERNE>>>"
 _TASK_RE = re.compile(r"cron:([^:]+):.*")
 _SESSION_RE = re.compile(r"cron_(.+)_\d{8}_\d{6}")
 # Fichiers de sortie d'une exécution : D = AAAA-MM-JJ-HHhMM (voir les gabarits de prompt).
-OUTPUT_RE = re.compile(r"\d{4}-\d{2}-\d{2}-\d{2}h\d{2}-(?:veille\.md|charts\.json|mail\.json|pcn\.json)\Z")
+OUTPUT_RE = re.compile(r"(\d{4}-\d{2}-\d{2}-\d{2}h\d{2})-(?:veille\.md|charts\.json|mail\.json|pcn\.json)\Z")
 _COMMAND_RE = re.compile(r"[A-Za-z0-9_.,:/+=@%# -]+")  # aucun caractère que le shell interprète
 _DATE_FORMAT_RE = re.compile(r"\+[%A-Za-z0-9:_-]+")
 _LS_FLAGS_RE = re.compile(r"-[1ahlrt]+")
@@ -83,9 +83,23 @@ def _real(raw) -> Path | None:
     return Path(os.path.realpath(raw))
 
 
-def _own_output(raw, s: Session, suffix: str = "") -> bool:
+def _number(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _foreground_cap() -> int:
+    """Durée au-delà de laquelle Hermes passe une commande en arrière-plan : son résultat ne se lirait
+    plus qu'avec `process_manage`, refusé ici (image : 1200 s, voir le Dockerfile)."""
+    return int(_number(os.environ.get("TERMINAL_MAX_FOREGROUND_TIMEOUT")) or 600)
+
+
+def _output(raw, s: Session, suffix: str = "") -> re.Match | None:
+    """Fichier de sortie de la veille (rapports/<D>-…) ; groupe 1 : l'horodatage D."""
     p = _real(raw)
-    return bool(p and p.parent == s.rapports and OUTPUT_RE.match(p.name) and p.name.endswith(suffix))
+    return OUTPUT_RE.match(p.name) if p and p.parent == s.rapports and p.name.endswith(suffix) else None
 
 
 def _file(tool: str, args: dict, s: Session) -> str | None:
@@ -93,7 +107,10 @@ def _file(tool: str, args: dict, s: Session) -> str | None:
     if p is None:
         return f"chemin absolu requis (dossier {s.rapports})"
     if tool in ("write_file", "patch"):
-        ok = p.parent == s.rapports and bool(OUTPUT_RE.match(p.name))
+        m = _output(args["path"], s)
+        if m and (s.rapports / f"{m.group(1)}-veille.pdf").exists():  # historique relu par les exécutions suivantes
+            return f"rapport {m.group(1)} déjà publié : ses fichiers ne se modifient plus (nouveau D pour un nouveau rapport)"
+        ok = bool(m)
         where = f"{s.rapports}/D-veille.md, D-charts.json, D-mail.json ou D-pcn.json"
     elif tool == "read_file":
         ok = p.parent == s.rapports or p in {s.dir / name for name in _TRUSTED_FILES}
@@ -122,9 +139,9 @@ def _command(command, s: Session) -> str | None:
             return None
         if action == ("components", "progress") and args and not any(a.startswith("-") for a in args):
             return None
-        if action == ("components", "finalize") and len(args) == 1 and _own_output(args[0], s, "-pcn.json"):
+        if action == ("components", "finalize") and len(args) == 1 and _output(args[0], s, "-pcn.json"):
             return None
-        if action == ("report", "publish") and len(args) == 1 and _own_output(args[0], s, "-veille.md"):
+        if action == ("report", "publish") and len(args) == 1 and _output(args[0], s, "-veille.md"):
             return None
     return (f"commande non autorisée. Seules sont permises : date, ls {s.rapports}/, et pour la veille "
             f"{s.slug} : veillectl components scan|progress|finalize, veillectl report publish")
@@ -145,6 +162,9 @@ def check(tool: str, args: dict, s: Session | None) -> str | None:
     if tool == "terminal":
         if args.get("workdir") and _real(args["workdir"]) != s.dir:
             return f"répertoire de travail hors de la veille {s.slug}"
+        cap = _foreground_cap()
+        if _number(args.get("timeout")) > cap:
+            return f"durée maximale {cap} s : au-delà, Hermes passerait la commande en arrière-plan, sans résultat lisible"
         return _command(args.get("command"), s)
     if allowed is not None:
         return _file(tool, args, s)

@@ -79,7 +79,7 @@ chiffre de démonstration
 
 <div class="chart-slot"></div>
 
-<a rel="attachment" href="file:///etc/passwd">annexe</a>
+<a rel="attachment" href="file:///etc/passwd">annexe</a> <a rel="attachment" href="data:text/plain;base64,eA==">x</a>
 MD
     echo "{\"charts\":[{\"title\":\"Démo\",\"source\":\"test\",\"bars\":[{\"label\":\"A\",\"value\":10,\"value_label\":\"10\"}]}]}" > "$T/c.json"
     python3 /opt/hermes/skills/productivity/styled-pdf-report/scripts/build_report.py \
@@ -87,7 +87,7 @@ MD
         --title "Smoke test" --subtitle "Conteneur" --meta "Test | ~1 min | CI" \
         --header "Smoke test" --footer "veille-hermes" >/dev/null
     test -s "$T/r.pdf" || { echo "PDF non produit"; exit 1; }
-    pdfdetach -list "$T/r.pdf" | grep -q "^0 embedded files" || { echo "fichier local joint au PDF"; exit 1; }
+    pdfdetach -list "$T/r.pdf" | grep -q "^0 embedded files" || { echo "fichier joint au PDF"; exit 1; }
     echo "  PDF généré : $(stat -c%s "$T/r.pdf") octets"
 ' || { fail "chaîne PDF en échec"; exit 1; }
 ok "chaîne PDF fonctionnelle"
@@ -157,7 +157,7 @@ PY
     grep -q "Nouvelles fins de vie" "$S-veille.md"
     test "$(stat -c%s "$S-veille.pdf")" -gt 20000
     grep -qx -- "/tmp/h/veilles/smoke-veille/recipients.txt" /tmp/h/mail.args
-    grep -qx -- "\[EOL ×1\] Smoke veille — Semaine 42" /tmp/h/mail.args
+    grep -qx -- "--subject=\[EOL ×1\] Smoke veille — Semaine 42" /tmp/h/mail.args
     grep -q -- "smoke-composants.xlsx$" /tmp/h/mail.args
     # Import d'\''une nomenclature Excel (openpyxl + defusedxml dans le venv de l'\''application)
     /opt/veille-app/.venv/bin/python -c "import defusedxml; from openpyxl import Workbook; wb = Workbook(); ws = wb.active; ws.append([\"Fabricant\", \"Mfr. P/N\", \"Digi-Key Part Number\"]); ws.append([\"Yageo\", \"RC0603FR-0710KL\", \"311-ND\"]); wb.save(\"/tmp/h/bom.xlsx\")"

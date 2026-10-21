@@ -1207,9 +1207,11 @@ def components_chapter(slug: str, for_slug: str, report_md: Path,
 # --------------------------------------------------------------------------
 # Publication d'une veille thématique : PDF et e-mail sans l'agent
 # --------------------------------------------------------------------------
-MAIL_MAX_BYTES = 50_000
+MAIL_MAX_CHARS = 50_000
 MAIL_LIMITS = {"period": 100, "summary": 1500}
 WORDS_PER_MINUTE = 200
+PUBLISH_MIN_INTERVAL = 30 * 60  # s : ni renvoi par erreur, ni rafale d'un agent détourné
+LAST_PUBLISH = ".dernier-envoi"  # hors de rapports/ : l'agent ne peut pas l'écrire
 
 
 def _report_md(slug: str, report_md: Path) -> Path:
@@ -1237,7 +1239,7 @@ def _mail_fields(path: Path) -> tuple[str, str]:
     """Période couverte et messages clés écrits par l'agent dans <D>-mail.json."""
     try:
         with open(path, encoding="utf-8") as fh:
-            raw = json.loads(fh.read(MAIL_MAX_BYTES))  # lecture bornée : au-delà, JSON invalide
+            raw = json.loads(fh.read(MAIL_MAX_CHARS))  # lecture bornée : au-delà, JSON invalide
     except FileNotFoundError:
         raise StoreError(f"fichier introuvable : {path} (période et messages clés de l'e-mail)") from None
     except (OSError, ValueError) as exc:
@@ -1262,6 +1264,14 @@ def report_publish(slug: str, report_md: Path, actor: str = "job") -> str:
     md = _report_md(slug, report_md)
     stem = md.name.removesuffix("-veille.md")
     period, summary = _mail_fields(md.with_name(f"{stem}-mail.json"))
+    last = v.dir / LAST_PUBLISH
+    try:
+        age = time.time() - last.stat().st_mtime
+    except FileNotFoundError:
+        age = None
+    if age is not None and age < PUBLISH_MIN_INTERVAL:
+        raise StoreError(f"rapport déjà envoyé il y a {int(age // 60)} min ({last.read_text().strip()}) : "
+                         f"pas d'autre envoi avant {PUBLISH_MIN_INTERVAL // 60} min. Ne relance pas la commande.")
     prefix, xlsx = (components_chapter(v.components, slug, md, actor) or ("", None)) if v.components else ("", None)
     pdf, charts = md.with_name(f"{stem}-veille.pdf"), md.with_name(f"{stem}-charts.json")
     minutes = max(1, round(len(md.read_text(encoding="utf-8").split()) / WORDS_PER_MINUTE))
@@ -1271,8 +1281,11 @@ def report_publish(slug: str, report_md: Path, actor: str = "job") -> str:
     text = summary or f"Rapport de la veille « {v.name} » en pièce jointe."
     if prefix:
         text += f"\n\nComposants suivis {prefix} : détail dans le chapitre « Composants » du rapport."
-    out = _brevo(["--bcc-file", str(v.dir / "recipients.txt"), "--subject", f"{prefix} {v.name} — {period}".strip(),
-                  "--text", text, "--attach", str(pdf), *(["--attach", str(xlsx)] if xlsx else []), "--verify"])
+    subject = f"{prefix} {v.name} — {period}".strip()
+    # « --option=valeur » : un texte de l'agent qui commence par « - » reste une valeur.
+    out = _brevo(["--bcc-file", str(v.dir / "recipients.txt"), f"--subject={subject}", f"--text={text}",
+                  "--attach", str(pdf), *(["--attach", str(xlsx)] if xlsx else []), "--verify"])
+    store.atomic_write(last, f"{md.name}\n")
     audit(actor, "report-publish", slug, pdf.name + (f" + {xlsx.name}" if xlsx else ""))
     return f"OK: PDF généré -> {pdf}\n{out}"
 

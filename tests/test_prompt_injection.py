@@ -8,6 +8,7 @@ test_skills.py.
 """
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -67,7 +68,7 @@ def allowed_calls(v):
         ("patch", {"path": f"{r}/{STAMP}-veille.md", "old_string": "a", "new_string": "b", "replace_all": False}),
         ("terminal", {"command": "date +%Y-%m-%d-%Hh%M"}),
         ("terminal", {"command": f"ls -t {r}/", "timeout": 60, "background": False}),
-        ("terminal", {"command": f"veillectl components scan {v.slug}", "timeout": 1200}),
+        ("terminal", {"command": f"veillectl components scan {v.slug}", "timeout": 600}),
         ("terminal", {"command": f"veillectl components progress {v.slug} LM317T 2N7002,215 MAX232CPE+"}),
         ("terminal", {"command": f"veillectl components finalize {v.slug} {r}/{STAMP}-pcn.json"}),
         ("terminal", {"command": f"veillectl report publish {v.slug} {r}/{STAMP}-veille.md", "workdir": str(v.dir)}),
@@ -122,7 +123,8 @@ def refused_calls(v, other):
         ("terminal", {"command": "date > /tmp/x"}),
         ("terminal", {"command": f'{publish} "$(cat /opt/data/.env)"'}),
         ("terminal", {"command": f"{publish} `id`"}),
-        ("terminal", {"command": f"{publish} #commentaire"}),
+        ("terminal", {"command": f"veillectl components progress {v.slug} LM317T #; cat .env"}),
+        ("terminal", {"command": f"veillectl components progress {v.slug} #commentaire"}),
         ("terminal", {"command": f"ls -t {r}/ {home}"}),
         ("terminal", {"command": f"ls {home}"}),
         ("terminal", {"command": f"veillectl report publish {other.slug} {o}/{STAMP}-veille.md"}),
@@ -249,6 +251,12 @@ def test_plugin_fails_closed(veille, monkeypatch):
 # --------------------------------------------------------------------------
 # Publication déterministe : l'agent ne choisit ni destinataires, ni pièces jointes, ni mise en page
 # --------------------------------------------------------------------------
+def opt(args: list[str], name: str) -> str:
+    """Valeur d'une option passée sous la forme « --nom=valeur » au script d'envoi."""
+    (value,) = [a.split("=", 1)[1] for a in args if a.startswith(name + "=")]
+    return value
+
+
 def write_outputs(v, mail: dict | str | None = None, charts: bool = True) -> Path:
     r = rapports(v)
     r.mkdir(parents=True, exist_ok=True)
@@ -270,17 +278,17 @@ def test_publish_imposes_recipients_attachments_and_layout(veille, tools, tmp_pa
     out = service.report_publish(veille.slug, md)
     assert "OK: PDF généré" in out and "status: delivered" in out
     pdf_args = json.loads(pdf_log.read_text().splitlines()[-1])
-    opt = dict(zip(pdf_args[::2], pdf_args[1::2], strict=True))
-    assert opt["--subtitle"] == "Semaine 42 · 12–16 octobre 2026" and opt["--title"] == "Veille Cyber"
-    assert opt["--data"] == str(rapports(veille) / f"{STAMP}-charts.json") and opt["--toc-depth"] == "2"
-    assert opt["--meta"] == "Période : Semaine 42 · 12–16 octobre 2026 | Temps de lecture : ~5 min | Public : " \
+    pdf_opt = dict(zip(pdf_args[::2], pdf_args[1::2], strict=True))
+    assert pdf_opt["--subtitle"] == "Semaine 42 · 12–16 octobre 2026" and pdf_opt["--title"] == "Veille Cyber"
+    assert pdf_opt["--data"] == str(rapports(veille) / f"{STAMP}-charts.json") and pdf_opt["--toc-depth"] == "2"
+    assert pdf_opt["--meta"] == "Période : Semaine 42 · 12–16 octobre 2026 | Temps de lecture : ~5 min | Public : " \
         + veille.pdf.audience
     (mail,) = tools()
     a = mail["args"]
     assert a[a.index("--bcc-file") + 1] == str(veille.dir / "recipients.txt")
     assert [a[i + 1] for i, x in enumerate(a) if x == "--attach"] == [str(rapports(veille) / f"{STAMP}-veille.pdf")]
-    assert a[a.index("--subject") + 1] == "Veille Cyber — Semaine 42 · 12–16 octobre 2026"
-    assert a[a.index("--text") + 1] == "1. Message A\n2. Message B\n3. Message C"
+    assert opt(a, "--subject") == "Veille Cyber — Semaine 42 · 12–16 octobre 2026"
+    assert opt(a, "--text") == "1. Message A\n2. Message B\n3. Message C"
     assert not {"--to", "--cc", "--reply-to", "--html", "--from"} & set(a) and "evil" not in json.dumps(a)
     assert service.read_audit(1)[0]["action"] == "report-publish"
 
@@ -292,10 +300,10 @@ def test_publish_with_components_chapter(watch, tools):  # noqa: F811
     md = write_outputs(v, {"period": "Semaine 42", "summary": ""}, charts=False)
     service.report_publish(v.slug, md)
     a = tools()[-1]["args"]
-    assert a[a.index("--subject") + 1] == "[EOL ×1] Veille Indus — Semaine 42"
+    assert opt(a, "--subject") == "[EOL ×1] Veille Indus — Semaine 42"
     attached = [a[i + 1] for i, x in enumerate(a) if x == "--attach"]
     assert attached == [str(rapports(v) / f"{STAMP}-veille.pdf"), str(rapports(v) / f"{STAMP}-{watch.slug}.xlsx")]
-    text = a[a.index("--text") + 1]
+    text = opt(a, "--text")
     assert text.startswith("Rapport de la veille « Veille Indus »") and "[EOL ×1]" in text
     assert service.CHAPTER_MARK in md.read_text()
 
@@ -304,7 +312,7 @@ def test_publish_cleans_the_agent_texts(veille, tools):  # noqa: F811
     md = write_outputs(veille, {"period": "Semaine\n42​\x07 " + "x" * 300, "summary": "a\x00b\n\n‮c" + "y" * 3000})
     service.report_publish(veille.slug, md)
     a = tools()[-1]["args"]
-    subject, text = a[a.index("--subject") + 1], a[a.index("--text") + 1]
+    subject, text = opt(a, "--subject"), opt(a, "--text")
     assert subject.startswith("Veille Cyber — Semaine 42 xxx") and len(subject) == len("Veille Cyber — ") + 100
     assert "\n" not in subject and "​" not in subject and "\x07" not in subject
     assert text.startswith("ab\nc") and len(text) == service.MAIL_LIMITS["summary"] and "‮" not in text
@@ -342,6 +350,48 @@ def test_publish_cli(veille, tools, capsys):  # noqa: F811
     assert cli.main(["report", "publish", veille.slug, str(md)]) == 0
     assert "status: delivered" in capsys.readouterr().out
     assert cli.main(["report", "publish", veille.slug, str(veille.dir / "config.md")]) == 1
+
+
+def test_publish_sends_once_and_keeps_agent_text_as_values(veille, tools):  # noqa: F811
+    """Ni renvoi par erreur (statut de remise pas encore connu), ni rafale d'un agent détourné ;
+    un résumé qui commence par « - » reste une valeur, pas une option du script d'envoi."""
+    md = write_outputs(veille, {"period": "S42", "summary": "-15 % de coûts"})
+    service.report_publish(veille.slug, md)
+    assert opt(tools()[-1]["args"], "--text") == "-15 % de coûts"
+    second = rapports(veille) / "2026-10-21-07h05-veille.md"
+    second.write_text("# Autre")
+    (rapports(veille) / "2026-10-21-07h05-mail.json").write_text('{"period": "S42 bis"}')
+    for path in (md, second):
+        with pytest.raises(store.StoreError, match="déjà envoyé il y a 0 min .*Ne relance pas"):
+            service.report_publish(veille.slug, path)
+    assert len(tools()) == 1
+    last = veille.dir / service.LAST_PUBLISH
+    old = last.stat().st_mtime - service.PUBLISH_MIN_INTERVAL - 1
+    os.utime(last, (old, old))
+    service.report_publish(veille.slug, second)
+    assert len(tools()) == 2 and last.read_text() == second.name + "\n"
+
+
+def test_published_report_files_are_frozen(veille, run):
+    r = rapports(veille)
+    r.mkdir(parents=True, exist_ok=True)
+    (r / f"{STAMP}-veille.pdf").write_bytes(b"%PDF")
+    for name in ("veille.md", "charts.json", "mail.json"):
+        assert "déjà publié" in guard.check("write_file", {"path": f"{r}/{STAMP}-{name}", "content": "x"}, run)
+    assert guard.check("write_file", {"path": f"{r}/2026-10-28-07h00-veille.md", "content": "x"}, run) is None
+
+
+def test_long_commands_must_stay_in_the_foreground(veille, run, monkeypatch):
+    """Au-delà du plafond, Hermes passerait la commande en arrière-plan : résultat illisible (process_manage refusé)."""
+    scan = {"command": f"veillectl components scan {veille.slug}", "timeout": 1200}
+    monkeypatch.delenv("TERMINAL_MAX_FOREGROUND_TIMEOUT", raising=False)
+    assert "durée maximale 600 s" in guard.check("terminal", scan, run)
+    monkeypatch.setenv("TERMINAL_MAX_FOREGROUND_TIMEOUT", "1200")  # réglage de l'image
+    assert guard.check("terminal", scan, run) is None
+    assert "durée maximale 1200 s" in guard.check("terminal", {**scan, "timeout": "1500"}, run)
+    dockerfile = (REPO / "Dockerfile").read_text()
+    assert "TERMINAL_MAX_FOREGROUND_TIMEOUT=1200" in dockerfile
+    assert "timeout de la commande : 1200 secondes" in (REPO / "veille" / "job-prompt-composants.tmpl.md").read_text()
 
 
 def test_scripts_run_from_the_image_not_the_volume(monkeypatch, tmp_path):

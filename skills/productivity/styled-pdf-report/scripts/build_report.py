@@ -15,8 +15,9 @@ order, by a chart described in --data. The stylesheet tokens __HEADER__ / __FOOT
 substituted from --header / --footer.
 
 The Markdown is untrusted (written by an agent that reads the web): nothing it references is
-ever fetched. Pandoc embeds no resource and WeasyPrint only accepts `data:` URIs, so neither
-`<a rel="attachment" href="file:///…">` nor a remote image can leak a file or call out.
+ever fetched. Pandoc embeds no resource and WeasyPrint loads none (not even `data:` URIs), so
+`<a rel="attachment" href="file:///…">` cannot leak a file, a `data:` attachment cannot smuggle
+one into the emailed PDF, and a remote image cannot call out. Charts are inline SVG.
 """
 import argparse
 import html
@@ -40,12 +41,10 @@ import weasyprint
 
 try:
     from weasyprint.urls import URLFetcher
-    fetcher = URLFetcher(allowed_protocols=("data",))
+    fetcher = URLFetcher(allowed_protocols=())
 except ImportError:
     def fetcher(url, *args, **kwargs):
-        if not url.lower().startswith("data:"):
-            raise ValueError("ressource externe refusée : " + url[:80])
-        return weasyprint.default_url_fetcher(url, *args, **kwargs)
+        raise ValueError("ressource refusée : " + url[:80])
 
 weasyprint.HTML(filename=sys.argv[1], url_fetcher=fetcher).write_pdf(sys.argv[2])
 """

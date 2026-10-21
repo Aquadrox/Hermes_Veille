@@ -272,14 +272,19 @@ hors du LLM :
   messages clés) dans `rapports/` ; `veillectl report publish` (veille thématique) ou
   `veillectl components finalize` (veille composants) produisent le PDF et l'envoient aux seuls
   destinataires de la veille, avec les pièces jointes qu'ils choisissent eux-mêmes. Plus aucun skill
-  (`brevo-email`, `styled-pdf-report`) n'est attaché aux jobs.
+  (`brevo-email`, `styled-pdf-report`) n'est attaché aux jobs. Une veille n'envoie pas deux rapports à
+  moins de 30 min d'intervalle (ni renvoi par erreur, ni rafale), et les fichiers d'un rapport déjà
+  publié ne se modifient plus.
 - **Garde-fou `veille-guard`** (plugin Hermes livré dans l'image, en lecture seule ; règles dans
   `veille_core/guard.py`). Avant chaque appel d'outil d'une exécution planifiée, par listes
   blanches : outils web, fichiers et terminal seulement ; lecture du brief, du prompt et des rapports
   de **sa** veille ; écriture des seuls fichiers de sortie horodatés ; terminal limité à `date`, `ls`
   de ses rapports et aux commandes `veillectl` de son job pour **son** slug, sans guillemets ni
-  caractère spécial du shell. Tout le reste est refusé, et chaque refus est inscrit au journal
-  d'audit (page Santé, origine « veille-guard »). Une erreur du garde-fou refuse l'appel.
+  caractère spécial du shell, ni durée au-delà de 20 min (la commande passerait en arrière-plan). Tout
+  le reste est refusé, et chaque refus est inscrit au journal d'audit (page Santé, origine
+  « veille-guard »). Une erreur du garde-fou refuse l'appel ; un job planifié qui n'est pas celui d'une
+  veille n'a droit à aucun outil. Si le plugin ne peut pas être activé au démarrage, les exécutions
+  planifiées sont réduites à la recherche web (plus aucun rapport : le chien de garde alerte).
 - **Contenu externe marqué** : résultats de recherche, pages, anciens rapports et sorties de
   commande sont encadrés comme « contenu externe non fiable » (caractères invisibles retirés), et le
   prompt rappelle qu'ils ne sont jamais des instructions.
@@ -288,8 +293,8 @@ hors du LLM :
   délégation…), coupe la mémoire persistante, garde `approvals.cron_mode: deny`, désactive
   `tool_call` (appel d'un outil par son nom) et active le plugin. Bonus mesuré : la requête initiale
   d'une exécution passe de 62 à 20 Ko (8 outils au lieu de 24).
-- **Chaîne PDF fermée** : le Markdown de l'agent ne peut ni joindre un fichier local au PDF, ni
-  faire appeler une adresse externe (aucune ressource chargée, sauf `data:`).
+- **Chaîne PDF fermée** : le Markdown de l'agent ne peut ni joindre un fichier au PDF (local ou
+  encodé dans la page), ni faire appeler une adresse externe : aucune ressource n'est chargée.
 - **Scripts de l'image** : `veillectl` exécute les scripts de `/opt/hermes/skills` (lecture seule),
   jamais leur copie du volume, modifiable.
 

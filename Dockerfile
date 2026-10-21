@@ -77,6 +77,10 @@ COPY --chmod=0755 docker/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
 # activé par le hook de seed ; ses règles sont dans veille_core/guard.py.
 COPY docker/hermes-plugins/veille-guard/ /opt/hermes/plugins/veille-guard/
 
+# TERMINAL_MAX_FOREGROUND_TIMEOUT : `veillectl components scan` (jusqu'à 20 min) reste au premier plan ;
+# au-delà, Hermes la passerait en arrière-plan, dont le résultat ne se lit que par un outil refusé
+# par le garde-fou (veille_core/guard.py).
 ENV TZ=Europe/Paris \
-    VEILLE_DEFAULTS=/opt/hermes/veille-defaults
+    VEILLE_DEFAULTS=/opt/hermes/veille-defaults \
+    TERMINAL_MAX_FOREGROUND_TIMEOUT=1200
 EXPOSE 8088

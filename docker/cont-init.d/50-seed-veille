@@ -76,7 +76,10 @@ if [ -x "$HERMES_BIN" ]; then
     if as_hermes "$HERMES_BIN" plugins enable veille-guard >/dev/null 2>&1; then
         log "plugin veille-guard activé"
     else
-        log "ERREUR : plugin veille-guard non activé — exécutions planifiées sans garde-fou"
+        # Échec fermé : sans garde-fou, recherche web seule (aucun fichier, aucune commande) ;
+        # les rapports ne partent plus et le chien de garde le signale.
+        set_config platform_toolsets.cron "[web]" ERREUR
+        log "ERREUR : plugin veille-guard non activé — exécutions planifiées réduites à la recherche web"
     fi
 fi
 
