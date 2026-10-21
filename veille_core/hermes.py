@@ -84,12 +84,47 @@ def state_db() -> Path:
 _TOKEN_COLS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens")
 
 
+_EXTRACT_MAX_URLS = 5  # Hermes ne transmet que les 5 premières URL d'un `web_extract` (tools/web_tools.py)
+
+
+def _web_requests(tool_calls: str | None, seen: set[str]) -> int:
+    """Requêtes de recherche web d'un message de l'agent (`messages.tool_calls`, format OpenAI), comme Hermes
+    les envoie : une par `web_search`, une par URL de `web_extract` (le moteur lit une page par requête).
+    `seen` : identifiants d'appel déjà comptés dans la session (la compression du contexte en recopie la
+    fin sous le même identifiant de session)."""
+    try:
+        calls = json.loads(tool_calls or "[]")
+    except ValueError:
+        return 0
+    count = 0
+    for call in calls if isinstance(calls, list) else []:
+        fn = call.get("function") if isinstance(call, dict) else None
+        if not isinstance(fn, dict) or fn.get("name") not in ("web_search", "web_extract"):
+            continue
+        call_id = call.get("id") if isinstance(call.get("id"), str) else None
+        if call_id in seen:
+            continue
+        if call_id:
+            seen.add(call_id)
+        if fn["name"] == "web_search":
+            count += 1
+            continue
+        args = fn.get("arguments")
+        try:
+            urls = (json.loads(args) if isinstance(args, str) else args or {}).get("urls")
+        except (ValueError, AttributeError):
+            urls = None  # arguments illisibles : Hermes n'envoie rien
+        count += min(len(urls), _EXTRACT_MAX_URLS) if isinstance(urls, list) else 0
+    return count
+
+
 def run_usage(job_id: str | None, limit: int = 50, db: Path | None = None) -> list[dict]:
     """Consommation des exécutions d'un job, la plus récente d'abord.
 
     Chaque exécution cron est une session Hermes `cron_<job_id>_<AAAAMMJJ_HHMMSS>` dans state.db.
     Les tokens sont lus par modèle dans `session_model_usage` (boucle principale ET tâches
-    auxiliaires : compression, titres…), sinon sur la ligne de session. Lecture seule ; toute
+    auxiliaires : compression, titres…), sinon sur la ligne de session ; les requêtes de recherche
+    web (`web_requests`) dans les appels d'outils de l'agent (`messages`). Lecture seule ; toute
     erreur (base absente, schéma différent) donne une liste vide.
     """
     if not job_id or not re.fullmatch(r"[0-9A-Za-z-]+", job_id):
@@ -111,16 +146,30 @@ def run_usage(job_id: str | None, limit: int = 50, db: Path | None = None) -> li
                 (prefix, prefix[:-1] + "`", int(limit)),
             ).fetchall()
             usage: dict[str, list] = {}
-            if sessions:  # détail par modèle de toutes les exécutions, en une requête
+            web: dict[str, int] = {}
+            seen: dict[str, set[str]] = {}
+            if sessions:  # détail de toutes les exécutions, une requête par table
+                ids = [row["id"] for row in sessions]
+                marks = ",".join("?" * len(ids))
                 try:
                     for m in conn.execute(
                         "SELECT session_id, model, SUM(api_call_count) AS calls, SUM(estimated_cost_usd) AS est, "
                         + ", ".join(f"SUM({c}) AS {c}" for c in _TOKEN_COLS)
-                        + " FROM session_model_usage WHERE session_id IN ("
-                        + ",".join("?" * len(sessions)) + ") GROUP BY session_id, model",
-                        [row["id"] for row in sessions],
+                        + f" FROM session_model_usage WHERE session_id IN ({marks}) GROUP BY session_id, model",
+                        ids,
                     ):
                         usage.setdefault(m["session_id"], []).append(m)
+                except sqlite3.OperationalError:
+                    pass
+                try:  # seuls les messages de l'agent qui appellent un outil web sont décodés
+                    for m in conn.execute(
+                        f"SELECT session_id, tool_calls FROM messages WHERE session_id IN ({marks})"
+                        " AND role = 'assistant' AND tool_calls IS NOT NULL"  # index partiel de Hermes
+                        " AND (instr(tool_calls, '\"web_search\"') > 0"
+                        " OR instr(tool_calls, '\"web_extract\"') > 0)", ids,
+                    ):
+                        sid = m["session_id"]
+                        web[sid] = web.get(sid, 0) + _web_requests(m["tool_calls"], seen.setdefault(sid, set()))
                 except sqlite3.OperationalError:
                     pass
             runs = []
@@ -135,7 +184,7 @@ def run_usage(job_id: str | None, limit: int = 50, db: Path | None = None) -> li
                                **{c: row[c] or 0 for c in _TOKEN_COLS}}]
                 runs.append({"session_id": row["id"], "started_at": row["started_at"],
                              "ended_at": row["ended_at"], "end_reason": row["end_reason"],
-                             "models": models})
+                             "models": models, "web_requests": web.get(row["id"], 0)})
             return runs
         finally:
             conn.close()

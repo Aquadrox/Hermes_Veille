@@ -8,8 +8,8 @@
 # réconciliation idempotente au redémarrage, interface (session, CSRF, Host, pause /
 # reprise effectives côté Hermes), mise à jour simulée (conteneur RECRÉÉ : veilles,
 # rapports, jobs et historique conservés), garde-fou du dossier de données absent,
-# garde-fou contre l'injection de prompt (plugin, outils, mémoire, skills),
-# watchdog (aucune alerte sur un volume sain).
+# garde-fou contre l'injection de prompt (plugin, outils, mémoire, skills), moteur de
+# recherche web (DeepSeek, puis retour au moteur de Hermes), watchdog (aucune alerte sur un volume sain).
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -68,17 +68,17 @@ VEILLE_UI_SECRET='$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')'
 ENV
 
 # --- 3. Démarrage complet ---
-start() {
-    docker run -d --name "$NAME" --env-file "$WORK/.env" -e TZ=Europe/Paris \
+start() {  # $@ : options docker supplémentaires (variables d'environnement)
+    docker run -d --name "$NAME" --env-file "$WORK/.env" -e TZ=Europe/Paris "$@" \
         -v "$DATA:/opt/data" -p "127.0.0.1:$PORT:8088" "$REF" gateway run >/dev/null
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 120); do
         if hx test -f /opt/data/veilles/.bootstrapped 2>/dev/null \
             && curl -fs "$BASE/healthz" >/dev/null 2>&1; then
             return 0
         fi
         sleep 2
     done
-    fail "conteneur non prêt après 120 s"
+    fail "conteneur non prêt après 240 s"
 }
 log "démarrage du conteneur complet"
 start
@@ -106,6 +106,13 @@ SKILLS="$(as_root python3 -c "import json,sys; d=json.load(open(sys.argv[1])); j
 [ "$SKILLS" = "[]" ] || fail "skills encore attachés au job migré : $SKILLS"
 ok "plugin actif (refus vérifié), outils web/fichiers/terminal, mémoire coupée, skills retirés"
 
+# --- 4 ter. Recherche web par DeepSeek Search & Fetch (posée par le seed à chaque démarrage) ---
+log "moteur de recherche web"
+contains "$(as_root cat "$DATA/config.yaml")" '^  backend: deepseek$' || fail "recherche web : DeepSeek non réglé"
+web_backend() { as_root tail -n 1 "$DATA/veilles/.web-backend" | cut -d' ' -f2; }  # dernier moteur daté
+[ "$(web_backend)" = deepseek ] || fail "moteur web non daté dans veilles/.web-backend"
+ok "recherche et lecture de pages par DeepSeek Search & Fetch"
+
 # --- 5. Interface ---
 log "interface web"
 JAR="$WORK/cookies"
@@ -132,7 +139,7 @@ ok "session, CSRF, Host, pause/reprise effectives, version affichée"
 log "redémarrage (réconciliation idempotente)"
 docker restart "$NAME" >/dev/null
 sleep 5
-for _ in $(seq 1 60); do curl -fs "$BASE/healthz" >/dev/null 2>&1 && break; sleep 2; done
+for _ in $(seq 1 120); do curl -fs "$BASE/healthz" >/dev/null 2>&1 && break; sleep 2; done
 contains "$(docker logs "$NAME" 2>&1)" 'reconcile: industrie-4-0: ok' || fail "réconciliation non idempotente"
 N_JOBS="$(as_root python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(len(d['jobs'] if isinstance(d,dict) else d))" "$DATA/cron/jobs.json")"
 [ "$N_JOBS" = 1 ] || fail "$N_JOBS jobs après redémarrage (doublon ?)"
@@ -150,13 +157,20 @@ snapshot() {  # tout ce qui doit survivre : veilles + jobs, rapports, journal d'
 }
 BEFORE="$(snapshot)"
 docker rm -f "$NAME" >/dev/null
-start
+start -e VEILLE_WEB_BACKEND=hermes  # recréé avec le retour au moteur de recherche de Hermes (vérifié plus bas)
 [ "$(snapshot)" = "$BEFORE" ] || fail "état modifié par la recréation du conteneur : $(diff <(echo "$BEFORE") <(snapshot))"
 contains "$(docker logs "$NAME" 2>&1)" 'reconcile: veille-persistance: ok' || fail "veille non réconciliée « ok » après recréation"
 contains "$(curl -s -b "$JAR" "$BASE/veilles/veille-persistance")" '2026-09-21-veille\.pdf' || fail "rapports anciens absents de l'interface"
 contains "$(curl -s -b "$JAR" "$BASE/")" 'veille-persistance#rapports">3 rapports' || fail "nombre de rapports absent du tableau de bord"
 hxu veillectl archive veille-persistance >/dev/null
-ok "veilles, jobs, rapports et audit identiques après recréation ; historique visible"
+H=/opt/hermes/.venv/bin/hermes
+if contains "$(as_root cat "$DATA/config.yaml")" 'backend: deepseek' \
+    || ! contains "$(hxu "$H" config get plugins.disabled)" 'deepseek-search-fetch' \
+    || contains "$(hxu "$H" config get plugins.enabled)" 'deepseek-search-fetch' \
+    || [ "$(web_backend)" != hermes ] || [ "$(as_root cat "$DATA/veilles/.web-backend" | wc -l)" -ne 2 ]; then
+    fail "VEILLE_WEB_BACKEND=hermes : moteur DeepSeek encore réglé, plugin non désactivé ou changement non daté"
+fi
+ok "veilles, jobs, rapports et audit identiques après recréation ; historique visible ; moteur web de Hermes"
 
 # --- 6c. Dossier de données absent : refus de démarrer (jamais d'état vide silencieux) ---
 log "dossier de données absent : docker compose doit refuser de démarrer"

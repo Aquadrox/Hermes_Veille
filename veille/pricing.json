@@ -9,6 +9,10 @@
     "utc_hours": [[1, 4], [6, 10]],
     "_comment": "weekdays : 0 = lundi ; utc_hours : plages [début, fin) en heures UTC. Hors jours fériés chinois (non pris en compte)."
   },
+  "web": {
+    "usd_per_request": 0.00075,
+    "_comment": "Recherche web DeepSeek Search & Fetch (https://api-docs.deepseek.com/guides/search) : USD par requête, 0,75 $ les 1 000, tarif unique (pas d'heures pleines). Compté pour les exécutions démarrées quand ce moteur était en vigueur (veilles/.web-backend, tenu par l'amorçage)."
+  },
   "models": {
     "deepseek-v4-pro":   {"input_cache_hit": 0.022, "input_cache_miss": 0.66, "output": 1.98},
     "deepseek-v4-flash": {"input_cache_hit": 0.003, "input_cache_miss": 0.15, "output": 0.60},

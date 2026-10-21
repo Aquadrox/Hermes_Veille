@@ -5,8 +5,9 @@ Veilles technologiques **conteneurisées** et pilotables depuis une **interface 
 Chaque veille a son sujet, son brief de mission, sa fréquence et ses destinataires. À chaque
 échéance, un agent recherche les actualités de la période écoulée et rédige un rapport structuré
 (badges de maturité/confiance, sources numérotées, graphiques, encadrés d'analyse) ; l'application
-le convertit en **PDF stylé** et l'**envoie par e-mail** (destinataires en copie cachée). L'agent,
-qui lit le web, est tenu par un **garde-fou contre l'injection de prompt** (voir plus bas).
+le convertit en **PDF stylé** et l'**envoie par e-mail** (destinataires en copie cachée). L'agent
+cherche et lit le web par **DeepSeek Search & Fetch** (voir plus bas) et reste tenu par un **garde-fou
+contre l'injection de prompt**.
 
 La veille d'origine, **Industrie 4.0** (chaque lundi à 6h30, en heures creuses DeepSeek), est créée
 ou migrée automatiquement.
@@ -297,10 +298,41 @@ hors du LLM :
   encodé dans la page), ni faire appeler une adresse externe : aucune ressource n'est chargée.
 - **Scripts de l'image** : `veillectl` exécute les scripts de `/opt/hermes/skills` (lecture seule),
   jamais leur copie du volume, modifiable.
+- **Moteur de recherche** : le plugin `deepseek-search-fetch` ne change que le moteur derrière
+  `web_search` / `web_extract` (mêmes noms d'outils : garde-fou et marquage inchangés). Code tiers,
+  vendorisé à un commit relu et vérifié par empreinte (voir la section suivante).
 
 Limites : une page peut toujours **biaiser le contenu** du rapport (seules les règles de sources du
 brief et la relecture y répondent) ; l'agent peut encore transmettre ce qu'il a dans son contexte
 (brief, références du lot) en ouvrant une adresse piégée — plus aucun secret ne s'y trouve.
+
+## Recherche web (DeepSeek Search & Fetch)
+
+Les outils `web_search` et `web_extract` de l'agent passent par l'API **Search & Fetch** de DeepSeek
+(moteur maison de DeepSeek, [guide](https://api-docs.deepseek.com/guides/search)), avec la clé
+`DEEPSEEK_API_KEY` déjà utilisée pour le modèle. Ce n'est pas lié au modèle : n'importe quel LLM piloterait
+l'agent avec ce moteur.
+
+- **Pourquoi** : chaque résultat porte sa **date de publication**, un score de pertinence et d'autorité
+  (utiles à la période couverte et aux règles de fiabilité du brief) ; un seul fournisseur au lieu des
+  offres gratuites tournantes de Hermes.
+- **Comment** : plugin Hermes communautaire `deepseek-search-fetch` (Jason Swindle, MIT, non affilié à
+  DeepSeek), **vendorisé** dans `docker/hermes-plugins/deepseek-search-fetch/` à un commit relu
+  (`VENDORED.md`, empreintes vérifiées par les tests), installé en lecture seule dans l'image, jamais
+  téléchargé au démarrage. L'amorçage l'active et règle `web.backend: deepseek` (recherche et lecture de
+  pages). Ce réglage ne bascule pas vers un autre moteur ; Hermes retente seulement une fois un appel
+  échoué sur ses offres gratuites (`web.keyless_rescue`, réglage par défaut de Hermes conservé : la veille
+  continue malgré un incident ponctuel de DeepSeek). Plugin impossible à activer : `ERREUR` dans le
+  journal de démarrage et moteur de Hermes.
+- **Coût** : 0,75 $ les 1 000 requêtes réussies (échecs et résultats vides gratuits), une requête par
+  recherche et par page lue. Compté dans le coût des exécutions (voir plus bas).
+- **Limites** : requête de 128 caractères au plus ; une page par requête de lecture ; quotas par compte
+  (100 recherches et 25 lectures par seconde selon DeepSeek, moins constaté) ; DeepSeek refuse de lire
+  certains sites (politique de sécurité).
+- **Revenir au moteur de Hermes** : `VEILLE_WEB_BACKEND=hermes` (toute valeur autre que `deepseek`) dans
+  `.env`, puis `docker compose up -d` : plugin désactivé, réglage retiré ; journal :
+  `[seed-veille] recherche web : moteur par défaut de Hermes`. Chaque changement de moteur est daté dans
+  `veilles/.web-backend` (coût, ci-dessous).
 
 ## Consommation et coût
 
@@ -313,7 +345,13 @@ L'application en calcule le **coût réel** :
 - avec les tarifs de [`veille/pricing.json`](veille/pricing.json), modifiable sans reconstruire
   l'image en le copiant dans `data/veilles/pricing.json` ;
 - **heures pleines comprises** : du lundi au vendredi, 01h–04h et 06h–10h UTC, DeepSeek facture le
-  **double**. L'estimation de Hermes, elle, n'applique que le tarif creux.
+  **double**. L'estimation de Hermes, elle, n'applique que le tarif creux ;
+- **recherche web comprise** (colonne « Web ») : requêtes Search & Fetch lues dans les appels d'outils
+  de l'agent (une par recherche, une par page), au tarif de la section `web` (tarif unique, sans heures
+  pleines). C'est un **majorant** : échecs, résultats vides et réponses du cache de Hermes ne sont pas
+  facturés. Seules comptent les exécutions démarrées quand DeepSeek était le moteur en vigueur
+  (`veilles/.web-backend`) : ni celles d'avant la 0.7.0, ni celles du moteur de Hermes. Une section absente
+  de la copie du volume (`web` dans une copie antérieure à la 0.7.0) vient du fichier de l'image.
 
 Où le voir :
 - **Interface** : section « Coût des exécutions » de chaque veille (durée, tokens, heure pleine ou
@@ -401,6 +439,7 @@ imports/            nomenclatures déposées pour import (Telegram / CLI), analy
 veilles/.archive/   veilles archivées, copies des remises à zéro (`<slug>-reinit-…`)
 veilles/.audit.log  journal d'audit (interface, CLI, amorçage)
 veilles/.settings.json  paramètres de l'interface (adresses d'alerte), lus aussi par le chien de garde
+veilles/.web-backend  moteur de recherche web en vigueur, daté à chaque changement (coût de la recherche)
 veilles/.veille.db  base SQLite (0600) : index des composants (reconstruit à chaque démarrage depuis les
                     fichiers des veilles) et carnet d'adresses des destinataires
 cron/jobs.json      jobs Hermes (état, prochain et dernier run)
@@ -521,7 +560,8 @@ veille-hermes/
 ├── veille_mcp/                   # serveur MCP (stdio) pour piloter les veilles depuis Hermes
 ├── skills/                       # brevo-email, styled-pdf-report
 ├── docker/                       # hook d'amorçage, service s6 de l'interface, veillectl,
-│                                 #   plugin Hermes veille-guard (garde-fou de l'agent)
+│                                 #   plugins Hermes veille-guard (garde-fou de l'agent) et
+│                                 #   deepseek-search-fetch (recherche web, vendorisé)
 ├── deploy/systemd/               # units de la surveillance (sur l'hôte)
 ├── scripts/                      # déploiement, tests (smoke, intégration), watchdog, MCP, versions
 ├── tests/                        # pytest (faux binaire hermes pour le cœur et l'interface)
@@ -540,8 +580,8 @@ page **Sources** de l'interface) et `ALERT_EMAIL` (repli : l'adresse d'alerte se
 
 ## Architecture
 
-Le conteneur n'a besoin que d'accès **sortants** (recherche web, API DeepSeek, API Brevo, API
-Digi-Key). Le
+Le conteneur n'a besoin que d'accès **sortants** (API DeepSeek : modèle et recherche web, API Brevo, API
+Digi-Key ; en secours d'un appel de recherche échoué, les offres gratuites de Hermes). Le
 seul port publié est celui de l'interface, lié à `127.0.0.1` ; le serveur MCP passe par
 `docker exec -i` (stdio), sans port. La livraison se fait **uniquement
 par e-mail** (`deliver: local`) ; le gateway Telegram de l'hôte reste indépendant. L'interface,

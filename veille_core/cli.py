@@ -202,7 +202,8 @@ def _costs(slug: str | None, days: int) -> int:
         when = r["started_at"].strftime("%Y-%m-%d %H:%M") if r["started_at"] else "?"
         dur = f"{r['duration_min']} min" if r["duration_min"] is not None else "?"
         print(f"{when}  {dur:>9}  entrée {r['input_tokens']:>9} (+{r['cache_read_tokens']} en cache)  "
-              f"sortie {r['output_tokens']:>8}  {'PLEINE' if r['peak'] else 'creuse'}  {_usd(r['cost_usd'])}"
+              f"sortie {r['output_tokens']:>8}  web {r['web_requests']:>4} req.  "
+              f"{'PLEINE' if r['peak'] else 'creuse'}  {_usd(r['cost_usd'])}"
               f"  (estimation Hermes {_usd(r['hermes_estimate_usd'])})")
     print(f"mois en cours : {_usd(c['total_month_usd'])} ({c['runs_month']} run(s)) — "
           f"{days} derniers jours : {_usd(c['total_days_usd'])} — tarifs du {c['pricing_updated']}")

@@ -184,6 +184,8 @@ def _run_row(run: dict, table: dict) -> dict:
             unknown.append(m["model"])
             usd = m["hermes_estimate_usd"] or 0.0  # repli : estimation de Hermes
         cost += usd
+    web_usd = pricing.web_cost(run["web_requests"], run["started_at"], table)
+    cost += web_usd
     started = dt.datetime.fromtimestamp(run["started_at"], schedule.ZONE) if run["started_at"] else None
     ended = run["ended_at"]
     return {
@@ -194,6 +196,8 @@ def _run_row(run: dict, table: dict) -> dict:
         "api_calls": sum(m["api_calls"] for m in run["models"]),
         **total,
         "peak": peak,
+        "web_requests": run["web_requests"],
+        "web_usd": round(web_usd, 4),
         "cost_usd": round(cost, 4),
         "hermes_estimate_usd": round(sum(m["hermes_estimate_usd"] for m in run["models"]), 4),
         "unpriced_models": unknown,

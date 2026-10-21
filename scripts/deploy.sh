@@ -113,8 +113,8 @@ START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 docker compose up -d
 
 # --- 6. Attente de l'amorçage de CE démarrage (le marqueur .bootstrapped date du premier) ---
-log "attente de l'amorçage (max 120 s)"
-for i in $(seq 1 24); do
+log "attente de l'amorçage (max 240 s)"
+for i in $(seq 1 48); do
     boot_log="$(docker logs --since "$START" "$CONTAINER" 2>&1 || true)"
     if grep -q 'seed-veille\] amorçage terminé' <<< "$boot_log"; then
         if grep -q 'reconcile: .*ERREUR' <<< "$boot_log"; then
@@ -126,8 +126,8 @@ for i in $(seq 1 24); do
         break
     fi
     sleep 5
-    if [ "$i" = 24 ]; then
-        fail "amorçage non détecté après 120 s — voir : docker compose logs | grep seed-veille"
+    if [ "$i" = 48 ]; then
+        fail "amorçage non détecté après 240 s — voir : docker compose logs | grep seed-veille"
         RC=1
     fi
 done
