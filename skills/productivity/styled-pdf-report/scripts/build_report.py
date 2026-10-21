@@ -46,7 +46,12 @@ except ImportError:
     def fetcher(url, *args, **kwargs):
         raise ValueError("ressource refusée : " + url[:80])
 
-weasyprint.HTML(filename=sys.argv[1], url_fetcher=fetcher).write_pdf(sys.argv[2])
+doc = weasyprint.HTML(filename=sys.argv[1], url_fetcher=fetcher).render()
+# WeasyPrint 61 lit les pièces jointes (rel="attachment") sans passer par url_fetcher : retirées ici.
+doc.metadata.attachments = []
+for page in doc.pages:
+    page.links = [link for link in page.links if link[0] != "attachment"]
+doc.write_pdf(sys.argv[2])
 """
 
 

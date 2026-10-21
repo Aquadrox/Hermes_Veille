@@ -42,7 +42,9 @@ fichiers de sa veille, écrire ses fichiers de sortie et lancer les commandes de
   lisible au PDF envoyé (`<a rel="attachment" href="file:///opt/data/.env">`), y glisser un fichier
   encodé (`data:`, ex. un exécutable) et faire appeler des adresses externes. Plus de
   `--embed-resources` (qui lisait lui-même les fichiers désignés) ; WeasyPrint ne charge plus aucune
-  ressource (vérifié avec WeasyPrint 62.3 — Debian 13 —, 66 et 70).
+  ressource, et les pièces jointes sont retirées du document avant l'écriture du PDF (WeasyPrint 61
+  les lisait sans passer par le chargeur). Vérifié avec WeasyPrint 61.1 (CI Ubuntu), 62.3 (image,
+  Debian 13), 66 et 70.
 - **Outils des exécutions planifiées réduits**, réappliqués à chaque démarrage : `web`, `file`,
   `terminal` (ni navigateur, ni exécution de code, ni mémoire, ni délégation, ni gestion des skills) ;
   mémoire persistante coupée ; `approvals.cron_mode: deny` ; pont `tool_call` désactivé.
@@ -78,7 +80,7 @@ fichiers de sa veille, écrire ses fichiers de sortie et lancer les commandes de
 - Exécution planifiée réelle (`hermes cron run`, Hermes v2026.9.24, faux LLM local) : requête
   initiale 62,4 → 19,6 Ko (−69 %) ; 24 → 8 outils exposés (schémas 42,1 → 13,1 Ko) ; prompt système
   7,6 → 4,8 Ko. `id`, `cat /opt/data/.env` et `/proc/self/environ` refusés, `ls` des rapports permis.
-- Rendu PDF identique au pixel près sur un rapport type (4 pages, WeasyPrint 62.3, 66 et 70).
+- Rendu PDF identique au pixel près sur un rapport type (4 pages, WeasyPrint 61.1, 62.3, 66 et 70).
 
 ### Déploiement
 
