@@ -13,18 +13,46 @@ Usage:
 The body may contain <div class="chart-slot"></div> placeholders; each is replaced, in
 order, by a chart described in --data. The stylesheet tokens __HEADER__ / __FOOTER__ are
 substituted from --header / --footer.
+
+The Markdown is untrusted (written by an agent that reads the web): nothing it references is
+ever fetched. Pandoc embeds no resource and WeasyPrint loads none (not even `data:` URIs), so
+`<a rel="attachment" href="file:///…">` cannot leak a file, a `data:` attachment cannot smuggle
+one into the emailed PDF, and a remote image cannot call out. Charts are inline SVG.
 """
 import argparse
 import html
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SLOT_RE = re.compile(r'<div class="chart-slot">\s*</div>')
+
+# Run by the interpreter of the installed `weasyprint` (the only one able to import it).
+# WeasyPrint >= 68 takes a URLFetcher; 61-67 a function (Debian 13 ships 62.3).
+RENDER_PDF = """
+import sys
+import weasyprint
+
+try:
+    from weasyprint.urls import URLFetcher
+    fetcher = URLFetcher(allowed_protocols=())
+except ImportError:
+    def fetcher(url, *args, **kwargs):
+        raise ValueError("ressource refusée : " + url[:80])
+
+doc = weasyprint.HTML(filename=sys.argv[1], url_fetcher=fetcher).render()
+# WeasyPrint 61 lit les pièces jointes (rel="attachment") sans passer par url_fetcher : retirées ici.
+doc.metadata.attachments = []
+for page in doc.pages:
+    page.links = [link for link in page.links if link[0] != "attachment"]
+doc.write_pdf(sys.argv[2])
+"""
 
 
 def find_css(explicit=None):
@@ -42,6 +70,26 @@ def find_css(explicit=None):
 
 def esc(value):
     return html.escape(str(value), quote=True)
+
+
+def css_string(value):
+    """Value placed inside a CSS string literal: cannot close the string, nor the <style> block."""
+    value = " ".join(str(value).split())
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("<", "\\3c ")
+
+
+def weasyprint_python():
+    """Interpreter of the `weasyprint` command (its shebang), else the current one."""
+    exe = shutil.which("weasyprint")
+    if not exe:
+        print("ERREUR: weasyprint introuvable", file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        with open(exe, "rb") as fh:
+            first = fh.readline().decode("utf-8", "replace").strip()
+    except OSError:
+        first = ""
+    return shlex.split(first[2:]) if first.startswith("#!") else [sys.executable]
 
 
 def bar_chart_svg(bars, accent="#0f766e", width=660, height=200):
@@ -100,22 +148,24 @@ def build_header(title, subtitle, meta):
 def build(args, css_path, tmp):
     """Markdown -> HTML (pandoc) -> charts injected -> PDF (WeasyPrint), inside `tmp`."""
     header_path = os.path.join(tmp, "header.html")
-    css_out = os.path.join(tmp, "report.css")
+    style_path = os.path.join(tmp, "style.html")
     html_path = os.path.join(tmp, "report.html")
 
     with open(css_path, encoding="utf-8") as f:
         css_text = f.read()
-    css_text = css_text.replace("__HEADER__", args.header).replace("__FOOTER__", args.footer)
-    with open(css_out, "w", encoding="utf-8") as f:
-        f.write(css_text)
+    css_text = css_text.replace("__HEADER__", css_string(args.header)).replace("__FOOTER__", css_string(args.footer))
+    # Stylesheet inlined by us: pandoc's --embed-resources would also embed any file the body points to.
+    with open(style_path, "w", encoding="utf-8") as f:
+        f.write(f"<style>\n{css_text}\n</style>\n")
     with open(header_path, "w", encoding="utf-8") as f:
         f.write(build_header(args.title, args.subtitle, args.meta))
 
     cmd = [
         "pandoc", args.md,
         "-f", "markdown+fenced_divs+bracketed_spans+pipe_tables+definition_lists",
-        "-t", "html5", "-s", "--embed-resources",
-        "--css", css_out, "--toc", "--toc-depth", str(args.toc_depth),
+        "-t", "html5", "-s",
+        "--include-in-header", style_path, "--metadata", "document-css=false",
+        "--toc", "--toc-depth", str(args.toc_depth),
         "--include-before-body", header_path,
         "--metadata", f"pagetitle={args.title}",
         "-o", html_path,
@@ -149,7 +199,7 @@ def build(args, css_path, tmp):
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(html_doc)
 
-    r2 = subprocess.run(["weasyprint", html_path, args.out], capture_output=True, text=True)
+    r2 = subprocess.run([*weasyprint_python(), "-c", RENDER_PDF, html_path, args.out], capture_output=True, text=True)
     if r2.returncode != 0:
         print("weasyprint error:", r2.stderr, file=sys.stderr)
         raise SystemExit(1)

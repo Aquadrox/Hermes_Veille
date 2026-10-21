@@ -5,7 +5,7 @@
         config.md        brief de mission (éditable)
         recipients.txt   destinataires, un par ligne
         job-prompt.md    prompt RENDU depuis le gabarit (ne pas éditer à la main)
-        rapports/        AAAA-MM-JJ-HHhMM-veille.{md,pdf}, -charts.json (avant la v0.3.2 : AAAA-MM-JJ-veille)
+        rapports/        AAAA-MM-JJ-HHhMM-veille.{md,pdf}, -charts.json, -mail.json (avant la v0.3.2 : AAAA-MM-JJ-veille)
         runs/            journaux des lancements manuels (.progress.json : avancement du dernier)
         components.json  veille composants : références suivies (voir components.py)
         notices.json     veille composants : avis PCN / EOL détectés
@@ -117,6 +117,18 @@ def read_json_dict(path: Path, error: type[Exception], label: str) -> dict:
     except (OSError, ValueError) as exc:
         raise error(f"{label} illisible ({type(exc).__name__})") from None
     return data if isinstance(data, dict) else {}
+
+
+def audit(actor: str, action: str, slug: str = "", detail: str = "") -> None:
+    """Une ligne JSON dans le journal d'audit ; un échec d'écriture n'interrompt jamais l'action."""
+    line = json.dumps({"at": now_iso(), "actor": actor, "action": action,
+                       "slug": slug, "detail": detail}, ensure_ascii=False)
+    try:
+        paths.audit_log().parent.mkdir(parents=True, exist_ok=True)
+        with open(paths.audit_log(), "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        pass
 
 
 def atomic_write(path: Path, data: str | bytes, mode: int = 0o644) -> None:

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from string import Template
 
-from . import paths, schedule
+from . import guard, paths, schedule
 from .store import Veille, atomic_write
 
 TEMPLATE_NAME = "job-prompt.tmpl.md"
@@ -24,8 +24,6 @@ def short_prompt(v: Veille) -> str:
 
 
 def variables(v: Veille) -> dict[str, str]:
-    pdf = v.pdf
-    title = pdf.title or v.name
     return {
         "name": v.name,
         "slug": v.slug,
@@ -33,44 +31,21 @@ def variables(v: Veille) -> dict[str, str]:
         "dir": str(v.dir),
         "schedule_human": schedule.describe(v.schedule),
         "period_desc": schedule.PERIODS.get(v.period, schedule.PERIODS["custom"]),
-        "pdf_title": title,
-        "pdf_header": pdf.header or title,
-        "pdf_footer": pdf.footer,
-        "pdf_audience": pdf.audience,
-        "pdf_accent": pdf.accent,
         "batch_size": str(v.batch_size),
     }
 
 
 def _quote_safe(value: str) -> str:
-    # Les valeurs sont injectées entre guillemets dans des lignes de commande.
+    # Valeurs de l'utilisateur (nom, sujet) : ni guillemet, ni substitution, sur une ligne.
     return value.replace('"', "'").replace("`", "'").replace("$", "").replace("\\", "/").replace("\n", " ")
-
-
-def components_step(v: Veille) -> str:
-    """Étape « chapitre composants » d'une veille qui en inclut un (vide sinon : prompt inchangé).
-
-    Construite hors de _quote_safe (elle contient des retours à la ligne) à partir de valeurs
-    sûres : slugs validés par SLUG_RE et chemin du volume.
-    """
-    if v.kind != "veille" or not v.components:
-        return ""
-    return (
-        "\n\n6 bis. CHAPITRE COMPOSANTS (PCN / fins de vie) — exécute :\n"
-        f"   veillectl components chapter {v.components} --for {v.slug} --append {v.dir}/rapports/D-veille.md\n"
-        "   La commande ajoute elle-même le chapitre à la fin du rapport : ne le modifie pas, ne le résume pas.\n"
-        "   Si elle affiche une ligne « PREFIXE_SUJET=… », place ce préfixe AU DÉBUT de l'objet de l'e-mail "
-        "(étape 8) et ajoute au texte de l'e-mail une ligne sur les fins de vie détectées.\n"
-        "   Si elle affiche une ligne « PIECE_JOINTE=<chemin> », ajoute `--attach <chemin>` (liste Excel des "
-        "composants) à la commande d'envoi de l'étape 8, en plus du PDF."
-    )
 
 
 def render(v: Veille) -> str:
     tpl_path = paths.defaults_dir() / TEMPLATES.get(v.kind, TEMPLATE_NAME)
     tpl = Template(tpl_path.read_text(encoding="utf-8"))
     values = {k: _quote_safe(val) for k, val in variables(v).items()}
-    return tpl.substitute(values, components_step=components_step(v))
+    # Règles multilignes, construites à partir du chemin du volume (slug validé par SLUG_RE).
+    return tpl.substitute(values, security=guard.prompt_rules(v.dir))
 
 
 def write(v: Veille) -> bool:

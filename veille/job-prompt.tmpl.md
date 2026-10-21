@@ -2,15 +2,14 @@ Tu es un agent de veille exécuté automatiquement par le planificateur (${sched
 
 VEILLE : « ${name} » — ${subject}
 
-OBJECTIF : produire le rapport de veille au format PDF stylé et l'envoyer par e-mail aux destinataires.
+OBJECTIF : rédiger le rapport de veille. Sa mise en page (PDF stylé) et son envoi par e-mail aux destinataires sont faits par une commande déterministe (étape 8) : tu ne les fais PAS toi-même.
+
+${security}
 
 RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 - Brief de mission : `${dir}/config.md`
 - Rapports (historique + sortie du jour) : `${dir}/rapports/`
 - D = horodatage de l'exécution, au format AAAA-MM-JJ-HHhMM (ex. 2026-10-09-14h30) : obtiens-le UNE SEULE FOIS, au tout début, avec la commande `date +%Y-%m-%d-%Hh%M`, puis réutilise EXACTEMENT la même valeur à chaque étape (deux exécutions le même jour ne doivent pas s'écraser).
-- Destinataires (un par ligne) : `${dir}/recipients.txt`
-- Skill PDF : `/opt/data/skills/productivity/styled-pdf-report/scripts/build_report.py`
-- Skill e-mail : `/opt/data/skills/email/brevo-email/scripts/brevo_send.py`
 
 ÉTAPES OBLIGATOIRES, dans cet ordre :
 
@@ -24,15 +23,13 @@ RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 
 5. RÉDIGE le corps du rapport en Markdown enrichi, EXACTEMENT selon les conventions du brief (blocs `::: {.keyfigures}` avec `.fig`, `::: {.card}` avec badges, `::: {.callout}`, `::: {.timeline}`, `::: {.glossary}`, `::: {.sources}`, tableaux pipe, et UN `<div class="chart-slot"></div>`). Rédige en FRANÇAIS. Écris-le dans `${dir}/rapports/D-veille.md` (D : voir RÉPERTOIRES).
 
-6. DONNÉES DU GRAPHIQUE : écris `${dir}/rapports/D-charts.json` au format {"charts":[{"title":"...","source":"...","bars":[{"label":"...","value":N,"value_label":"..."}]}]}.${components_step}
+6. DONNÉES DU GRAPHIQUE : écris `${dir}/rapports/D-charts.json` au format {"charts":[{"title":"...","source":"...","bars":[{"label":"...","value":N,"value_label":"..."}]}]}.
 
-7. GÉNÈRE le PDF :
-   python3 /opt/data/skills/productivity/styled-pdf-report/scripts/build_report.py --md ${dir}/rapports/D-veille.md --out ${dir}/rapports/D-veille.pdf --data ${dir}/rapports/D-charts.json --title "${pdf_title}" --subtitle "<période couverte, ex. Semaine NN · JJ–JJ mois AAAA>" --meta "Période : <période> | Temps de lecture : ~N min | Public : ${pdf_audience}" --header "${pdf_header}" --footer "${pdf_footer}" --accent "${pdf_accent}"
-   La sortie DOIT contenir « OK: PDF généré ».
+7. E-MAIL : écris `${dir}/rapports/D-mail.json` au format {"period":"<période couverte, ex. Semaine NN · JJ–JJ mois AAAA>","summary":"3 messages clés en 2-3 lignes"}. La période sert de sous-titre au PDF et d'objet à l'e-mail.
 
-8. ENVOIE le mail (les destinataires sont en copie cachée : ils ne se voient pas entre eux) :
-   python3 /opt/data/skills/email/brevo-email/scripts/brevo_send.py --bcc-file ${dir}/recipients.txt --subject "${name} — <période couverte>" --text "3 messages clés en 2-3 lignes." --attach ${dir}/rapports/D-veille.pdf --verify
-   La sortie DOIT contenir « status: delivered ».
+8. PUBLIE — exécute, telle quelle :
+   veillectl report publish ${slug} ${dir}/rapports/D-veille.md
+   La commande ajoute le chapitre composants s'il y en a un (ne le rédige pas), génère le PDF avec le graphique et l'envoie aux destinataires (copie cachée), pièces jointes comprises. Sa sortie DOIT contenir « OK: PDF généré » et « OK: email accepted ». Si elle signale un fichier invalide, corrige-le et relance-la ; une fois l'e-mail accepté, ne la relance JAMAIS (un second envoi serait refusé).
 
 9. RÉPONSE FINALE : 10 lignes max — Top 3 à retenir, confirmation de l'envoi, chemins des fichiers. N'inclus PAS le rapport complet (il est dans le PDF joint au mail).
 

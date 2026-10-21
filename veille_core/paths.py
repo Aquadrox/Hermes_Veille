@@ -32,6 +32,12 @@ def defaults_dir() -> Path:
     return Path(os.environ.get("VEILLE_DEFAULTS", "/opt/hermes/veille-defaults"))
 
 
+def bundled_skills_dir() -> Path:
+    """Skills livrés avec l'image (lecture seule) : la copie du volume est modifiable par l'agent,
+    et la synchronisation de Hermes conserve une copie modifiée."""
+    return Path(os.environ.get("VEILLE_SKILLS", "/opt/hermes/skills"))
+
+
 def jobs_file() -> Path:
     return hermes_home() / "cron" / "jobs.json"
 

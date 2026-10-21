@@ -8,6 +8,7 @@
   veillectl run <slug> [--wait]
   veillectl costs [slug] [--days N]
   veillectl reconcile | migrate | bootstrap
+  veillectl report publish <slug> <rapport.md>                      (dernière étape du job : PDF + e-mail)
 
 Veille composants (PCN / fins de vie) :
   veillectl create --kind composants --name N --schedule "0 23 * * 0" --recipients a@x [--components-file bom.csv]
@@ -280,6 +281,11 @@ def main(argv: list[str] | None = None) -> int:
     p_comp.add_argument("--status-only", action="store_true",
                         help="scan : statut Digi-Key seulement (le lot de la prochaine exécution est conservé)")
 
+    p_report = sub.add_parser("report", help="veille thématique : publication du rapport du jour")
+    p_report.add_argument("action", choices=("publish",))
+    p_report.add_argument("slug")
+    p_report.add_argument("md", help="rapports/AAAA-MM-JJ-HHhMM-veille.md (à côté : -charts.json, -mail.json)")
+
     p_costs = sub.add_parser("costs", help="consommation de tokens et coût des exécutions")
     p_costs.add_argument("slug", nargs="?")
     p_costs.add_argument("--days", type=int, default=30)
@@ -350,6 +356,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"✓ archivée dans {service.archive(args.slug)}")
         elif args.cmd == "test-email":
             print(service.send_test_email(args.slug))
+        elif args.cmd == "report":
+            print(service.report_publish(args.slug, Path(args.md)))
         elif args.cmd == "migrate":
             slug = service.migrate_legacy()
             print(f"✓ migration effectuée -> {slug}" if slug else "rien à migrer")

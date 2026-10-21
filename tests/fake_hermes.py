@@ -54,6 +54,7 @@ def main():
     e.add_argument("job_id")
     for f in ("--name", "--schedule", "--prompt", "--workdir", "--model", "--provider"):
         e.add_argument(f)
+    e.add_argument("--clear-skills", action="store_true")
     for name in ("pause", "resume", "run", "remove"):
         sub.add_parser(name).add_argument("job_id")
     r = sub.add_parser("runs")
@@ -81,6 +82,8 @@ def main():
                 j[key] = getattr(a, key)
         if a.schedule:
             j["schedule"] = sched(a.schedule)
+        if a.clear_skills:
+            j["skills"] = []
         save(jobs)
         print(f"Updated job: {j['id']}")
     elif a.cmd == "pause":

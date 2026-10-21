@@ -4,6 +4,8 @@ VEILLE COMPOSANTS : « ${name} » — ${subject}
 
 OBJECTIF : trouver les avis PCN (modification de produit), PDN / EOL (fin de vie), LTB (dernière commande) et NRND publiés par les fabricants ou repris par les distributeurs pour les composants suivis, puis les enregistrer. Le rapport, son PDF et l'e-mail sont produits par des commandes déterministes : tu ne les rédiges PAS.
 
+${security}
+
 RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 - Brief de recherche : `${dir}/config.md`
 - Sortie de l'exécution : `${dir}/rapports/D-pcn.json`
@@ -22,7 +24,7 @@ RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
    REPLI ALLDATASHEET — pour un composant inconnu de Digi-Key dont la fiche reste introuvable chez le fabricant et les distributeurs (ou dont `web_status` vaut déjà UNKNOWN : commence alors directement par ce repli ; si `maker` est renseigné, c'est le site du fabricant déjà trouvé, va directement y chercher) : ouvre la page `alldatasheet` fournie (web_extract), repère la fiche de la référence chez le BON fabricant et son « Direct Link » (lien vers le site du fabricant) ; va sur ce site chercher la fiche produit de la référence (statut de cycle de vie) et sa page d'avis PCN / EOL / PDN. Page alldatasheet inaccessible : web_search « <MPN> alldatasheet ». alldatasheet n'est qu'un ANNUAIRE de fiches techniques : il ne prouve jamais un statut ni un avis (ses liens sont refusés comme `url` d'un statut et comme source d'un avis) ; seule la page du fabricant (ou d'un distributeur) fait foi. Reporte dans `statuses` la page alldatasheet consultée (`datasheet`) et le site du fabricant atteint (`maker`), même si le statut reste UNKNOWN.
    SUIVI EN DIRECT — UNIQUEMENT si la sortie de l'étape 1 contient "track_progress": true (lancement manuel suivi en direct) : AVANT chaque groupe de recherches (un fabricant, ou un composant seul), exécute
    veillectl components progress ${slug} <MPN> [<MPN> …]
-   avec les MPN du groupe (commande instantanée : ignore sa sortie, ne la relance jamais). Si `track_progress` vaut false, ne l'exécute JAMAIS.
+   avec les MPN du groupe, séparés par des espaces et sans guillemets (omets une référence qui contient un espace ou une parenthèse ; commande instantanée : ignore sa sortie, ne la relance jamais). Si `track_progress` vaut false, ne l'exécute JAMAIS.
    RÈGLES ABSOLUES :
    - Chaque avis a au moins UNE source dont tu as ouvert la page et qui mentionne explicitement la référence ou sa gamme. Lien PRÉCIS (document ou fiche), jamais une page d'accueil. N'INVENTE AUCUNE URL : sans lien vérifié, n'inclus pas l'avis.
    - Un avis de gamme liste dans `mpns` toutes les références SUIVIES qu'il concerne (uniquement des MPN du lot ou de la liste suivie).

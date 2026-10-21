@@ -35,6 +35,8 @@ docker run --rm --entrypoint /bin/bash "$REF" -lc '
              /opt/hermes/skills/productivity/styled-pdf-report/SKILL.md \
              /opt/hermes/skills/productivity/styled-pdf-report/scripts/build_report.py \
              /opt/hermes/skills/productivity/styled-pdf-report/assets/report.css \
+             /opt/hermes/plugins/veille-guard/plugin.yaml \
+             /opt/hermes/plugins/veille-guard/__init__.py \
              /opt/hermes/veille-defaults/job-prompt.tmpl.md \
              /opt/hermes/veille-defaults/job-prompt-composants.tmpl.md \
              /opt/hermes/veille-defaults/templates/composants.md \
@@ -76,6 +78,8 @@ chiffre de démonstration
 :::
 
 <div class="chart-slot"></div>
+
+<a rel="attachment" href="file:///etc/passwd">annexe</a> <a rel="attachment" href="data:text/plain;base64,eA==">x</a>
 MD
     echo "{\"charts\":[{\"title\":\"Démo\",\"source\":\"test\",\"bars\":[{\"label\":\"A\",\"value\":10,\"value_label\":\"10\"}]}]}" > "$T/c.json"
     python3 /opt/hermes/skills/productivity/styled-pdf-report/scripts/build_report.py \
@@ -83,6 +87,7 @@ MD
         --title "Smoke test" --subtitle "Conteneur" --meta "Test | ~1 min | CI" \
         --header "Smoke test" --footer "veille-hermes" >/dev/null
     test -s "$T/r.pdf" || { echo "PDF non produit"; exit 1; }
+    pdfdetach -list "$T/r.pdf" | grep -q "^0 embedded files" || { echo "fichier joint au PDF"; exit 1; }
     echo "  PDF généré : $(stat -c%s "$T/r.pdf") octets"
 ' || { fail "chaîne PDF en échec"; exit 1; }
 ok "chaîne PDF fonctionnelle"
@@ -93,12 +98,13 @@ docker run --rm --entrypoint /bin/bash "$REF" -lc '
     set -e
     H=/opt/hermes/.venv/bin/hermes
     c=$($H cron create --help); e=$($H cron edit --help)
-    for f in --name --workdir --deliver --skill --model --provider --paused; do
+    for f in --name --workdir --deliver --model --provider --paused; do
         echo "$c" | grep -q -- "$f" || { echo "cron create sans $f"; exit 1; }
     done
-    for f in --name --schedule --prompt --workdir --model; do
+    for f in --name --schedule --prompt --workdir --model --clear-skills; do
         echo "$e" | grep -q -- "$f" || { echo "cron edit sans $f"; exit 1; }
     done
+    $H plugins enable --help >/dev/null
     for sub in pause resume run remove runs; do $H cron "$sub" --help >/dev/null; done
     echo "  options attendues : présentes"
 ' || { fail "la CLI hermes cron a changé — adapter veille_core/hermes.py"; exit 1; }
@@ -111,7 +117,8 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h "$REF" -lc '
     mkdir -p /tmp/h
     veillectl create --name "Smoke" --schedule "0 8 * * 1" --recipients smoke@example.org --template vierge
     veillectl list | grep -q "^smoke"
-    grep -q -- "--bcc-file /tmp/h/veilles/smoke/recipients.txt" /tmp/h/veilles/smoke/job-prompt.md
+    grep -q "veillectl report publish smoke /tmp/h/veilles/smoke/rapports/D-veille.md" /tmp/h/veilles/smoke/job-prompt.md
+    if grep -q "brevo_send" /tmp/h/veilles/smoke/job-prompt.md; then echo "envoi par l'\''agent"; exit 1; fi
     veillectl pause smoke && veillectl list | grep -q "en pause"
     veillectl resume smoke
     veillectl reconcile | grep -q "smoke: ok"
@@ -131,16 +138,27 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h \
         --recipients smoke@example.org --components-file bom.csv
     veillectl create --name "Smoke veille" --schedule "0 8 * * 1" --recipients smoke@example.org \
         --template vierge --include-components smoke-composants
-    grep -q "veillectl components chapter smoke-composants --for smoke-veille" /tmp/h/veilles/smoke-veille/job-prompt.md
+    grep -q "veillectl report publish smoke-veille" /tmp/h/veilles/smoke-veille/job-prompt.md
     veillectl components scan smoke-composants | grep -q "\"configured\": false"
     D=$(date +%F); R=/tmp/h/veilles/smoke-composants/rapports
     echo "{\"notices\":[{\"mpns\":[\"LM317T\"],\"type\":\"EOL\",\"title\":\"Fin de vie\",\"sources\":[{\"url\":\"https://www.ti.com/eol/1\",\"label\":\"TI\"}]}]}" > "$R/$D-pcn.json"
     veillectl components finalize smoke-composants "$R/$D-pcn.json" | grep -q "OK: veille composants — 1 nouvel"
     set -- "$R/$D"-[0-9][0-9]h[0-9][0-9]-veille.pdf; test -f "$1"  # nom horodaté AAAA-MM-JJ-HHhMM
     size=$(stat -c%s "$1"); test "$size" -gt 20000
-    M=/tmp/h/veilles/smoke-veille/rapports/$D-veille.md; echo "# Rapport" > "$M"
-    veillectl components chapter smoke-composants --for smoke-veille --append "$M" | grep -q "PREFIXE_SUJET=\[EOL"
-    grep -q "Nouvelles fins de vie" "$M"
+    # Publication déterministe (chapitre + PDF réel + envoi) ; Brevo simulé : il note ses arguments
+    cat > /tmp/h/brevo.py <<"PY"
+import sys
+open("/tmp/h/mail.args", "w").write("\n".join(sys.argv))
+print("OK: email accepted")
+PY
+    S=/tmp/h/veilles/smoke-veille/rapports/$D-06h30; echo "# Rapport" > "$S-veille.md"
+    echo "{\"period\": \"Semaine 42\", \"summary\": \"Trois messages\"}" > "$S-mail.json"
+    BREVO_SCRIPT=/tmp/h/brevo.py veillectl report publish smoke-veille "$S-veille.md" | grep -q "OK: email accepted"
+    grep -q "Nouvelles fins de vie" "$S-veille.md"
+    test "$(stat -c%s "$S-veille.pdf")" -gt 20000
+    grep -qx -- "/tmp/h/veilles/smoke-veille/recipients.txt" /tmp/h/mail.args
+    grep -qx -- "--subject=\[EOL ×1\] Smoke veille — Semaine 42" /tmp/h/mail.args
+    grep -q -- "smoke-composants.xlsx$" /tmp/h/mail.args
     # Import d'\''une nomenclature Excel (openpyxl + defusedxml dans le venv de l'\''application)
     /opt/veille-app/.venv/bin/python -c "import defusedxml; from openpyxl import Workbook; wb = Workbook(); ws = wb.active; ws.append([\"Fabricant\", \"Mfr. P/N\", \"Digi-Key Part Number\"]); ws.append([\"Yageo\", \"RC0603FR-0710KL\", \"311-ND\"]); wb.save(\"/tmp/h/bom.xlsx\")"
     veillectl components import smoke-composants /tmp/h/bom.xlsx | grep -q "1 ajouté"
@@ -153,6 +171,19 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h \
     echo "  veille composants : OK (PDF $size octets, import Excel, base des composants)"
 ' || { fail "veille composants en échec"; exit 1; }
 ok "veille composants fonctionnelle"
+
+# --- 5 ter. Garde-fou contre l'injection de prompt, vu par le système de plugins de Hermes ---
+log "garde-fou veille-guard (plugin Hermes)"
+docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h \
+    -v "$REPO_DIR/scripts/guard-probe.py:/tmp/guard-probe.py:ro" "$REF" -lc '
+    set -e
+    mkdir -p /tmp/h
+    /opt/hermes/.venv/bin/hermes plugins enable veille-guard >/dev/null
+    veillectl create --name "Smoke garde" --schedule "0 8 * * 1" --recipients smoke@example.org --template vierge >/dev/null
+    JOB=$(veillectl list | awk "/^smoke-garde /{print \$NF}")
+    /opt/hermes/.venv/bin/python /tmp/guard-probe.py "$JOB" /tmp/h/veilles/smoke-garde/rapports
+' || { fail "garde-fou veille-guard inactif — adapter docker/hermes-plugins/veille-guard"; exit 1; }
+ok "garde-fou veille-guard actif"
 
 # --- 6. Interface web : démarre et exige une session ---
 log "interface web"

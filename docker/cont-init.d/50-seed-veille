@@ -7,6 +7,8 @@
 # 02-reconcile-profiles). Toutes les étapes sont idempotentes et non destructives :
 #   1. crée /opt/data/veilles (propriété hermes)
 #   2. règle modèle et fuseau dans config.yaml (premier démarrage uniquement)
+#   2 bis. garde-fou contre l'injection de prompt : outils des exécutions planifiées
+#      réduits, mémoire coupée, plugin veille-guard activé (à chaque démarrage)
 #   3. migre l'ancienne disposition mono-veille (/opt/data/veille) si présente
 #   4. crée la veille par défaut sur une installation neuve (une seule fois)
 #   5. réconcilie chaque veille avec son job cron (prompt re-rendu, job recréé
@@ -43,21 +45,43 @@ for dir in "$VEILLES_DIR" "$HERMES_HOME/imports"; do
         || log "ERREUR : impossible de créer $dir"
 done
 
+set_config() {
+    if as_hermes "$HERMES_BIN" config set "$1" "$2" >/dev/null 2>&1; then
+        log "$1 = $2"
+    else
+        log "${3:-avertissement} : $1 non réglé"
+    fi
+}
+
 # --- 2. Modèle + fuseau horaire (premier démarrage) ---
 # Le scheduler cron lit la timezone de la config Hermes (pas seulement $TZ).
 if [ ! -f "$CONFIG_MARKER" ] && [ ! -f "$LEGACY_MARKER" ] && [ -x "$HERMES_BIN" ]; then
-    set_config() {
-        if as_hermes "$HERMES_BIN" config set "$1" "$2" >/dev/null 2>&1; then
-            log "$1 = $2"
-        else
-            log "avertissement : $1 non réglé"
-        fi
-    }
     set_config model.default "${VEILLE_MODEL:-deepseek-v4-pro}"
     set_config model.provider "${VEILLE_PROVIDER:-deepseek}"
     set_config timezone "${TZ:-Europe/Paris}"
 fi
 as_hermes touch "$CONFIG_MARKER" 2>/dev/null || true
+
+# --- 2 bis. Garde-fou contre l'injection de prompt (À CHAQUE démarrage : annule toute altération) ---
+# L'agent d'une veille lit le web. Ses exécutions planifiées n'ont que les outils web, fichiers et
+# terminal (ni navigateur, ni exécution de code, ni mémoire, ni délégation…), sans mémoire persistante
+# ni commande dangereuse approuvée d'office ; le plugin veille-guard (image, lecture seule) restreint
+# fichiers et commandes à ceux de la veille (veille_core/guard.py).
+if [ -x "$HERMES_BIN" ]; then
+    set_config platform_toolsets.cron "[web, file, terminal]" ERREUR
+    set_config memory.memory_enabled false ERREUR
+    set_config memory.user_profile_enabled false ERREUR
+    set_config approvals.cron_mode deny ERREUR
+    set_config tools.tool_search.enabled off ERREUR  # pas de `tool_call` (appel d'un outil par son nom)
+    if as_hermes "$HERMES_BIN" plugins enable veille-guard >/dev/null 2>&1; then
+        log "plugin veille-guard activé"
+    else
+        # Échec fermé : sans garde-fou, recherche web seule (aucun fichier, aucune commande) ;
+        # les rapports ne partent plus et le chien de garde le signale.
+        set_config platform_toolsets.cron "[web]" ERREUR
+        log "ERREUR : plugin veille-guard non activé — exécutions planifiées réduites à la recherche web"
+    fi
+fi
 
 if [ ! -x "$VEILLECTL" ] || [ ! -x "$HERMES_BIN" ]; then
     log "ERREUR : veillectl ou hermes introuvable — veilles non réconciliées"

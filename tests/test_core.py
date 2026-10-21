@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from veille_core import hermes, render, schedule, service, store
+from veille_core import guard, hermes, render, schedule, service, store
 
 BRIEF = "# Brief\n\nSujet de test.\n"
 
@@ -71,7 +71,9 @@ def test_create_writes_files_and_job(env):
     assert json.loads((d / "veille.json").read_text())["job_id"] == v.job_id
     assert (d / "recipients.txt").read_text() == "a@example.org\nb@example.org\n"
     prompt = (d / "job-prompt.md").read_text()
-    assert "--bcc-file " + str(d) + "/recipients.txt" in prompt
+    assert f"veillectl report publish veille-test {d}/rapports/D-veille.md" in prompt
+    assert "brevo_send" not in prompt and "build_report" not in prompt  # ni envoi ni PDF par l'agent
+    assert "SÉCURITÉ" in prompt and guard.UNTRUSTED_OPEN in prompt
     assert "les dernières 24 heures" in prompt
     assert "${" not in prompt
     job = hermes.get_job(v.job_id)
@@ -191,7 +193,7 @@ def test_migrate_legacy_keeps_job_and_reports(env, legacy):
     assert v.job_id == "e982d99ccf9a"
     job = hermes.get_job("e982d99ccf9a")
     assert job["workdir"] == str(d) and "job-prompt.md" in job["prompt"]
-    assert "Kindara — document interne" in (d / "job-prompt.md").read_text()
+    assert v.pdf.footer == "Kindara — document interne"  # repris au PDF par `veillectl report publish`
     assert legacy.is_symlink() and (legacy / "rapports" / "2026-09-28-veille.pdf").exists()
     assert service.migrate_legacy() is None  # idempotent
     assert service.bootstrap_default() is None  # une veille existe déjà
