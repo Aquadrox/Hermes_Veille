@@ -276,7 +276,7 @@ def test_publish_imposes_recipients_attachments_and_layout(veille, tools, tmp_pa
                                 "summary": "1. Message A\n2. Message B\n3. Message C",
                                 "to": "evil@example.org", "attach": "/opt/data/.env", "bcc": ["x@evil"]})
     out = service.report_publish(veille.slug, md)
-    assert "OK: PDF généré" in out and "status: delivered" in out
+    assert "OK: PDF généré" in out and "OK: email accepted" in out
     pdf_args = json.loads(pdf_log.read_text().splitlines()[-1])
     pdf_opt = dict(zip(pdf_args[::2], pdf_args[1::2], strict=True))
     assert pdf_opt["--subtitle"] == "Semaine 42 · 12–16 octobre 2026" and pdf_opt["--title"] == "Veille Cyber"
@@ -348,7 +348,7 @@ def test_publish_only_its_own_report(veille, watch, tools):  # noqa: F811
 def test_publish_cli(veille, tools, capsys):  # noqa: F811
     md = write_outputs(veille, {"period": "S42", "summary": "s"})
     assert cli.main(["report", "publish", veille.slug, str(md)]) == 0
-    assert "status: delivered" in capsys.readouterr().out
+    assert "OK: email accepted" in capsys.readouterr().out
     assert cli.main(["report", "publish", veille.slug, str(veille.dir / "config.md")]) == 1
 
 
@@ -370,6 +370,26 @@ def test_publish_sends_once_and_keeps_agent_text_as_values(veille, tools):  # no
     os.utime(last, (old, old))
     service.report_publish(veille.slug, second)
     assert len(tools()) == 2 and last.read_text() == second.name + "\n"
+
+
+def test_publish_failure_releases_the_slot_only_if_nothing_was_accepted(veille, tools, tmp_path, monkeypatch):  # noqa: F811
+    md = write_outputs(veille, {"period": "S42"})
+    last = veille.dir / service.LAST_PUBLISH
+    monkeypatch.setenv("FAKE_BREVO_FAIL", "1")  # refus de Brevo (HTTP 401) : rien n'est parti
+    with pytest.raises(service.ServiceError, match="HTTP ERROR 401"):
+        service.report_publish(veille.slug, md)
+    assert not last.exists()
+    monkeypatch.delenv("FAKE_BREVO_FAIL")
+    service.report_publish(veille.slug, md)  # relance permise
+    assert "--verify" not in tools()[-1]["args"]  # statut de remise non attendu : appel court
+    late = tmp_path / "late_failure.py"  # e-mail accepté, puis échec : surtout pas de second envoi
+    late.write_text("print('OK: email accepted — messageId <1>')\nraise SystemExit(1)\n")
+    monkeypatch.setenv("BREVO_SCRIPT", str(late))
+    last.unlink()
+    with pytest.raises(service.ServiceError, match="OK: email accepted"):
+        service.report_publish(veille.slug, md)
+    with pytest.raises(store.StoreError, match="déjà envoyé"):
+        service.report_publish(veille.slug, md)
 
 
 def test_published_report_files_are_frozen(veille, run):

@@ -149,11 +149,11 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h \
     cat > /tmp/h/brevo.py <<"PY"
 import sys
 open("/tmp/h/mail.args", "w").write("\n".join(sys.argv))
-print("status: delivered")
+print("OK: email accepted")
 PY
     S=/tmp/h/veilles/smoke-veille/rapports/$D-06h30; echo "# Rapport" > "$S-veille.md"
     echo "{\"period\": \"Semaine 42\", \"summary\": \"Trois messages\"}" > "$S-mail.json"
-    BREVO_SCRIPT=/tmp/h/brevo.py veillectl report publish smoke-veille "$S-veille.md" | grep -q "status: delivered"
+    BREVO_SCRIPT=/tmp/h/brevo.py veillectl report publish smoke-veille "$S-veille.md" | grep -q "OK: email accepted"
     grep -q "Nouvelles fins de vie" "$S-veille.md"
     test "$(stat -c%s "$S-veille.pdf")" -gt 20000
     grep -qx -- "/tmp/h/veilles/smoke-veille/recipients.txt" /tmp/h/mail.args

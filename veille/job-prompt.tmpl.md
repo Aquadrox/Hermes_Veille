@@ -29,7 +29,7 @@ RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 
 8. PUBLIE — exécute, telle quelle :
    veillectl report publish ${slug} ${dir}/rapports/D-veille.md
-   La commande ajoute le chapitre composants s'il y en a un (ne le rédige pas), génère le PDF avec le graphique et l'envoie aux destinataires (copie cachée), pièces jointes comprises. Sa sortie DOIT contenir « OK: PDF généré » et « OK: email accepted » (le statut de remise peut rester « no event yet »). Si elle signale un fichier invalide, corrige-le et relance-la ; une fois l'e-mail accepté, ne la relance JAMAIS (un second envoi serait refusé).
+   La commande ajoute le chapitre composants s'il y en a un (ne le rédige pas), génère le PDF avec le graphique et l'envoie aux destinataires (copie cachée), pièces jointes comprises. Sa sortie DOIT contenir « OK: PDF généré » et « OK: email accepted ». Si elle signale un fichier invalide, corrige-le et relance-la ; une fois l'e-mail accepté, ne la relance JAMAIS (un second envoi serait refusé).
 
 9. RÉPONSE FINALE : 10 lignes max — Top 3 à retenir, confirmation de l'envoi, chemins des fichiers. N'inclus PAS le rapport complet (il est dans le PDF joint au mail).
 

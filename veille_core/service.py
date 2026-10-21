@@ -1282,10 +1282,17 @@ def report_publish(slug: str, report_md: Path, actor: str = "job") -> str:
     if prefix:
         text += f"\n\nComposants suivis {prefix} : détail dans le chapitre « Composants » du rapport."
     subject = f"{prefix} {v.name} — {period}".strip()
-    # « --option=valeur » : un texte de l'agent qui commence par « - » reste une valeur.
-    out = _brevo(["--bcc-file", str(v.dir / "recipients.txt"), f"--subject={subject}", f"--text={text}",
-                  "--attach", str(pdf), *(["--attach", str(xlsx)] if xlsx else []), "--verify"])
+    # Marqueur posé AVANT l'envoi (un envoi interrompu après acceptation ne se double pas) ; retiré si
+    # Brevo n'a rien accepté. Sans --verify : le statut de remise rallongeait l'appel au-delà du délai.
     store.atomic_write(last, f"{md.name}\n")
+    try:
+        # « --option=valeur » : un texte de l'agent qui commence par « - » reste une valeur.
+        out = _brevo(["--bcc-file", str(v.dir / "recipients.txt"), f"--subject={subject}", f"--text={text}",
+                      "--attach", str(pdf), *(["--attach", str(xlsx)] if xlsx else [])])
+    except ServiceError as exc:
+        if "OK: email accepted" not in str(exc):
+            last.unlink(missing_ok=True)
+        raise
     audit(actor, "report-publish", slug, pdf.name + (f" + {xlsx.name}" if xlsx else ""))
     return f"OK: PDF généré -> {pdf}\n{out}"
 

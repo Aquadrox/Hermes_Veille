@@ -60,7 +60,9 @@ fichiers de sa veille, écrire ses fichiers de sortie et lancer les commandes de
   `D-charts.json`) et l'envoie aux seuls destinataires de la veille, en copie cachée, avec le PDF et la
   liste Excel des composants. Période et messages clés viennent de `D-mail.json` (écrit par l'agent),
   nettoyés et bornés (100 et 1 500 caractères), passés au script d'envoi sous la forme
-  `--option=valeur`. Pas deux envois à moins de 30 min pour une même veille (`.dernier-envoi`).
+  `--option=valeur`. Pas deux envois à moins de 30 min pour une même veille (`.dernier-envoi`, posé
+  avant l'envoi et retiré si Brevo n'a rien accepté : un envoi interrompu ne se double pas) ; sans
+  attente du statut de remise (`--verify`), qui pouvait dépasser le délai de l'envoi.
 - `scripts/guard-probe.py` : contrat du garde-fou avec Hermes (smoke test, test d'intégration).
 
 ### Modifié
