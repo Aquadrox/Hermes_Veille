@@ -9,8 +9,9 @@
 #   2. règle modèle et fuseau dans config.yaml (premier démarrage uniquement)
 #   2 bis. garde-fou contre l'injection de prompt : outils des exécutions planifiées
 #      réduits, mémoire coupée, plugin veille-guard activé (à chaque démarrage)
-#   2 ter. recherche web par DeepSeek Search & Fetch (plugin de l'image), sauf
-#      VEILLE_WEB_BACKEND=hermes (à chaque démarrage)
+#   2 ter. recherche web par DeepSeek Search & Fetch (plugin de l'image) si
+#      VEILLE_WEB_BACKEND=deepseek (défaut), moteur de Hermes sinon ; moteur daté à
+#      chaque changement dans veilles/.web-backend (à chaque démarrage)
 #   3. migre l'ancienne disposition mono-veille (/opt/data/veille) si présente
 #   4. crée la veille par défaut sur une installation neuve (une seule fois)
 #   5. réconcilie chaque veille avec son job cron (prompt re-rendu, job recréé
@@ -87,17 +88,32 @@ fi
 
 # --- 2 ter. Moteur de recherche web : DeepSeek Search & Fetch (À CHAQUE démarrage) ---
 # Plugin deepseek-search-fetch de l'image, même clé que le modèle. `web.backend` vaut pour la recherche
-# ET la lecture de pages, sans repli : un plugin absent se voit (erreur) au lieu de changer de moteur en
-# silence. VEILLE_WEB_BACKEND=hermes (ou plugin non activable) : moteur par défaut de Hermes — plugin
-# désactivé, sinon Hermes le choisirait encore (clé DeepSeek présente).
+# ET la lecture de pages, sans bascule de moteur si le plugin venait à manquer (Hermes retente seulement
+# un appel échoué sur ses offres gratuites : web.keyless_rescue) ; les réglages par capacité, prioritaires,
+# sont retirés s'il en reste. Autre valeur que deepseek, pas de clé ou plugin non activable : moteur par
+# défaut de Hermes — plugin désactivé, sinon Hermes le choisirait encore (clé DeepSeek présente).
+# Le moteur en vigueur est daté à chaque changement : coût de la recherche web (veille_core/pricing.py).
+WEB_HISTORY="$VEILLES_DIR/.web-backend"
+record_web_backend() {
+    [ "$(tail -n 1 "$WEB_HISTORY" 2>/dev/null | cut -d' ' -f2)" = "$1" ] \
+        || echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $1" | as_hermes tee -a "$WEB_HISTORY" >/dev/null
+}
 if [ -x "$HERMES_BIN" ]; then
-    if [ "${VEILLE_WEB_BACKEND:-deepseek}" = deepseek ] && [ -n "${DEEPSEEK_API_KEY:-}" ] \
-        && as_hermes "$HERMES_BIN" plugins enable deepseek-search-fetch >/dev/null 2>&1; then
+    for key in search_backend extract_backend; do
+        grep -qE "^ +$key:" "$HERMES_HOME/config.yaml" 2>/dev/null \
+            && as_hermes "$HERMES_BIN" config unset "web.$key" >/dev/null 2>&1
+    done
+    want=hermes
+    [ "${VEILLE_WEB_BACKEND:-deepseek}" = deepseek ] && [ -n "${DEEPSEEK_API_KEY:-}" ] && want=deepseek
+    if [ "$want" = deepseek ] && as_hermes "$HERMES_BIN" plugins enable deepseek-search-fetch >/dev/null 2>&1; then
         set_config web.backend deepseek ERREUR
+        record_web_backend deepseek
     else
+        [ "$want" = deepseek ] && log "ERREUR : plugin deepseek-search-fetch non activé"
         as_hermes "$HERMES_BIN" plugins disable deepseek-search-fetch >/dev/null 2>&1 || true
         as_hermes "$HERMES_BIN" config unset web.backend >/dev/null 2>&1 || true
         log "recherche web : moteur par défaut de Hermes (VEILLE_WEB_BACKEND=${VEILLE_WEB_BACKEND:-deepseek})"
+        record_web_backend hermes
     fi
 fi
 

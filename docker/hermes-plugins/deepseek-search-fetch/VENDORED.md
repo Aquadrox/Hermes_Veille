@@ -15,4 +15,5 @@ boucle locale pour les tests), ni fichier, ni sous-processus, ni télémétrie ;
 jamais journalisée. Il tourne dans le processus de Hermes, avec ses variables d'environnement : une mise à
 jour se relit de la même façon puis se recopie ici (jamais `hermes plugins install` dans le conteneur).
 
-Activé par l'amorçage (`docker/cont-init.d/50-seed-veille`), sauf `VEILLE_WEB_BACKEND=hermes`.
+Activé par l'amorçage (`docker/cont-init.d/50-seed-veille`) quand `VEILLE_WEB_BACKEND` vaut `deepseek`
+(défaut) et que `DEEPSEEK_API_KEY` est renseignée ; désactivé sinon.

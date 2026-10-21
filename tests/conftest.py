@@ -20,7 +20,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("VEILLE_DEFAULTS", str(REPO / "veille"))
     monkeypatch.setenv("HERMES_BIN", str(REPO / "tests" / "fake_hermes.py"))
     monkeypatch.delenv("VEILLE_RECIPIENTS", raising=False)
-    monkeypatch.delenv("VEILLE_WEB_BACKEND", raising=False)
     return home
 
 

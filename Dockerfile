@@ -81,8 +81,8 @@ COPY docker/hermes-plugins/veille-guard/ /opt/hermes/plugins/veille-guard/
 
 # ── 7. Recherche web par DeepSeek Search & Fetch ──────────────────────────────
 # Plugin communautaire vendorisé à un commit relu (voir son VENDORED.md), même emplacement en lecture
-# seule ; web_search / web_extract gardent leur nom (garde-fou inchangé). Activé par le hook de seed,
-# sauf VEILLE_WEB_BACKEND=hermes.
+# seule ; web_search / web_extract gardent leur nom (garde-fou inchangé). Activé par le hook de seed
+# si VEILLE_WEB_BACKEND vaut deepseek (défaut).
 COPY docker/hermes-plugins/deepseek-search-fetch/ /opt/hermes/plugins/deepseek-search-fetch/
 
 # TERMINAL_MAX_FOREGROUND_TIMEOUT : `veillectl components scan` (jusqu'à 20 min) reste au premier plan ;

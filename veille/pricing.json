@@ -11,8 +11,7 @@
   },
   "web": {
     "usd_per_request": 0.00075,
-    "since": "2026-10-21",
-    "_comment": "Recherche web DeepSeek Search & Fetch (https://api-docs.deepseek.com/guides/search) : USD par requête, 0,75 $ les 1 000, tarif unique (pas d'heures pleines). Compté pour les exécutions démarrées depuis « since » (date UTC du passage à ce moteur), jamais avec VEILLE_WEB_BACKEND=hermes."
+    "_comment": "Recherche web DeepSeek Search & Fetch (https://api-docs.deepseek.com/guides/search) : USD par requête, 0,75 $ les 1 000, tarif unique (pas d'heures pleines). Compté pour les exécutions démarrées quand ce moteur était en vigueur (veilles/.web-backend, tenu par l'amorçage)."
   },
   "models": {
     "deepseek-v4-pro":   {"input_cache_hit": 0.022, "input_cache_miss": 0.66, "output": 1.98},

@@ -11,7 +11,6 @@ from conftest import REPO
 from veille_core import guard
 
 PLUGIN = REPO / "docker" / "hermes-plugins" / "deepseek-search-fetch"
-SEED = (REPO / "docker" / "cont-init.d" / "50-seed-veille").read_text()
 
 
 def _version(text: str) -> tuple[int, ...]:
@@ -41,18 +40,9 @@ def test_image_meets_the_plugin_hermes_requirement():
     dockerfile = (REPO / "Dockerfile").read_text()
     base = re.search(r"^FROM nousresearch/hermes-agent:v([\d.]+)$", dockerfile, re.M).group(1)
     assert _version(base) >= _version(required)
+    assert _version(base)[0] < 2000, "étiquette datée (v2026.9.24 = Hermes v0.21.5) : retour en arrière"
     assert "COPY docker/hermes-plugins/deepseek-search-fetch/ /opt/hermes/plugins/deepseek-search-fetch/" in dockerfile
     assert "provides_web_providers:\n  - deepseek" in manifest
-
-
-def test_seed_pins_deepseek_or_restores_the_hermes_engine():
-    assert '"${VEILLE_WEB_BACKEND:-deepseek}" = deepseek' in SEED and '[ -n "${DEEPSEEK_API_KEY:-}" ]' in SEED
-    on, off = SEED.split("2 ter. Moteur de recherche web", 1)[1].split("    else\n", 1)
-    assert "plugins enable deepseek-search-fetch" in on
-    assert "set_config web.backend deepseek" in on  # recherche ET lecture de pages, sans repli
-    # Retour arrière : plugin désactivé (Hermes le choisirait encore) et réglage retiré (sinon erreur stricte).
-    assert "plugins disable deepseek-search-fetch" in off and "config unset web.backend" in off
-    assert SEED.index("2 ter. Moteur") > SEED.index("plugins enable veille-guard")
 
 
 def test_web_tools_keep_their_names_for_the_guard():

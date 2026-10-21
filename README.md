@@ -320,15 +320,19 @@ l'agent avec ce moteur.
   DeepSeek), **vendorisé** dans `docker/hermes-plugins/deepseek-search-fetch/` à un commit relu
   (`VENDORED.md`, empreintes vérifiées par les tests), installé en lecture seule dans l'image, jamais
   téléchargé au démarrage. L'amorçage l'active et règle `web.backend: deepseek` (recherche et lecture de
-  pages, **sans repli** : un incident se voit au lieu de changer de moteur en silence). Hermes peut
-  retenter une fois un appel échoué sur ses offres gratuites (`web.keyless_rescue`, défaut de Hermes).
+  pages). Ce réglage ne bascule pas vers un autre moteur ; Hermes retente seulement une fois un appel
+  échoué sur ses offres gratuites (`web.keyless_rescue`, réglage par défaut de Hermes conservé : la veille
+  continue malgré un incident ponctuel de DeepSeek). Plugin impossible à activer : `ERREUR` dans le
+  journal de démarrage et moteur de Hermes.
 - **Coût** : 0,75 $ les 1 000 requêtes réussies (échecs et résultats vides gratuits), une requête par
   recherche et par page lue. Compté dans le coût des exécutions (voir plus bas).
 - **Limites** : requête de 128 caractères au plus ; une page par requête de lecture ; quotas par compte
   (100 recherches et 25 lectures par seconde selon DeepSeek, moins constaté) ; DeepSeek refuse de lire
   certains sites (politique de sécurité).
-- **Revenir au moteur de Hermes** : `VEILLE_WEB_BACKEND=hermes` dans `.env`, puis `docker compose up -d`
-  (plugin désactivé, réglage retiré ; journal : `[seed-veille] recherche web : moteur par défaut de Hermes`).
+- **Revenir au moteur de Hermes** : `VEILLE_WEB_BACKEND=hermes` (toute valeur autre que `deepseek`) dans
+  `.env`, puis `docker compose up -d` : plugin désactivé, réglage retiré ; journal :
+  `[seed-veille] recherche web : moteur par défaut de Hermes`. Chaque changement de moteur est daté dans
+  `veilles/.web-backend` (coût, ci-dessous).
 
 ## Consommation et coût
 
@@ -345,9 +349,9 @@ L'application en calcule le **coût réel** :
 - **recherche web comprise** (colonne « Web ») : requêtes Search & Fetch lues dans les appels d'outils
   de l'agent (une par recherche, une par page), au tarif de la section `web` (tarif unique, sans heures
   pleines). C'est un **majorant** : échecs, résultats vides et réponses du cache de Hermes ne sont pas
-  facturés. Rien n'est compté avant la date `since` (moteur précédent, gratuit) ni avec
-  `VEILLE_WEB_BACKEND=hermes`. Une copie de `pricing.json` dans le volume antérieure à la 0.7.0 n'a pas
-  de section `web` : la recopier, sinon la recherche web compte pour 0.
+  facturés. Seules comptent les exécutions démarrées quand DeepSeek était le moteur en vigueur
+  (`veilles/.web-backend`) : ni celles d'avant la 0.7.0, ni celles du moteur de Hermes. Une section absente
+  de la copie du volume (`web` dans une copie antérieure à la 0.7.0) vient du fichier de l'image.
 
 Où le voir :
 - **Interface** : section « Coût des exécutions » de chaque veille (durée, tokens, heure pleine ou
@@ -435,6 +439,7 @@ imports/            nomenclatures déposées pour import (Telegram / CLI), analy
 veilles/.archive/   veilles archivées, copies des remises à zéro (`<slug>-reinit-…`)
 veilles/.audit.log  journal d'audit (interface, CLI, amorçage)
 veilles/.settings.json  paramètres de l'interface (adresses d'alerte), lus aussi par le chien de garde
+veilles/.web-backend  moteur de recherche web en vigueur, daté à chaque changement (coût de la recherche)
 veilles/.veille.db  base SQLite (0600) : index des composants (reconstruit à chaque démarrage depuis les
                     fichiers des veilles) et carnet d'adresses des destinataires
 cron/jobs.json      jobs Hermes (état, prochain et dernier run)
@@ -576,7 +581,7 @@ page **Sources** de l'interface) et `ALERT_EMAIL` (repli : l'adresse d'alerte se
 ## Architecture
 
 Le conteneur n'a besoin que d'accès **sortants** (API DeepSeek : modèle et recherche web, API Brevo, API
-Digi-Key). Le
+Digi-Key ; en secours d'un appel de recherche échoué, les offres gratuites de Hermes). Le
 seul port publié est celui de l'interface, lié à `127.0.0.1` ; le serveur MCP passe par
 `docker exec -i` (stdio), sans port. La livraison se fait **uniquement
 par e-mail** (`deliver: local`) ; le gateway Telegram de l'hôte reste indépendant. L'interface,

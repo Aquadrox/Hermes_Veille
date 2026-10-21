@@ -2,25 +2,27 @@
 
 Les tarifs sont ceux de `pricing.json`, au tarif « heures creuses », avec les plages d'heures
 pleines (tarif ×2 chez DeepSeek). Fichier lu dans le volume
-(`/opt/data/veilles/pricing.json`, modifiable sans reconstruire l'image), sinon celui de l'image.
+(`/opt/data/veilles/pricing.json`, modifiable sans reconstruire l'image), section par section : une
+section absente du volume (copie antérieure à son ajout) vient de celui de l'image.
 
 Correspondance des tokens (normalisation de Hermes, `agent/usage_pricing.py`) :
   input_tokens      = entrée hors cache (cache miss)
   cache_read_tokens = entrée lue en cache (cache hit)
   output_tokens     = sortie, raisonnement COMPRIS (ne pas ajouter reasoning_tokens)
 
-La recherche web DeepSeek (Search & Fetch) se facture à la requête, hors tokens : section `web`.
+La recherche web DeepSeek (Search & Fetch) se facture à la requête, hors tokens : section `web`, pour
+les exécutions démarrées quand ce moteur était en vigueur (historique `.web-backend`, tenu par l'amorçage).
 """
 from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 from pathlib import Path
 
 from . import paths, schedule
 
 FILENAME = "pricing.json"
+WEB_HISTORY = ".web-backend"  # « <AAAA-MM-JJTHH:MM:SSZ> <moteur> », une ligne par changement (50-seed-veille)
 _UTC = dt.UTC
 
 
@@ -29,12 +31,13 @@ def _candidates() -> list[Path]:
 
 
 def load() -> dict:
-    for path in _candidates():
+    table: dict = {}
+    for path in reversed(_candidates()):  # image, puis volume : le volume l'emporte section par section
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            table.update(json.loads(path.read_text(encoding="utf-8")))
         except (FileNotFoundError, ValueError):
             continue
-    return {"models": {}, "peak": {}}
+    return table or {"models": {}, "peak": {}}
 
 
 def _as_utc(when: dt.datetime | float | int) -> dt.datetime:
@@ -83,16 +86,29 @@ def run_cost(model: str | None, *, input_tokens: int = 0, cache_read_tokens: int
     return round(usd, 6), peak
 
 
+def web_backend_at(when: dt.datetime | float | int) -> str | None:
+    """Moteur de recherche web en vigueur à `when` (historique écrit par l'amorçage) ; None avant la
+    première ligne : moteur gratuit de Hermes des versions antérieures à la 0.7.0."""
+    stamp, backend = _as_utc(when).strftime("%Y-%m-%dT%H:%M:%SZ"), None
+    try:
+        lines = (paths.veilles_dir() / WEB_HISTORY).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:  # lignes ajoutées dans l'ordre chronologique
+        since, _, name = line.strip().partition(" ")
+        if since and since <= stamp:
+            backend = name.strip() or None
+    return backend
+
+
 def web_cost(requests: int, started_at: dt.datetime | float | int | None, table: dict | None = None) -> float:
-    """Coût en USD des requêtes de recherche web DeepSeek (Search & Fetch) d'une exécution.
+    """Coût en USD des requêtes de recherche web DeepSeek (Search & Fetch) d'une exécution, si ce moteur
+    était en vigueur à son début (tarif unique, sans heures pleines).
 
     Majorant : DeepSeek ne facture ni les échecs ni les résultats vides, et Hermes sert les recherches
-    répétées depuis son cache. Nul avant `web.since` (moteur précédent, gratuit) et avec
-    VEILLE_WEB_BACKEND=hermes (même lecture que l'amorçage : vide = deepseek).
+    répétées depuis son cache.
     """
+    if not requests or started_at is None or web_backend_at(started_at) != "deepseek":
+        return 0.0
     web = (table or load()).get("web") or {}
-    if not requests or started_at is None or (os.environ.get("VEILLE_WEB_BACKEND") or "deepseek") != "deepseek":
-        return 0.0
-    if _as_utc(started_at).date().isoformat() < str(web.get("since") or ""):
-        return 0.0
     return round(requests * float(web.get("usd_per_request", 0)), 6)

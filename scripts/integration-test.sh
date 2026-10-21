@@ -108,8 +108,9 @@ ok "plugin actif (refus vérifié), outils web/fichiers/terminal, mémoire coup�
 
 # --- 4 ter. Recherche web par DeepSeek Search & Fetch (posée par le seed à chaque démarrage) ---
 log "moteur de recherche web"
-CFG="$(as_root cat "$DATA/config.yaml")"
-contains "$CFG" '^  backend: deepseek$' || fail "recherche web : DeepSeek non réglé"
+contains "$(as_root cat "$DATA/config.yaml")" '^  backend: deepseek$' || fail "recherche web : DeepSeek non réglé"
+web_backend() { as_root tail -n 1 "$DATA/veilles/.web-backend" | cut -d' ' -f2; }  # dernier moteur daté
+[ "$(web_backend)" = deepseek ] || fail "moteur web non daté dans veilles/.web-backend"
 ok "recherche et lecture de pages par DeepSeek Search & Fetch"
 
 # --- 5. Interface ---
@@ -162,9 +163,12 @@ contains "$(docker logs "$NAME" 2>&1)" 'reconcile: veille-persistance: ok' || fa
 contains "$(curl -s -b "$JAR" "$BASE/veilles/veille-persistance")" '2026-09-21-veille\.pdf' || fail "rapports anciens absents de l'interface"
 contains "$(curl -s -b "$JAR" "$BASE/")" 'veille-persistance#rapports">3 rapports' || fail "nombre de rapports absent du tableau de bord"
 hxu veillectl archive veille-persistance >/dev/null
-CFG="$(as_root cat "$DATA/config.yaml")"
-if contains "$CFG" 'backend: deepseek' || ! contains "$CFG" '- deepseek-search-fetch'; then
-    fail "VEILLE_WEB_BACKEND=hermes : moteur DeepSeek encore réglé ou plugin non désactivé"
+H=/opt/hermes/.venv/bin/hermes
+if contains "$(as_root cat "$DATA/config.yaml")" 'backend: deepseek' \
+    || ! contains "$(hxu "$H" config get plugins.disabled)" 'deepseek-search-fetch' \
+    || contains "$(hxu "$H" config get plugins.enabled)" 'deepseek-search-fetch' \
+    || [ "$(web_backend)" != hermes ] || [ "$(as_root cat "$DATA/veilles/.web-backend" | wc -l)" -ne 2 ]; then
+    fail "VEILLE_WEB_BACKEND=hermes : moteur DeepSeek encore réglé, plugin non désactivé ou changement non daté"
 fi
 ok "veilles, jobs, rapports et audit identiques après recréation ; historique visible ; moteur web de Hermes"
 

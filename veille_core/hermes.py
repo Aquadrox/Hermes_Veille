@@ -84,9 +84,14 @@ def state_db() -> Path:
 _TOKEN_COLS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens")
 
 
-def _web_requests(tool_calls: str | None) -> int:
-    """Requêtes de recherche web d'un message de l'agent (`messages.tool_calls`, format OpenAI) :
-    une par `web_search`, une par URL de `web_extract` (le moteur lit une page par requête)."""
+_EXTRACT_MAX_URLS = 5  # Hermes ne transmet que les 5 premières URL d'un `web_extract` (tools/web_tools.py)
+
+
+def _web_requests(tool_calls: str | None, seen: set[str]) -> int:
+    """Requêtes de recherche web d'un message de l'agent (`messages.tool_calls`, format OpenAI), comme Hermes
+    les envoie : une par `web_search`, une par URL de `web_extract` (le moteur lit une page par requête).
+    `seen` : identifiants d'appel déjà comptés dans la session (la compression du contexte en recopie la
+    fin sous le même identifiant de session)."""
     try:
         calls = json.loads(tool_calls or "[]")
     except ValueError:
@@ -94,16 +99,22 @@ def _web_requests(tool_calls: str | None) -> int:
     count = 0
     for call in calls if isinstance(calls, list) else []:
         fn = call.get("function") if isinstance(call, dict) else None
-        name = fn.get("name") if isinstance(fn, dict) else None
-        if name == "web_search":
+        if not isinstance(fn, dict) or fn.get("name") not in ("web_search", "web_extract"):
+            continue
+        call_id = call.get("id") if isinstance(call.get("id"), str) else None
+        if call_id in seen:
+            continue
+        if call_id:
+            seen.add(call_id)
+        if fn["name"] == "web_search":
             count += 1
-        elif name == "web_extract":
-            args = fn.get("arguments")
-            try:
-                urls = (json.loads(args) if isinstance(args, str) else args or {}).get("urls")
-            except (ValueError, AttributeError):
-                urls = None
-            count += len(urls) if isinstance(urls, list) else 1
+            continue
+        args = fn.get("arguments")
+        try:
+            urls = (json.loads(args) if isinstance(args, str) else args or {}).get("urls")
+        except (ValueError, AttributeError):
+            urls = None  # arguments illisibles : Hermes n'envoie rien
+        count += min(len(urls), _EXTRACT_MAX_URLS) if isinstance(urls, list) else 0
     return count
 
 
@@ -136,6 +147,7 @@ def run_usage(job_id: str | None, limit: int = 50, db: Path | None = None) -> li
             ).fetchall()
             usage: dict[str, list] = {}
             web: dict[str, int] = {}
+            seen: dict[str, set[str]] = {}
             if sessions:  # détail de toutes les exécutions, une requête par table
                 ids = [row["id"] for row in sessions]
                 marks = ",".join("?" * len(ids))
@@ -149,12 +161,15 @@ def run_usage(job_id: str | None, limit: int = 50, db: Path | None = None) -> li
                         usage.setdefault(m["session_id"], []).append(m)
                 except sqlite3.OperationalError:
                     pass
-                try:
+                try:  # seuls les messages de l'agent qui appellent un outil web sont décodés
                     for m in conn.execute(
                         f"SELECT session_id, tool_calls FROM messages WHERE session_id IN ({marks})"
-                        " AND tool_calls IS NOT NULL", ids,
+                        " AND role = 'assistant' AND tool_calls IS NOT NULL"  # index partiel de Hermes
+                        " AND (instr(tool_calls, '\"web_search\"') > 0"
+                        " OR instr(tool_calls, '\"web_extract\"') > 0)", ids,
                     ):
-                        web[m["session_id"]] = web.get(m["session_id"], 0) + _web_requests(m["tool_calls"])
+                        sid = m["session_id"]
+                        web[sid] = web.get(sid, 0) + _web_requests(m["tool_calls"], seen.setdefault(sid, set()))
                 except sqlite3.OperationalError:
                     pass
             runs = []
