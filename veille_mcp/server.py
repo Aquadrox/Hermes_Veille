@@ -81,8 +81,10 @@ Gestion des veilles technologiques automatisées (rapports PDF envoyés par e-ma
   avant `import_components` (mode add par défaut ; replace remplace toute la liste).
 - Clés d'API des distributeurs (Digi-Key) : JAMAIS par la conversation. Elles se saisissent dans
   l'interface web, page « Sources » ; `health` indique seulement si elles sont configurées.
-- Coûts : `get_costs` donne les tokens et le coût en USD de chaque exécution. DeepSeek facture
-  le double en heures pleines (lun–ven 01h–04h et 06h–10h UTC) ; `preview_schedule` le signale.
+- Coûts : `get_costs` donne les tokens et le coût en USD de chaque exécution, recherche web
+  comprise (`web_requests` / `web_usd` : requêtes DeepSeek Search & Fetch, 0,75 $ les 1 000, majorant).
+  DeepSeek facture le double en heures pleines (lun–ven 01h–04h et 06h–10h UTC, tokens seulement) ;
+  `preview_schedule` le signale.
 """
 
 
@@ -356,15 +358,17 @@ def _cost_run(r: dict) -> dict:
             "input_tokens": r["input_tokens"] + r["cache_read_tokens"],
             "input_cached_tokens": r["cache_read_tokens"], "output_tokens": r["output_tokens"],
             "reasoning_tokens": r["reasoning_tokens"], "api_calls": r["api_calls"],
-            "peak_hours": r["peak"], "cost_usd": r["cost_usd"],
+            "peak_hours": r["peak"], "web_requests": r["web_requests"], "web_usd": r["web_usd"],
+            "cost_usd": r["cost_usd"],
             "hermes_estimate_usd": r["hermes_estimate_usd"]}
 
 
 def get_costs(slug: str | None = None, days: int = 30) -> dict:
     """Tokens consommés et coût (USD) des exécutions : détail par exécution pour une veille
     (`slug`), sinon total du mois et des `days` derniers jours pour chaque veille. Le coût tient
-    compte des heures pleines DeepSeek (×2) ; `hermes_estimate_usd` est l'estimation de Hermes,
-    au seul tarif creux."""
+    compte des heures pleines DeepSeek (×2) et des requêtes de recherche web (`web_requests`,
+    `web_usd` : majorant) ; `hermes_estimate_usd` est l'estimation de Hermes, au seul tarif creux,
+    sans la recherche web."""
     days = max(1, min(days, 366))
     if slug is None:
         return service.costs_overview(days)

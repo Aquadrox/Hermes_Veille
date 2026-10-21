@@ -208,6 +208,7 @@ def test_get_costs_and_peak_preview(srv, demo, env):
     c = data(call(srv, "get_costs", {"slug": "veille-cyber", "days": 3650}))
     assert len(c["runs"]) == 2 and c["runs"][1]["peak_hours"] is True
     assert c["runs"][0]["input_cached_tokens"] == 1_600_000
+    assert (c["runs"][0]["web_requests"], c["runs"][0]["web_usd"]) == (5, 0)
     assert c["total_days_usd"] > 0
     ov = data(call(srv, "get_costs", {"days": 3650}))
     assert ov["veilles"][0]["slug"] == "veille-cyber"

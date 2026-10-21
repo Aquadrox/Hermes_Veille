@@ -9,24 +9,25 @@
 #   4. veille_core / veillectl, l'interface web     (venv séparé, service s6)
 #   5. veille-mcp : serveur MCP pour piloter les veilles depuis Hermes (Telegram)
 #   6. veille-guard : plugin Hermes, garde-fou des veilles contre l'injection de prompt
+#   7. deepseek-search-fetch : plugin Hermes, recherche web des veilles par DeepSeek Search & Fetch
 #
 # Tout l'état vit dans le volume /opt/data ; l'image reste stateless et
 # remplaçable par un simple `docker compose pull && up -d`.
 #
 # Image amont ÉPINGLÉE (FROM littéral : Dependabot propose les montées de version
 # en PR, validées par les tests et le smoke test de la CI — jamais de dérive silencieuse).
-FROM nousresearch/hermes-agent:v2026.9.24
+FROM nousresearch/hermes-agent:v0.22.2
 
 LABEL org.opencontainers.image.title="veille-hermes" \
       org.opencontainers.image.description="Veille technologique hebdomadaire : Hermes Agent + chaîne PDF (pandoc/WeasyPrint) + envoi e-mail Brevo" \
       org.opencontainers.image.source="https://github.com/Aquadrox/Hermes_Veille" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.base.name="nousresearch/hermes-agent:v2026.9.24"
+      org.opencontainers.image.base.name="nousresearch/hermes-agent:v0.22.2"
 
 # ── 1. Dépendances système de la chaîne PDF ────────────────────────────────────
 # pandoc : Markdown enrichi -> HTML ;  weasyprint : HTML -> PDF ;
 # poppler-utils : pdftoppm/pdftotext (contrôle qualité et vérification) ;
-# polices : rendu correct des rapports.
+# polices : rendu correct des rapports ; python3-venv : venv de l'application (section 4).
 USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -35,6 +36,7 @@ RUN apt-get update \
         poppler-utils \
         fonts-dejavu-core \
         fonts-liberation \
+        python3-venv \
     && rm -rf /var/lib/apt/lists/*
 # NE PAS terminer par `USER hermes` : /init (s6-overlay) doit démarrer en root
 # pour pouvoir chown le volume /opt/data. Les services supervisés, eux, passent
@@ -56,12 +58,12 @@ COPY --chmod=0755 docker/cont-init.d/50-seed-veille /etc/cont-init.d/50-seed-vei
 # ── 4. veille_core (veillectl) + interface web ─────────────────────────────────
 # Venv dédié : on ne touche pas aux dépendances de Hermes. L'interface parle à
 # Hermes uniquement par sa CLI publique (`hermes cron …`).
-# Python de l'image imposé (sinon uv suit le .python-version de /opt/hermes et
-# tenterait de télécharger un autre interpréteur).
+# Python de Debian imposé (/usr/bin/python3 ; `python3` du PATH est celui de Hermes) et venv
+# standard : l'image amont ne fournit plus `uv` dans le PATH depuis la v0.22.
 COPY requirements-app.txt /opt/veille-app/
 WORKDIR /opt/veille-app
-RUN UV_PYTHON_DOWNLOADS=never uv venv --quiet --python /usr/bin/python3 /opt/veille-app/.venv \
-    && uv pip install --quiet --no-cache --python /opt/veille-app/.venv/bin/python -r requirements-app.txt
+RUN /usr/bin/python3 -m venv /opt/veille-app/.venv \
+    && /opt/veille-app/.venv/bin/pip install --quiet --no-cache-dir --disable-pip-version-check -r requirements-app.txt
 WORKDIR /opt/hermes
 COPY VERSION /opt/veille-app/VERSION
 COPY veille_core/ /opt/veille-app/veille_core/
@@ -76,6 +78,12 @@ COPY --chmod=0755 docker/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
 # Plugin Hermes « intégré » (propriété root, lecture seule : l'agent ne peut pas le modifier),
 # activé par le hook de seed ; ses règles sont dans veille_core/guard.py.
 COPY docker/hermes-plugins/veille-guard/ /opt/hermes/plugins/veille-guard/
+
+# ── 7. Recherche web par DeepSeek Search & Fetch ──────────────────────────────
+# Plugin communautaire vendorisé à un commit relu (voir son VENDORED.md), même emplacement en lecture
+# seule ; web_search / web_extract gardent leur nom (garde-fou inchangé). Activé par le hook de seed,
+# sauf VEILLE_WEB_BACKEND=hermes.
+COPY docker/hermes-plugins/deepseek-search-fetch/ /opt/hermes/plugins/deepseek-search-fetch/
 
 # TERMINAL_MAX_FOREGROUND_TIMEOUT : `veillectl components scan` (jusqu'à 20 min) reste au premier plan ;
 # au-delà, Hermes la passerait en arrière-plan, dont le résultat ne se lit que par un outil refusé

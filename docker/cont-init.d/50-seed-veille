@@ -9,6 +9,8 @@
 #   2. règle modèle et fuseau dans config.yaml (premier démarrage uniquement)
 #   2 bis. garde-fou contre l'injection de prompt : outils des exécutions planifiées
 #      réduits, mémoire coupée, plugin veille-guard activé (à chaque démarrage)
+#   2 ter. recherche web par DeepSeek Search & Fetch (plugin de l'image), sauf
+#      VEILLE_WEB_BACKEND=hermes (à chaque démarrage)
 #   3. migre l'ancienne disposition mono-veille (/opt/data/veille) si présente
 #   4. crée la veille par défaut sur une installation neuve (une seule fois)
 #   5. réconcilie chaque veille avec son job cron (prompt re-rendu, job recréé
@@ -80,6 +82,22 @@ if [ -x "$HERMES_BIN" ]; then
         # les rapports ne partent plus et le chien de garde le signale.
         set_config platform_toolsets.cron "[web]" ERREUR
         log "ERREUR : plugin veille-guard non activé — exécutions planifiées réduites à la recherche web"
+    fi
+fi
+
+# --- 2 ter. Moteur de recherche web : DeepSeek Search & Fetch (À CHAQUE démarrage) ---
+# Plugin deepseek-search-fetch de l'image, même clé que le modèle. `web.backend` vaut pour la recherche
+# ET la lecture de pages, sans repli : un plugin absent se voit (erreur) au lieu de changer de moteur en
+# silence. VEILLE_WEB_BACKEND=hermes (ou plugin non activable) : moteur par défaut de Hermes — plugin
+# désactivé, sinon Hermes le choisirait encore (clé DeepSeek présente).
+if [ -x "$HERMES_BIN" ]; then
+    if [ "${VEILLE_WEB_BACKEND:-deepseek}" = deepseek ] && [ -n "${DEEPSEEK_API_KEY:-}" ] \
+        && as_hermes "$HERMES_BIN" plugins enable deepseek-search-fetch >/dev/null 2>&1; then
+        set_config web.backend deepseek ERREUR
+    else
+        as_hermes "$HERMES_BIN" plugins disable deepseek-search-fetch >/dev/null 2>&1 || true
+        as_hermes "$HERMES_BIN" config unset web.backend >/dev/null 2>&1 || true
+        log "recherche web : moteur par défaut de Hermes (VEILLE_WEB_BACKEND=${VEILLE_WEB_BACKEND:-deepseek})"
     fi
 fi
 

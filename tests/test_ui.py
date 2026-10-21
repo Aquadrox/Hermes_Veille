@@ -228,6 +228,8 @@ def test_costs_section_and_peak_warning(client, env):
     make_db(env, store.load("veille-cyber").job_id)
     page = client.get("/veilles/veille-cyber").text
     assert "Coût des exécutions" in page and "pleine ×2" in page and "creuse" in page
+    assert "<th>Web</th>" in page and "DeepSeek Search &amp; Fetch" in page
+    assert '<td data-label="Requêtes web">5</td>' in page     # avant « since » : sans coût ; libellé des cartes mobiles
     r = client.get("/fragments/schedule", params={"freq_kind": "weekly", "dow": "1", "time": "06:30"})
     assert "Heure pleine" not in r.text
     r = client.get("/fragments/schedule", params={"freq_kind": "weekly", "dow": "1", "time": "08:00"})

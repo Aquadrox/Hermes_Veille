@@ -8,11 +8,14 @@ Correspondance des tokens (normalisation de Hermes, `agent/usage_pricing.py`) :
   input_tokens      = entrée hors cache (cache miss)
   cache_read_tokens = entrée lue en cache (cache hit)
   output_tokens     = sortie, raisonnement COMPRIS (ne pas ajouter reasoning_tokens)
+
+La recherche web DeepSeek (Search & Fetch) se facture à la requête, hors tokens : section `web`.
 """
 from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 from pathlib import Path
 
 from . import paths, schedule
@@ -78,3 +81,18 @@ def run_cost(model: str | None, *, input_tokens: int = 0, cache_read_tokens: int
            + cache_read_tokens * rates.get("input_cache_hit", 0)
            + output_tokens * rates.get("output", 0)) / 1_000_000 * factor
     return round(usd, 6), peak
+
+
+def web_cost(requests: int, started_at: dt.datetime | float | int | None, table: dict | None = None) -> float:
+    """Coût en USD des requêtes de recherche web DeepSeek (Search & Fetch) d'une exécution.
+
+    Majorant : DeepSeek ne facture ni les échecs ni les résultats vides, et Hermes sert les recherches
+    répétées depuis son cache. Nul avant `web.since` (moteur précédent, gratuit) et avec
+    VEILLE_WEB_BACKEND=hermes (même lecture que l'amorçage : vide = deepseek).
+    """
+    web = (table or load()).get("web") or {}
+    if not requests or started_at is None or (os.environ.get("VEILLE_WEB_BACKEND") or "deepseek") != "deepseek":
+        return 0.0
+    if _as_utc(started_at).date().isoformat() < str(web.get("since") or ""):
+        return 0.0
+    return round(requests * float(web.get("usd_per_request", 0)), 6)

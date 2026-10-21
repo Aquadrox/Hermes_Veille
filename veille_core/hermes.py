@@ -84,12 +84,36 @@ def state_db() -> Path:
 _TOKEN_COLS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens")
 
 
+def _web_requests(tool_calls: str | None) -> int:
+    """Requêtes de recherche web d'un message de l'agent (`messages.tool_calls`, format OpenAI) :
+    une par `web_search`, une par URL de `web_extract` (le moteur lit une page par requête)."""
+    try:
+        calls = json.loads(tool_calls or "[]")
+    except ValueError:
+        return 0
+    count = 0
+    for call in calls if isinstance(calls, list) else []:
+        fn = call.get("function") if isinstance(call, dict) else None
+        name = fn.get("name") if isinstance(fn, dict) else None
+        if name == "web_search":
+            count += 1
+        elif name == "web_extract":
+            args = fn.get("arguments")
+            try:
+                urls = (json.loads(args) if isinstance(args, str) else args or {}).get("urls")
+            except (ValueError, AttributeError):
+                urls = None
+            count += len(urls) if isinstance(urls, list) else 1
+    return count
+
+
 def run_usage(job_id: str | None, limit: int = 50, db: Path | None = None) -> list[dict]:
     """Consommation des exécutions d'un job, la plus récente d'abord.
 
     Chaque exécution cron est une session Hermes `cron_<job_id>_<AAAAMMJJ_HHMMSS>` dans state.db.
     Les tokens sont lus par modèle dans `session_model_usage` (boucle principale ET tâches
-    auxiliaires : compression, titres…), sinon sur la ligne de session. Lecture seule ; toute
+    auxiliaires : compression, titres…), sinon sur la ligne de session ; les requêtes de recherche
+    web (`web_requests`) dans les appels d'outils de l'agent (`messages`). Lecture seule ; toute
     erreur (base absente, schéma différent) donne une liste vide.
     """
     if not job_id or not re.fullmatch(r"[0-9A-Za-z-]+", job_id):
@@ -111,16 +135,26 @@ def run_usage(job_id: str | None, limit: int = 50, db: Path | None = None) -> li
                 (prefix, prefix[:-1] + "`", int(limit)),
             ).fetchall()
             usage: dict[str, list] = {}
-            if sessions:  # détail par modèle de toutes les exécutions, en une requête
+            web: dict[str, int] = {}
+            if sessions:  # détail de toutes les exécutions, une requête par table
+                ids = [row["id"] for row in sessions]
+                marks = ",".join("?" * len(ids))
                 try:
                     for m in conn.execute(
                         "SELECT session_id, model, SUM(api_call_count) AS calls, SUM(estimated_cost_usd) AS est, "
                         + ", ".join(f"SUM({c}) AS {c}" for c in _TOKEN_COLS)
-                        + " FROM session_model_usage WHERE session_id IN ("
-                        + ",".join("?" * len(sessions)) + ") GROUP BY session_id, model",
-                        [row["id"] for row in sessions],
+                        + f" FROM session_model_usage WHERE session_id IN ({marks}) GROUP BY session_id, model",
+                        ids,
                     ):
                         usage.setdefault(m["session_id"], []).append(m)
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    for m in conn.execute(
+                        f"SELECT session_id, tool_calls FROM messages WHERE session_id IN ({marks})"
+                        " AND tool_calls IS NOT NULL", ids,
+                    ):
+                        web[m["session_id"]] = web.get(m["session_id"], 0) + _web_requests(m["tool_calls"])
                 except sqlite3.OperationalError:
                     pass
             runs = []
@@ -135,7 +169,7 @@ def run_usage(job_id: str | None, limit: int = 50, db: Path | None = None) -> li
                                **{c: row[c] or 0 for c in _TOKEN_COLS}}]
                 runs.append({"session_id": row["id"], "started_at": row["started_at"],
                              "ended_at": row["ended_at"], "end_reason": row["end_reason"],
-                             "models": models})
+                             "models": models, "web_requests": web.get(row["id"], 0)})
             return runs
         finally:
             conn.close()

@@ -37,6 +37,9 @@ docker run --rm --entrypoint /bin/bash "$REF" -lc '
              /opt/hermes/skills/productivity/styled-pdf-report/assets/report.css \
              /opt/hermes/plugins/veille-guard/plugin.yaml \
              /opt/hermes/plugins/veille-guard/__init__.py \
+             /opt/hermes/plugins/deepseek-search-fetch/plugin.yaml \
+             /opt/hermes/plugins/deepseek-search-fetch/__init__.py \
+             /opt/hermes/plugins/deepseek-search-fetch/LICENSE \
              /opt/hermes/veille-defaults/job-prompt.tmpl.md \
              /opt/hermes/veille-defaults/job-prompt-composants.tmpl.md \
              /opt/hermes/veille-defaults/templates/composants.md \
@@ -185,6 +188,19 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h \
 ' || { fail "garde-fou veille-guard inactif — adapter docker/hermes-plugins/veille-guard"; exit 1; }
 ok "garde-fou veille-guard actif"
 
+# --- 5 quater. Recherche web par DeepSeek Search & Fetch, vue par les outils web de Hermes ---
+log "moteur de recherche web DeepSeek (plugin Hermes, faux service local)"
+docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h \
+    -v "$REPO_DIR/scripts/web-probe.py:/tmp/web-probe.py:ro" "$REF" -lc '
+    set -e
+    mkdir -p /tmp/h
+    H=/opt/hermes/.venv/bin/hermes
+    $H plugins enable deepseek-search-fetch >/dev/null
+    $H config set web.backend deepseek >/dev/null
+    /opt/hermes/.venv/bin/python /tmp/web-probe.py
+' || { fail "recherche web DeepSeek inactive — adapter docker/hermes-plugins/deepseek-search-fetch"; exit 1; }
+ok "recherche web DeepSeek active"
+
 # --- 6. Interface web : démarre et exige une session ---
 log "interface web"
 docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h \
@@ -224,12 +240,13 @@ docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h "$REF" -lc '
 ' || { fail "serveur MCP en échec"; exit 1; }
 ok "serveur MCP fonctionnel"
 
-# --- 8. Contrat avec la base de sessions de Hermes (consommation de tokens) ---
+# --- 8. Contrat avec la base de sessions de Hermes (tokens, requêtes de recherche web) ---
 log "lecture de la consommation dans state.db (session créée par Hermes lui-même)"
 docker run --rm --entrypoint /bin/bash -e HERMES_HOME=/tmp/h "$REF" -lc '
     set -e
     mkdir -p /tmp/h && cd /opt/hermes
     .venv/bin/python - <<"PY"
+import json
 from pathlib import Path
 from hermes_state import SessionDB
 db = SessionDB(Path("/tmp/h/state.db"))
@@ -237,6 +254,10 @@ sid = "cron_abc123def456_20261005_063000"
 db.ensure_session(sid, source="cron", model="deepseek-v4-pro")
 db.update_token_counts(sid, input_tokens=1000, output_tokens=200, cache_read_tokens=3000,
                        model="deepseek-v4-pro", api_call_count=2)
+call = lambda i, name, args: {"id": i, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+db.append_message(sid, "assistant", content="", tool_calls=[
+    call("c1", "web_search", {"query": "veille"}), call("c2", "web_extract", {"urls": ["https://a.example", "https://b.example"]}),
+    call("c3", "read_file", {"path": "/tmp/x"})])
 PY
     cd /opt/veille-app && PYTHONPATH=/opt/veille-app .venv/bin/python - <<"PY"
 from veille_core import hermes, pricing
@@ -244,9 +265,10 @@ runs = hermes.run_usage("abc123def456")
 assert len(runs) == 1, runs
 m = {x["model"]: x for x in runs[0]["models"]}["deepseek-v4-pro"]
 assert (m["input_tokens"], m["cache_read_tokens"], m["output_tokens"]) == (1000, 3000, 200), m
+assert runs[0]["web_requests"] == 3, runs[0]  # 1 recherche + 2 pages lues
 usd, _ = pricing.run_cost("deepseek-v4-pro", input_tokens=1000, cache_read_tokens=3000, output_tokens=200)
 assert usd and usd > 0
-print("  session Hermes lue : 1000 / 3000 en cache / 200 tokens, tarif connu")
+print("  session Hermes lue : 1000 / 3000 en cache / 200 tokens, 3 requêtes web, tarif connu")
 PY
 ' || { fail "la base de sessions de Hermes a changé — adapter veille_core/hermes.py (run_usage)"; exit 1; }
 ok "lecture de la consommation compatible"

@@ -1,5 +1,6 @@
 """Consommation et coût : tarifs (heures pleines), lecture de state.db, service, CLI, interface."""
 import datetime as dt
+import json
 import sqlite3
 
 import pytest
@@ -10,7 +11,7 @@ UTC = dt.UTC
 PARIS_SUMMER = dt.timezone(dt.timedelta(hours=2))
 PARIS_WINTER = dt.timezone(dt.timedelta(hours=1))
 
-# Sous-ensemble du schéma de Hermes (hermes_state_common.py, v2026.9.24).
+# Sous-ensemble du schéma de Hermes (hermes_state_schema.py, v0.22.2).
 SCHEMA = """
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY, source TEXT NOT NULL, model TEXT, started_at REAL NOT NULL, ended_at REAL,
@@ -27,7 +28,16 @@ CREATE TABLE session_model_usage (
     actual_cost_usd REAL NOT NULL DEFAULT 0, cost_status TEXT, cost_source TEXT,
     first_seen REAL, last_seen REAL,
     PRIMARY KEY (session_id, model, billing_provider, billing_base_url, billing_mode, task));
+CREATE TABLE messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT,
+    tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, timestamp REAL NOT NULL);
 """
+
+
+def tool_calls(*calls) -> str:
+    """`messages.tool_calls` tel que Hermes l'écrit (format OpenAI, arguments en JSON)."""
+    return json.dumps([{"id": f"c{i}", "type": "function", "function": {"name": n, "arguments": json.dumps(a)}}
+                       for i, (n, a) in enumerate(calls)])
 
 
 # ---------------------------------------------------------------- tarifs
@@ -80,6 +90,17 @@ def make_db(home, job_id):
         db.execute("INSERT INTO session_model_usage (session_id, model, task, api_call_count, input_tokens,"
                    " output_tokens, cache_read_tokens, estimated_cost_usd) VALUES (?,?,?,?,?,?,?,?)",
                    (sid, "deepseek-v4-flash", "compression", 2, 100_000, 10_000, 0, 0.02))
+    # Appels d'outils de l'agent : 2 recherches + 3 pages lues (exécution creuse), 1 recherche (pleine).
+    off_sid, peak_sid = f"cron_{job_id}_20261005_063500", f"cron_{job_id}_20260928_080500"
+    for sid, calls in (
+        (off_sid, tool_calls(("web_search", {"query": "a"}), ("read_file", {"path": "/x"}))),
+        (off_sid, tool_calls(("web_search", {"query": "b"}), ("web_extract", {"urls": ["https://a", "https://b", "https://c"]}))),
+        (off_sid, "pas du JSON"),
+        (peak_sid, tool_calls(("web_search", {"query": "c"}))),
+        ("cron_autre_20261005_063500", tool_calls(("web_search", {"query": "autre job"}))),
+    ):
+        db.execute("INSERT INTO messages (session_id, role, tool_calls, timestamp) VALUES (?, 'assistant', ?, 0)",
+                   (sid, calls))
     # Session hors cron et cron d'un autre job : ignorées.
     db.execute("INSERT INTO sessions (id, source, started_at, input_tokens) VALUES ('tg_123', 'telegram', ?, 9)", (off,))
     db.execute("INSERT INTO sessions (id, source, started_at, input_tokens) VALUES ('cron_autre_20261005_063500', 'cron', ?, 9)", (off,))
@@ -103,6 +124,65 @@ def test_run_usage_reads_cron_sessions_with_aux_models(env, veille):
     models = {m["model"]: m for m in runs[0]["models"]}
     assert set(models) == {"deepseek-v4-pro", "deepseek-v4-flash"}
     assert models["deepseek-v4-pro"]["cache_read_tokens"] == 1_600_000
+
+
+@pytest.mark.parametrize("calls,expected", [
+    (tool_calls(("web_search", {"query": "x"})), 1),
+    (tool_calls(("web_extract", {"urls": ["https://a", "https://b"]}), ("web_search", {"query": "x"})), 3),
+    (json.dumps([{"function": {"name": "web_extract", "arguments": {"urls": ["https://a"]}}}]), 1),  # arguments déjà décodés
+    (json.dumps([{"function": {"name": "web_extract", "arguments": "pas du JSON"}}]), 1),           # URL inconnues : 1 requête
+    (tool_calls(("read_file", {"path": "/x"}), ("terminal", {"command": "date"})), 0),
+    ("pas du JSON", 0), ('{"name": "web_search"}', 0), ('[1, null, {"function": "x"}]', 0), (None, 0),
+])
+def test_web_requests_from_tool_calls(calls, expected):
+    assert hermes._web_requests(calls) == expected
+
+
+def test_run_usage_counts_web_requests(env, veille):
+    make_db(env, veille.job_id)
+    assert [r["web_requests"] for r in hermes.run_usage(veille.job_id)] == [5, 1]
+    db = sqlite3.connect(env / "state.db")
+    db.execute("DROP TABLE messages")  # base sans la table : tokens lus quand même
+    db.commit()
+    db.close()
+    assert [r["web_requests"] for r in hermes.run_usage(veille.job_id)] == [0, 0]
+
+
+def write_pricing(env, **web):
+    """Copie des tarifs de l'image dans le volume, section `web` modifiée."""
+    table = pricing.load()
+    table["web"] = {**table["web"], **web}
+    (env / "veilles").mkdir(exist_ok=True)
+    (env / "veilles" / "pricing.json").write_text(json.dumps(table))
+
+
+def test_web_cost(env, monkeypatch):
+    since = dt.datetime(2026, 10, 21, 0, 0, tzinfo=UTC)  # « since » de veille/pricing.json
+    assert pricing.web_cost(1000, since) == pytest.approx(0.75)
+    assert pricing.web_cost(1000, since.replace(hour=7)) == pytest.approx(0.75)  # heure pleine : tarif unique
+    assert pricing.web_cost(1000, since - dt.timedelta(seconds=1)) == 0          # moteur précédent, gratuit
+    assert pricing.web_cost(0, since) == 0 and pricing.web_cost(5, None) == 0
+    monkeypatch.setenv("VEILLE_WEB_BACKEND", "hermes")
+    assert pricing.web_cost(1000, since) == 0
+    monkeypatch.setenv("VEILLE_WEB_BACKEND", "")                                 # vide : deepseek (amorçage)
+    assert pricing.web_cost(1000, since) == pytest.approx(0.75)
+    write_pricing(env, usd_per_request=0.001, since="")
+    assert pricing.web_cost(1000, since - dt.timedelta(days=365)) == pytest.approx(1.0)
+    (env / "veilles" / "pricing.json").write_text('{"peak": {}, "models": {}}')  # copie antérieure à la 0.7.0
+    assert pricing.web_cost(1000, since) == 0
+
+
+def test_costs_service_adds_web_requests(env, veille):
+    make_db(env, veille.job_id)
+    before = {r["session_id"]: r for r in service.costs(veille.slug, days=3650)["runs"]}
+    assert [(r["web_requests"], r["web_usd"]) for r in before.values()] == [(5, 0), (1, 0)]  # avant « since »
+    write_pricing(env, since="2026-09-01")
+    after = service.costs(veille.slug, days=3650)["runs"]
+    assert [(r["web_requests"], r["web_usd"]) for r in after] == [(5, pytest.approx(0.0038, abs=1e-4)),
+                                                                  (1, pytest.approx(0.0008, abs=1e-4))]
+    for r in after:
+        assert r["cost_usd"] == pytest.approx(before[r["session_id"]]["cost_usd"] + r["web_requests"] * 0.00075,
+                                              abs=1e-4)
 
 
 def test_run_usage_is_robust(env, veille):
@@ -135,7 +215,7 @@ def test_cli_costs(env, veille, capsys):
     make_db(env, veille.job_id)
     assert main(["costs", veille.slug, "--days", "3650"]) == 0
     out = capsys.readouterr().out
-    assert "PLEINE" in out and "creuse" in out and "estimation Hermes" in out
+    assert "PLEINE" in out and "creuse" in out and "estimation Hermes" in out and "web    5 req." in out
     assert main(["costs"]) == 0 and "TOTAL" in capsys.readouterr().out
 
 

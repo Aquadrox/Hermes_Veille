@@ -3,7 +3,7 @@
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-extend-exclude = ["veille_ui/static"]
+extend-exclude = ["veille_ui/static", "docker/hermes-plugins/deepseek-search-fetch"]  # code tiers vendorisé
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]

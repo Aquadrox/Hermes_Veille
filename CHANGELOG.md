@@ -7,6 +7,67 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.7.0] — 2026-10-21
+
+Recherche web des veilles par l'API **DeepSeek Search & Fetch** (ouverte le 17/10/2026), avec la clé déjà
+utilisée pour le modèle ; Hermes Agent v0.22.2.
+
+### Ajouté
+
+- **Moteur de recherche web DeepSeek** : `web_search` et `web_extract` passent par
+  `api.deepseek.com/v1/tools/search|fetch`. Chaque résultat porte sa date de publication, ses scores de
+  pertinence et d'autorité. Plugin Hermes communautaire `deepseek-search-fetch` (Jason Swindle, MIT, non
+  affilié à DeepSeek) **vendorisé** au commit relu `b17ae50` (v1.0.8) dans
+  `docker/hermes-plugins/deepseek-search-fetch/`, installé en lecture seule dans `/opt/hermes/plugins`
+  (jamais téléchargé au démarrage) ; empreintes SHA-256 vérifiées par les tests. Noms d'outils
+  inchangés : garde-fou et marquage « non fiable » s'appliquent tels quels.
+- Amorçage (à chaque démarrage) : plugin activé et `web.backend: deepseek` (recherche et lecture de pages,
+  sans repli silencieux). **`VEILLE_WEB_BACKEND=hermes`** dans `.env` : retour au moteur par défaut de
+  Hermes (plugin désactivé, réglage retiré). Sans `DEEPSEEK_API_KEY`, moteur de Hermes.
+- **Coût de la recherche web** dans le coût des exécutions (interface : colonne « Web » ; `veillectl
+  costs` ; MCP `get_costs` : `web_requests`, `web_usd`) : requêtes lues dans les appels d'outils de
+  l'agent (`state.db`, une par recherche, une par page lue), à 0,75 $ les 1 000 (section `web` de
+  `pricing.json`, sans heures pleines). Majorant (échecs, résultats vides et cache de Hermes ne sont pas
+  facturés) ; rien avant le 2026-10-21 (`since`, moteur précédent gratuit) ni avec
+  `VEILLE_WEB_BACKEND=hermes`.
+- `scripts/web-probe.py` : contrat du moteur web avec Hermes (smoke test) — faux service DeepSeek sur la
+  boucle locale, interrogé par les vrais outils `web_search` / `web_extract`, sans clé ni coût.
+
+### Modifié
+
+- **Image amont : Hermes Agent v0.22.2** (v2026.9.24 = v0.21.5 auparavant), requise par le plugin
+  (`requires_hermes >=0.22.0`). Contrat vérifié : CLI `hermes cron` (`--model` épingle toujours le modèle
+  d'une veille), noms des outils web / fichiers / terminal, hooks du garde-fou, clés de configuration,
+  schéma de `state.db`. Debian 13, Python 3.13 pour l'application.
+- Venv de l'application créé par `python3 -m venv` + `pip` (`python3-venv` ajouté aux paquets) : l'image
+  amont ne fournit plus `uv` dans le PATH.
+- `deploy.sh` (et le test d'intégration) attendent l'amorçage 240 s au lieu de 120 : il prend ≈ 53 s
+  avec Hermes v0.22.2 (≈ 28 s avant), la marge se réduisait sur un petit serveur.
+- Tableau « Coût des exécutions » en mode mobile (PWA) : chaque valeur porte son libellé dans les cartes
+  (`data-label`, CSS seul), « Appels LLM » et « Requêtes web » ne se confondent plus.
+- Smoke test : fichiers du plugin, moteur web (sonde), requêtes web lues dans `state.db`. Test
+  d'intégration : réglage posé par l'amorçage, puis retour au moteur de Hermes.
+
+### Mesures
+
+- Exécution planifiée réelle (`hermes cron tick`, veille industrie-4-0, faux LLM et faux service DeepSeek
+  locaux) : requête initiale 23 757 → 22 470 octets (−5,4 %), schémas des 8 outils 13 131 → 11 936 octets
+  (−9,1 %) ; recherche et lecture de page servies par DeepSeek ; résultats marqués « non fiables » (garde-fou,
+  plus le nouvel encadrement de Hermes v0.22) ; date, scores de pertinence et d'autorité transmis à l'agent.
+- CLI de Hermes plus lente en v0.22.2 : ≈ 2,0 → ≈ 3,2 s par appel (`hermes cron list`, 5 mesures). Les
+  actions de l'interface qui passent par `hermes cron` (pause, reprise, lancement, historique) prennent
+  ≈ 1,2 s de plus ; le tableau de bord (lecture de `jobs.json`) n'est pas concerné.
+- Démarrage complet sur un volume neuf : ≈ 28 → ≈ 53 s (amorçage : une douzaine d'appels à la CLI de
+  Hermes), dont 2 appels (≈ 7 s) pour le moteur web.
+- Image : 4,70 → 5,36 Go (+14 %, image amont : Debian 13, Chromium) ; plugin : 30 Ko.
+
+### Déploiement
+
+- Rien à faire : `make update`. Vérifier dans les logs `[seed-veille] web.backend = deepseek`.
+- Copie de `pricing.json` dans le volume (`data/veilles/pricing.json`) : y ajouter la section `web` de
+  `veille/pricing.json`, sinon la recherche web compte pour 0.
+- Revenir au moteur de Hermes : `VEILLE_WEB_BACKEND=hermes` dans `.env`, puis `docker compose up -d`.
+
 ## [0.6.0] — 2026-10-21
 
 Protection contre l'injection de prompt : l'agent, qui lit le web, ne peut plus que chercher, lire les
