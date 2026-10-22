@@ -180,9 +180,9 @@ lundi 6h30 — job de la veille thématique rattachée
   l'avancement, l'audit et la sortie du scan.
 - **Passage par tranches** (0.7.2) : Hermes abandonne tout appel d'outil au bout de 7 min (420 s) ; chaque
   appel de `veillectl components scan` traite donc au plus ≈ 4 min de Digi-Key, **enregistre** ce qu'il a lu
-  et rend `"complete": false` ; l'agent relance le même appel, qui reprend aux références non vérifiées du
-  jour. Budget, plafond d'appels et pannes tolérées valent pour le passage entier ; le lot web n'est tiré qu'à
-  sa fin. Un passage **partiel** (budget atteint, Digi-Key en panne, exécution terminée avant sa fin) est
+  et rend `"complete": false` ; l'agent relance le même appel, qui reprend aux références non encore
+  vérifiées par ce passage (repris s'il a avancé depuis moins d'une heure, même à cheval sur minuit). Budget,
+  plafond d'appels et pannes tolérées valent pour le passage entier ; le lot web n'est tiré qu'à sa fin. Un passage **partiel** (budget atteint, Digi-Key en panne, exécution terminée avant sa fin) est
   publié et **dit comme tel** : encadré « Passage Digi-Key PARTIEL : k référence(s) sur n » dans le PDF et
   l'e-mail, « Digi-Key : k/n (PARTIEL) » en en-tête ; les autres passent en tête du passage suivant.
 - **À la demande** (interface ou Telegram) : « Lancer l'analyse » / `run_veille_now` exécute tout de

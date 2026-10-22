@@ -206,15 +206,16 @@ def check(tool: str, args: dict, s: Session | None) -> str | None:
     inert = _INERT_ARGS.get(tool, ())
     extra = sorted(k for k, value in args.items() if allowed is not None and k not in allowed and k not in inert
                    and value)
-    if extra:  # leurs noms dans le motif court du journal d'audit (avant « : »)
+    if extra:  # leurs noms (bornés : écrits par le LLM) dans le motif court du journal d'audit (avant « : »)
         permitted = ", ".join(f"{k} (<= {COMMAND_TIMEOUT} s)" if k == "timeout" else k for k in sorted(allowed))
-        return (f"paramètre(s) {', '.join(extra)} non autorisé(s) pour {tool} : params permis : {permitted} ; "
+        names = ", ".join(k[:40] for k in extra[:10])
+        return (f"paramètre(s) {names} non autorisé(s) pour {tool} : params permis : {permitted} ; "
                 "relance sans les autres" + (FOREGROUND if tool == "terminal" else ""))
     if tool == "terminal":
         if args.get("workdir") and _real(args["workdir"]) != s.dir:
             return f"répertoire de travail hors de la veille {s.slug} : workdir {s.dir} ou aucun"
         timeout = _number(args.get("timeout"))
-        if timeout > COMMAND_TIMEOUT:
+        if not timeout <= COMMAND_TIMEOUT:  # NaN compris
             return (f"durée maximale {COMMAND_TIMEOUT} s : relance avec un timeout <= {COMMAND_TIMEOUT} (au-delà, "
                     "Hermes abandonne l'appel ou passe la commande en arrière-plan, sans résultat lisible)")
         return _command(args.get("command"), s, timeout)
@@ -319,7 +320,8 @@ def prompt_tools(kind: str, dir_: Path, slug: str) -> str:
     `veillectl` tirées de VEILLECTL, comme lui) : l'agent n'a rien à essayer."""
     r = f"{dir_}/rapports"
     writes = f"`{r}/D-pcn.json`" if kind == "composants" else f"`{r}/D-veille.md`, `D-charts.json` et `D-mail.json`"
-    commands = (" ".join(filter(None, ("veillectl", name, slug, doc.format(r=r)))) for name, doc, _ in VEILLECTL[kind])
+    commands = (" ".join(filter(None, ("veillectl", name, slug, doc.format(r=r))))
+                for name, doc, _ in VEILLECTL.get(kind, ()))
     calls = "\n".join(f'  {{"command": "{c}", "timeout": {COMMAND_TIMEOUT}}}' for c in commands)
     return (
         "OUTILS AUTORISÉS — contrat exact, vérifié avant chaque appel : tout autre appel est refusé, et au "

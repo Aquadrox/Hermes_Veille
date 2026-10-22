@@ -21,9 +21,12 @@ plafond que le garde-fou connaissait (1 200 s dans l'image) ; le processus du sc
 
 - **D1 — scan par tranches reprenables.** Chaque appel de `veillectl components scan <slug>` traite au plus
   ≈ 220 s de Digi-Key, enregistre ce qu'il a lu et rend `"complete": false` ; l'agent relance le même appel, qui
-  reprend aux références non vérifiées du jour. Budget du passage (900 s, 900 appels, 10 pannes) cumulé sur ses
-  tranches ; lot web tiré à sa fin, avec les mêmes règles. Motif : ne dépend d'aucun plafond de Hermes au-delà de
-  la tranche, aucune nouvelle surface pour l'agent, une tranche arrêtée ne perd que ses propres lectures. Rejetés :
+  reprend aux références non vérifiées depuis le début du passage. Budget du passage (900 s, 900 appels,
+  10 pannes) et compteurs cumulés sur ses tranches ; un passage inachevé est repris s'il a avancé depuis moins
+  d'une heure, même à cheval sur minuit ; lot web tiré à sa fin, avec les mêmes règles, et aucun lot entre deux
+  tranches (un `finalize` anticipé ne marque pas recherché un lot ancien). Motif : ne dépend d'aucun plafond de
+  Hermes au-delà de la tranche, aucune nouvelle surface pour l'agent, une tranche arrêtée ne perd que ses propres
+  lectures. Rejetés :
   arrière-plan + `process_manage` (registre de processus commun à toutes les sessions de Hermes), relever les
   plafonds de Hermes (délai global, commande opaque et sans reprise), script lancé par Hermes avant l'agent (sa
   sortie, avec des titres d'avis venus du web, entrerait dans le prompt sans marquage « non fiable »).
@@ -39,9 +42,10 @@ plafond que le garde-fou connaissait (1 200 s dans l'image) ; le processus du sc
   `TERMINAL_MAX_FOREGROUND_TIMEOUT=1200` retiré du Dockerfile (inutile) ; le garde-fou ne lit plus cette variable.
 - **D4 — passage partiel publié, et dit.** Encadré « Passage Digi-Key PARTIEL du … : k référence(s) sur n
   interrogée(s) ; les autres gardent le statut de leur dernière vérification… » en tête du PDF, du chapitre et de
-  l'e-mail, « Digi-Key : k/n (PARTIEL) » dans l'en-tête du PDF et la sortie de `finalize` ; passage complet
-  signalé comme tel ; passage inachevé (exécution terminée entre deux tranches) dit « inachevé ». Les références
-  non vérifiées passent en tête du passage suivant. Rejeté : refuser de publier (avis et e-mail des fins de vie
+  l'e-mail (et dans la sortie de `finalize`), « Digi-Key : k/n (PARTIEL) » dans l'en-tête du PDF ; passage
+  complet signalé comme tel ; passage inachevé (exécution terminée entre deux tranches) dit « inachevé ».
+  Couverture enregistrée par le passage lui-même : une vérification à la demande ultérieure ne la change pas.
+  Les références non vérifiées passent en tête du passage suivant. Rejeté : refuser de publier (avis et e-mail des fins de vie
   retardés d'une semaine pour 16 références sur 386).
 - **D5 — signalement inchangé.** Statut `error` et motif dans `last_error` (0.7.1) ; chien de garde de l'hôte
   (10 h chaque jour) : alerte immédiate à un nouveau problème, rappel tous les 3 jours tant qu'il dure, e-mail de
@@ -52,7 +56,10 @@ plafond que le garde-fou connaissait (1 200 s dans l'image) ; le processus du sc
 ### Corrigé
 
 - **Scan des composants au-delà de 7 min** : il aboutit (voir D1). Prompt : relancer l'appel exact tant que
-  `"complete": false`, sans rien faire d'autre entre deux tranches.
+  `"complete": false`, sans rien faire d'autre entre deux tranches ; un appel sans sortie JSON (délai dépassé)
+  est relancé une seule fois.
+- Garde-fou : un `timeout` non numérique (`NaN`) est refusé ; les noms de paramètres refusés sont bornés dans le
+  journal d'audit.
 - Sonde de l'image (`guard-probe.py`) : elle teste la première commande de la veille selon son type, avec le
   timeout du prompt, et échoue si un plafond de Hermes est sous `COMMAND_TIMEOUT`.
 

@@ -45,17 +45,18 @@ class Clock:
 
 
 class SlowDigiKey:
-    """Digi-Key du 22/10 : `per_ref` s par référence ; `on_call(n, mpn)` simule une panne ou un arrêt."""
+    """Digi-Key du 22/10 : `per_ref` s par référence ; `on_call(n, mpn)` simule une panne ou un arrêt ; `answers` :
+    statut de certaines références (« Active » sinon)."""
 
-    def __init__(self, clock: Clock, on_call=None, per_ref: float = PER_REF):
-        self.clock, self.on_call, self.per_ref, self.calls = clock, on_call, per_ref, 0
+    def __init__(self, clock: Clock, on_call=None, per_ref: float = PER_REF, answers: dict | None = None):
+        self.clock, self.on_call, self.per_ref, self.answers, self.calls = clock, on_call, per_ref, answers or {}, 0
 
     def status(self, mpn, manufacturer):
         self.calls += 1
         self.clock.t += self.per_ref
         if self.on_call:
             self.on_call(self.calls, mpn)
-        return {"status": "Active", "product_url": None}
+        return self.answers.get(mpn, {"status": "Active", "product_url": None})
 
     def pause(self, seconds):
         self.clock.t += seconds
@@ -101,7 +102,7 @@ def documented_scan_call(v) -> dict:
     return json.loads(m.group(0))
 
 
-def agent_scan(v, clock: Clock, on_call=None, per_ref: float = PER_REF, max_calls: int = 20):
+def agent_scan(v, clock: Clock, on_call=None, per_ref: float = PER_REF, max_calls: int = 20, answers=None):
     """L'agent selon son prompt : l'appel documenté, permis par le garde-fou, relancé tel quel tant que la sortie
     dit "complete": false. Renvoie la durée de chaque appel (temps Digi-Key simulé) et la dernière sortie."""
     call = documented_scan_call(v)
@@ -109,7 +110,7 @@ def agent_scan(v, clock: Clock, on_call=None, per_ref: float = PER_REF, max_call
     for _ in range(max_calls):
         assert guard.enforce("terminal", call, run_of(v), "tour-1") is None
         start = clock.t
-        out = service.components_scan(v.slug, client=SlowDigiKey(clock, on_call, per_ref))
+        out = service.components_scan(v.slug, client=SlowDigiKey(clock, on_call, per_ref, answers))
         durations.append(clock.t - start)
         if out.get("complete") is not False:
             return durations, out
@@ -256,6 +257,60 @@ def test_manual_run_shows_the_pass_progress_between_slices(incident, clock, monk
     assert first["step"] == "digikey" and first["digikey"] == {"done": out["digikey"]["done"], "total": 386}
     service.components_scan(SLUG, client=SlowDigiKey(clock))
     assert progress.read(SLUG)["digikey"]["done"] > first["digikey"]["done"] and "batch" not in progress.read(SLUG)
+
+
+def test_pass_resumes_across_midnight(incident, clock, monkeypatch):
+    """Tir commencé avant minuit : la tranche d'après minuit reprend le MÊME passage (budget, références déjà lues)
+    au lieu d'en recommencer un ; un passage inachevé ancien (autre tir) n'est pas repris."""
+    first = service.components_scan(SLUG, client=SlowDigiKey(clock))
+    before = checked_today(SLUG)
+    day = comp.today()
+    tomorrow = (service.dt.date.fromisoformat(day) + service.dt.timedelta(days=1)).isoformat()
+    monkeypatch.setattr(comp, "today", lambda: tomorrow)
+    seen: list[str] = []
+    durations, out = agent_scan(incident, clock, on_call=lambda n, mpn: seen.append(mpn))
+    scan = comp.load_components(SLUG)["scan"]
+    assert first["complete"] is False and not set(seen) & before and len(set(seen)) == len(seen)
+    assert scan["date"] == day and scan["seconds"] <= service.SCAN_BUDGET_S + PER_REF
+    assert out["digikey"]["done"] == len(before) + len(seen) == scan["verified"]
+    # passage inachevé d'un tir plus ancien : un nouveau passage, budget neuf
+    service.comp.save_components(SLUG, {**comp.load_components(SLUG),
+                                         "scan": {**scan, "complete": False, "at": time.time() - 2 * 3600}})
+    service.components_scan(SLUG, client=SlowDigiKey(clock))
+    assert comp.load_components(SLUG)["scan"]["date"] == tomorrow
+
+
+def test_coverage_is_the_pass_one_not_recomputed(incident, clock, tools, monkeypatch):  # noqa: F811
+    """La couverture publiée est celle du passage, enregistrée à sa fin : une vérification à la demande faite
+    ensuite (autre jour) ne la fait pas passer pour partielle dans le chapitre ou le rapport suivant."""
+    monkeypatch.setattr(service, "SCAN_BUDGET_S", 10_000)
+    agent_scan(incident, clock)
+    later = (service.dt.date.fromisoformat(comp.today()) + service.dt.timedelta(days=2)).isoformat()
+    monkeypatch.setattr(comp, "today", lambda: later)
+    service.components_scan(SLUG, client=SlowDigiKey(clock), plan_batch=False, budget_s=600)  # ≈ 230 références
+    cov = comp.scan_coverage(comp.load_components(SLUG)["scan"])
+    assert (cov["partial"], cov["checked"], cov["total"]) == (False, 386, 386)
+
+
+def test_pass_counters_cover_all_slices(incident, clock):
+    """Avis Digi-Key trouvés à la 1re tranche : comptés dans la sortie finale du passage (pas seulement ceux de la
+    dernière tranche), comme les statuts lus."""
+    durations, out = agent_scan(incident, clock, answers={"CRCW0002": {"status": "Obsolete", "product_url": None}})
+    assert len(durations) > 1 and out["new_digikey_notices"] == 1
+    assert out["digikey"]["checked"] == out["digikey"]["done"] == len(checked_today(SLUG))
+
+
+def test_unfinished_pass_leaves_no_stale_batch(incident, clock):
+    """Tir précédent mort entre scan et finalize : son lot ne survit pas à une tranche inachevée ; un finalize
+    anticipé ne le marquerait pas recherché sur le web sans recherche."""
+    service.comp.save_components(SLUG, {**comp.load_components(SLUG), "batch": ["vishay0|CRCW0000"]})
+    assert service.components_scan(SLUG, client=SlowDigiKey(clock))["complete"] is False
+    assert comp.load_components(SLUG)["batch"] == []
+
+
+def test_nan_timeout_is_refused(incident):
+    scan = {"command": f"veillectl components scan {SLUG}", "timeout": "nan"}
+    assert guard.check("terminal", scan, run_of(incident)).startswith("durée maximale")
 
 
 def test_status_check_on_demand_stays_a_single_call(incident, clock):

@@ -51,6 +51,7 @@ SCAN_BUDGET_S = 900  # passage Digi-Key, toutes tranches confondues : la suite a
 # terme (jeton expiré : 2 authentifications et 2 requêtes) et l'enregistrement tiennent dans guard.COMMAND_TIMEOUT.
 SCAN_SLICE_S = guard.COMMAND_TIMEOUT - 4 * digikey.HTTP_TIMEOUT - 60  # 220 s
 SCAN_BUDGET_STOP = "budget de temps ou d'appels atteint : suite au prochain passage"
+SCAN_RESUME_S = 3600  # passage inachevé repris s'il a avancé depuis moins d'une heure (tranches d'un même tir)
 
 
 class ServiceError(RuntimeError):
@@ -619,12 +620,14 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
     références) dépasse le délai que Hermes accorde à un appel d'outil (420 s) : chaque appel de l'agent traite au
     plus SCAN_SLICE_S de Digi-Key, ENREGISTRE ce qu'il a lu, puis rend `"complete": false` ; relancé tel quel, il
     reprend aux références non vérifiées aujourd'hui. Le passage garde son budget (SCAN_BUDGET_S, MAX_CALLS, pannes
-    tolérées), cumulé sur ses tranches (`scan` de components.json) ; le lot web n'est tiré qu'à sa fin, avec les mêmes
-    règles qu'avant. Rejetés : l'arrière-plan avec `process_manage` (registre de processus commun à toutes les
+    tolérées) et ses compteurs, cumulés sur ses tranches (`scan` de components.json) ; le lot web n'est tiré qu'à sa
+    fin, avec les mêmes règles qu'avant ; entre deux tranches, aucun lot (un finalize anticipé ne marquerait pas
+    recherché un lot ancien). Rejetés : l'arrière-plan avec `process_manage` (registre de processus commun à toutes les
     sessions de Hermes : une porte de plus pour une page piégée), relever les plafonds de Hermes (délai commun à
     toutes ses sessions, commande opaque et sans reprise ; voir guard.COMMAND_TIMEOUT), un script lancé par Hermes
     avant l'agent (sa sortie, dont des titres d'avis venus du web, entrerait dans le prompt sans le marquage « non
-    fiable » des résultats d'outils). Un passage du jour (date du serveur) ; une tranche arrêtée net (SIGTERM) ne
+    fiable » des résultats d'outils). Un passage inachevé est repris s'il a avancé depuis moins de SCAN_RESUME_S,
+    même à cheval sur minuit (références vérifiées depuis son début sautées) ; une tranche arrêtée net (SIGTERM) ne
     perd que ses propres lectures.
 
     `plan_batch=False` (vérification à la demande, processus détaché, sans délai d'outil) : un seul appel pour tout
@@ -650,10 +653,12 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
     creds = digikey.credentials()
     data = comp.load_components(slug)
     last = data.get("scan") or {}
-    # Passage du job : celui du jour s'il n'est pas fini, sinon un nouveau (budget neuf).
-    run = (last if plan_batch and last.get("date") == day and not last.get("done")
-           else {"date": day, "seconds": 0.0, "calls": 0, "incidents": 0})
-    info: dict = {"configured": bool(creds or client), "checked": 0, "errors": 0}
+    # Passage du job : l'inachevé qui vient d'avancer (même tir), sinon un nouveau (budget neuf) ; vérification à la
+    # demande : toujours un passage à part, jamais enregistré.
+    resume = plan_batch and not last.get("complete") and time.time() - last.get("at", 0) < SCAN_RESUME_S
+    run = last if resume else {"date": day, "seconds": 0.0, "calls": 0, "incidents": 0, "checked": 0, "errors": 0,
+                               "notices": 0}
+    info: dict = {"configured": bool(creds or client), "checked": run["checked"], "errors": run["errors"]}
     results: dict[str, dict] = {}
     complete = True  # passage fini à l'issue de cet appel ; sinon tranche écoulée, suite à l'appel suivant
     total = len(data["components"])
@@ -661,9 +666,9 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
     if creds or client:
         client = client or digikey.Client(*creds)
         start = time.monotonic()
-        # Sauf ceux déjà vérifiés aujourd'hui (tranches précédentes, relance du même jour).
+        # Sauf celles vérifiées depuis le début du passage (tranches précédentes, relance du même jour).
         todo = [c for c in sorted(data["components"], key=lambda c: (c.get("dk") or {}).get("checked_at") or "")
-                if ((c.get("dk") or {}).get("checked_at") or "") != day]
+                if ((c.get("dk") or {}).get("checked_at") or "") < run["date"]]
         done_before = total - len(todo)
         left = budget - run["seconds"]  # budget restant du passage
         slice_s = min(SCAN_SLICE_S, left) if plan_batch else left
@@ -745,21 +750,25 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
                 if not prev.get("error"):  # Digi-Key ne la trouve plus : recherche web prioritaire, une fois
                     dk["changed_at"] = day
             c["dk"] = dk
+        # Couverture du passage enregistrée telle quelle (D4) : une vérification ultérieure ne la change pas.
+        run.update(at=time.time(), configured=info["configured"], checked=info["checked"], errors=info["errors"],
+                   notices=run["notices"] + len(new), total=len(data["components"]),
+                   verified=comp.checked_since(data["components"], run["date"]))
         lot = []
         if plan_batch:
             if complete:
                 lot = comp.batch(data["components"], v.batch_size) if data["components"] else []
-                data["batch"] = [comp.key_of(c["mpn"], c["manufacturer"]) for c in lot]
-                run.update(done=True, note=_dk_note(info))
-            data["scan"] = {**run, "configured": info["configured"]}  # couverture du rapport (D4)
+                run.update(complete=True, note=_dk_note(info))
+            data["batch"] = [comp.key_of(c["mpn"], c["manufacturer"]) for c in lot]
+            data["scan"] = run
         comp.save_components(slug, data)
         if new:
             comp.save_notices(slug, notices)
         _index(slug, data["components"], notices)
         if info["configured"]:
-            info.update(done=comp.checked_on(data["components"], day), total=len(data["components"]))
+            info.update(done=run["verified"], total=run["total"])
     note = _dk_note(info)
-    audit(actor, "components-scan", slug, f"Digi-Key {info['checked']} vérifié(s), {len(new)} avis ; "
+    audit(actor, "components-scan", slug, f"Digi-Key {info['checked']} vérifié(s), {run['notices']} avis ; "
           + (f"lot web {len(lot)}" if complete else f"tranche : {info['done']}/{info['total']} vérifié(s)")
           + (f" ; Digi-Key : {note[:200]}" if note else ""))
     if not complete:
@@ -780,7 +789,7 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
     for n in notices:
         known.setdefault(n["key"], []).append(n.get("number") or n["title"])
     return {"slug": slug, "date": day, "complete": True, "track_progress": track is not None and plan_batch,
-            "digikey": info, "new_digikey_notices": len(new),
+            "digikey": info, "new_digikey_notices": run["notices"],
             "batch": [{"mpn": c["mpn"], "manufacturer": c["manufacturer"],
                        "since": comp.search_since(c), "digikey_status": (c.get("dk") or {}).get("status"),
                        # non nul : Digi-Key ne la trouve pas, l'agent établit lui-même son statut (« statuses »)

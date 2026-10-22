@@ -531,12 +531,12 @@ def batch(components: list[dict], size: int) -> list[dict]:
     return sorted(components, key=rank)[: max(1, size)]
 
 
-def checked_on(components: list[dict], day: str) -> int:
-    """Références interrogées chez Digi-Key ce jour-là (statut lu, ou référence qu'il ne connaît pas)."""
-    return sum(1 for c in components if (c.get("dk") or {}).get("checked_at") == day)
+def checked_since(components: list[dict], day: str) -> int:
+    """Références interrogées chez Digi-Key depuis ce jour (statut lu, ou référence qu'il ne connaît pas)."""
+    return sum(1 for c in components if ((c.get("dk") or {}).get("checked_at") or "") >= day)
 
 
-def scan_coverage(components: list[dict], scan: dict | None) -> dict | None:
+def scan_coverage(scan: dict | None) -> dict | None:
     """D4 — couverture du dernier passage Digi-Key, pour le rapport, le chapitre et l'e-mail :
     {"partial", "checked", "total", "text"}.
 
@@ -548,9 +548,9 @@ def scan_coverage(components: list[dict], scan: dict | None) -> dict | None:
     """
     if not scan or not scan.get("configured"):
         return None
-    total, checked = len(components), checked_on(components, scan["date"])
-    note = scan.get("note") if scan.get("done") else "passage inachevé : l'exécution s'est terminée avant sa fin"
-    partial = not (scan.get("done") and checked >= total)
+    checked, total = scan.get("verified", 0), scan.get("total", 0)  # enregistrés par le passage
+    note = scan.get("note") if scan.get("complete") else "passage inachevé : l'exécution s'est terminée avant sa fin"
+    partial = not (scan.get("complete") and checked >= total)
     text = (f"Passage Digi-Key {'PARTIEL' if partial else 'complet'} du {scan['date']} : {checked} référence(s) sur "
             f"{total} interrogée(s)")
     if total > checked:
@@ -684,7 +684,7 @@ def digest(components: list[dict], notices: list[dict], new: list[dict], scan: d
         "components": len(components),
         "web_checked": sum(1 for c in components if c.get("web_checked_at")),
         "dk_checked": sum(1 for c in components if (c.get("dk") or {}).get("status")),
-        "coverage": scan_coverage(components, scan),
+        "coverage": scan_coverage(scan),
     }
 
 
