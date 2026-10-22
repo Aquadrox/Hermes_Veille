@@ -46,7 +46,7 @@ def render(v: Veille) -> str:
     values = {k: _quote_safe(val) for k, val in variables(v).items()}
     # Règles et contrat des outils multilignes, construits à partir du chemin du volume (slug validé par SLUG_RE).
     return tpl.substitute(values, security=guard.prompt_rules(v.dir), tools=guard.prompt_tools(v.kind, v.dir, v.slug),
-                          scan_timeout=guard.SCAN_TIMEOUT)
+                          command_timeout=guard.COMMAND_TIMEOUT)
 
 
 def write(v: Veille) -> bool:

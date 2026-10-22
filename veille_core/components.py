@@ -231,7 +231,10 @@ def _save(slug: str, name: str, data: dict) -> None:
 
 def load_components(slug: str) -> dict:
     data = _load(slug, "components.json")
-    return {"components": data.get("components") or [], "batch": data.get("batch") or []}
+    out = {"components": data.get("components") or [], "batch": data.get("batch") or []}
+    if isinstance(data.get("scan"), dict):  # passage Digi-Key en cours ou dernier passage (service.components_scan)
+        out["scan"] = data["scan"]
+    return out
 
 
 def save_components(slug: str, data: dict) -> None:
@@ -528,6 +531,34 @@ def batch(components: list[dict], size: int) -> list[dict]:
     return sorted(components, key=rank)[: max(1, size)]
 
 
+def checked_since(components: list[dict], day: str) -> int:
+    """Références interrogées chez Digi-Key depuis ce jour (statut lu, ou référence qu'il ne connaît pas)."""
+    return sum(1 for c in components if ((c.get("dk") or {}).get("checked_at") or "") >= day)
+
+
+def scan_coverage(scan: dict | None) -> dict | None:
+    """D4 — couverture du dernier passage Digi-Key, pour le rapport, le chapitre et l'e-mail :
+    {"partial", "checked", "total", "text"}.
+
+    Un passage partiel (budget atteint, Digi-Key en panne, exécution terminée entre deux tranches) est publié, et
+    TOUJOURS dit comme tel, avec le nombre de références vérifiées : jamais présenté comme complet. Les autres
+    gardent le statut de leur dernière vérification et passent en tête du passage suivant (les plus anciennes
+    d'abord). Rejetés : refuser de publier (avis et lot web perdus, e-mail des fins de vie retardé d'une semaine
+    pour 16 références sur 386), ou se taire. None sans passage avec Digi-Key : le rapport n'affirme alors rien.
+    """
+    if not scan or not scan.get("configured"):
+        return None
+    checked, total = scan.get("verified", 0), scan.get("total", 0)  # enregistrés par le passage
+    note = scan.get("note") if scan.get("complete") else "passage inachevé : l'exécution s'est terminée avant sa fin"
+    partial = not (scan.get("complete") and checked >= total)
+    text = (f"Passage Digi-Key {'PARTIEL' if partial else 'complet'} du {scan['date']} : {checked} référence(s) sur "
+            f"{total} interrogée(s)")
+    if total > checked:
+        text += (f" ; les {total - checked} autre(s) gardent le statut de leur dernière vérification et passent en "
+                 "priorité au prochain passage")
+    return {"partial": partial, "checked": checked, "total": total, "text": text + (f" ({note})." if note else ".")}
+
+
 def search_since(c: dict) -> str | None:
     """Date à partir de laquelle chercher (None : historique complet, jamais vérifié)."""
     web = c.get("web_checked_at")
@@ -639,8 +670,8 @@ def summary(components: list[dict], notices: list[dict]) -> dict:
     return {"components": len(components), "notices": len(notices), "critical": len(critical)}
 
 
-def digest(components: list[dict], notices: list[dict], new: list[dict]) -> dict:
-    """Vue commune au rapport, au chapitre et à l'e-mail."""
+def digest(components: list[dict], notices: list[dict], new: list[dict], scan: dict | None = None) -> dict:
+    """Vue commune au rapport, au chapitre et à l'e-mail ; `scan` : dernier passage Digi-Key (`scan_coverage`)."""
     keys = {key_of(c["mpn"], c["manufacturer"]) for c in components}
     worst = worst_by_key(notices)
     reminder = _sort([w for k, w in worst.items() if k in keys and w["type"] in CRITICAL])
@@ -653,6 +684,7 @@ def digest(components: list[dict], notices: list[dict], new: list[dict]) -> dict
         "components": len(components),
         "web_checked": sum(1 for c in components if c.get("web_checked_at")),
         "dk_checked": sum(1 for c in components if (c.get("dk") or {}).get("status")),
+        "coverage": scan_coverage(scan),
     }
 
 
@@ -740,6 +772,9 @@ def to_markdown(view: dict, heading: str = "##", reminder_limit: int = 200) -> s
              "::: {.fig}", f"**{len(rem)}** / {view['components']}", "",
              "composant(s) suivi(s) en fin de vie ou en dernière commande", ":::",
              ":::", ""]
+    cov = view.get("coverage")
+    if cov and cov["partial"]:
+        lines += ["::: {.callout .vigilance}", md_escape(cov["text"]), ":::", ""]
     if crit_rows:
         lines += ["::: {.critical}", f"{sub} Nouvelles fins de vie et dernières commandes", "",
                   *_md_table(crit_rows), ":::", ""]
@@ -755,6 +790,8 @@ def to_markdown(view: dict, heading: str = "##", reminder_limit: int = 200) -> s
         lines += [f"{sub} Détail par composant", ""]
         for r in detail_rows:
             lines += _md_detail(r)
+    if cov and not cov["partial"]:
+        lines += [f"*{md_escape(cov['text'])}*", ""]
     lines += [f"*Couverture : {view['components']} composants suivis ; statut Digi-Key connu pour "
               f"{view['dk_checked']} ; recherche web effectuée au moins une fois pour {view['web_checked']}.*", ""]
     return "\n".join(lines)
@@ -796,8 +833,12 @@ def to_html_email(view: dict, title: str, ui_hint: str = "") -> str:
 
     crit_rows, other_rows, rem_rows = _sections(view, 200)
     rem = view["reminder"]
+    cov = view.get("coverage")
     parts = ['<div style="font-family:Arial,sans-serif;color:#1f2933;max-width:900px">',
              f"<h2 style=\"margin:0 0 12px\">{esc(title)}</h2>"]
+    if cov and cov["partial"]:
+        parts.append(f'<div style="border-left:6px solid #d97706;background:#fff7ed;padding:10px;margin:12px 0">'
+                     f"<b>⚠ {esc(cov['text'])}</b></div>")
     if crit_rows:
         parts.append(f'<div style="border-left:6px solid #b91c1c;background:#fef2f2;padding:10px;margin:12px 0">'
                      f'<h3 style="color:#b91c1c;margin:0 0 8px">⚠ {len(crit_rows)} composant(s) avec une nouvelle '
@@ -809,14 +850,16 @@ def to_html_email(view: dict, title: str, ui_hint: str = "") -> str:
     if rem_rows:
         parts.append(f"<h3>Rappel : {len(rem)} composant(s) en fin de vie ou en dernière commande</h3>"
                      f"{table(rem_rows, '#7f1d1d')}")
-    parts.append(f'<p style="color:#66727f;font-size:12px">{view["components"]} composants suivis. '
+    done = f"{esc(cov['text'])} " if cov and not cov["partial"] else ""
+    parts.append(f'<p style="color:#66727f;font-size:12px">{view["components"]} composants suivis. {done}'
                  f"Détail de chaque avis dans le PDF joint. {esc(ui_hint)}</p></div>")
     return "".join(parts)
 
 
 def to_text_email(view: dict) -> str:
     crit_rows, other_rows, _ = _sections(view, 0)
-    lines = []
+    cov = view.get("coverage")
+    lines = [f"⚠ {cov['text']}", ""] if cov and cov["partial"] else []
     for label, rows in (("NOUVELLES FINS DE VIE / DERNIÈRES COMMANDES", crit_rows),
                         ("AUTRES NOUVEAUX AVIS", other_rows)):
         if rows:
@@ -824,7 +867,11 @@ def to_text_email(view: dict) -> str:
             lines += [f"- {r['mpn']} ({r['manufacturer']}) : {', '.join(TYPES[t][0] for t in r['types'])}"
                       f"{' — ' + r['link']['url'] if r['link'] else ''}" for r in rows]
             lines.append("")
-    return "\n".join(lines) or "Aucun nouvel avis depuis le précédent envoi."
+    if not crit_rows and not other_rows:
+        lines.append("Aucun nouvel avis depuis le précédent envoi.")
+    if cov and not cov["partial"]:
+        lines.append(cov["text"])
+    return "\n".join(lines)
 
 
 # Export Excel : une ligne par composant, comme la liste de l'interface (`group(..., include_quiet=True)`).

@@ -85,11 +85,9 @@ COPY docker/hermes-plugins/veille-guard/ /opt/hermes/plugins/veille-guard/
 # si VEILLE_WEB_BACKEND vaut deepseek (défaut).
 COPY docker/hermes-plugins/deepseek-search-fetch/ /opt/hermes/plugins/deepseek-search-fetch/
 
-# TERMINAL_MAX_FOREGROUND_TIMEOUT : `veillectl components scan` (≈ 1 040 s, 17 min, au pire ; appelé avec
-# timeout = guard.SCAN_TIMEOUT = 1200) reste au premier plan ; au-delà, Hermes la passerait en
-# arrière-plan, dont le résultat ne se lit que par un outil refusé par le garde-fou
-# (veille_core/guard.py). Valeur >= SCAN_TIMEOUT vérifiée par tests/test_guard.py et guard-probe.py.
+# Plafonds de Hermes laissés à leurs valeurs par défaut (premier plan du terminal 600 s, délai de tout appel
+# d'outil 420 s) : les commandes d'une veille durent au plus guard.COMMAND_TIMEOUT (360 s), le scan Digi-Key
+# avance par tranches (v0.7.2). Vérifié contre Hermes lui-même par scripts/guard-probe.py (smoke test).
 ENV TZ=Europe/Paris \
-    VEILLE_DEFAULTS=/opt/hermes/veille-defaults \
-    TERMINAL_MAX_FOREGROUND_TIMEOUT=1200
+    VEILLE_DEFAULTS=/opt/hermes/veille-defaults
 EXPOSE 8088

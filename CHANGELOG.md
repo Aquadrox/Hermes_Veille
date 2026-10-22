@@ -7,6 +7,76 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.7.2] — 2026-10-22
+
+Incident du 22/10/2026, 07:00 (0.7.1) : tir de la veille composants « composants-nomenclature-2 » (386 références)
+en échec explicite après 27 min (0,0847 $), sans rapport ni e-mail. `veillectl components scan` dure ≈ 17 min ;
+les trois appels avec `timeout: 1200` ont rendu « timed out after 420.0s », sans sortie. **Origine du 420 s** :
+Hermes v0.22.2 abandonne TOUT appel d'outil au bout de 420 s (`agent/tool_executor.py`,
+`_DEFAULT_CONCURRENT_TOOL_TIMEOUT_S`, réglable par `timeouts.tools.sequential_call` / `concurrent_batch` de
+`config.yaml` ou `HERMES_CONCURRENT_TOOL_TIMEOUT_S`), indépendamment de `TERMINAL_MAX_FOREGROUND_TIMEOUT`, seul
+plafond que le garde-fou connaissait (1 200 s dans l'image) ; le processus du scan est alors arrêté avec ses lectures.
+
+### Décisions
+
+- **D1 — scan par tranches reprenables.** Chaque appel de `veillectl components scan <slug>` traite au plus
+  ≈ 220 s de Digi-Key, enregistre ce qu'il a lu et rend `"complete": false` ; l'agent relance le même appel, qui
+  reprend aux références non vérifiées depuis le début du passage. Budget du passage (900 s, 900 appels,
+  10 pannes) et compteurs cumulés sur ses tranches ; un passage inachevé est repris s'il a avancé depuis moins
+  d'une heure, même à cheval sur minuit ; lot web tiré à sa fin, avec les mêmes règles, et aucun lot entre deux
+  tranches (un `finalize` anticipé ne marque pas recherché un lot ancien). Motif : ne dépend d'aucun plafond de
+  Hermes au-delà de la tranche, aucune nouvelle surface pour l'agent, une tranche arrêtée ne perd que ses propres
+  lectures. Rejetés :
+  arrière-plan + `process_manage` (registre de processus commun à toutes les sessions de Hermes), relever les
+  plafonds de Hermes (délai global, commande opaque et sans reprise), script lancé par Hermes avant l'agent (sa
+  sortie, avec des titres d'avis venus du web, entrerait dans le prompt sans marquage « non fiable »).
+- **D2 — garde-fou : rien de plus permis, sauf l'inerte.** Toujours refusés : arrière-plan, `notify`, `pty`,
+  `persist_on_release`, `process_manage`, redirections, commandes composées, chemins hors de la veille, écritures
+  hors de `rapports/D-…`. Nouveau : commandes `veillectl` limitées au **type** de la veille (table `VEILLECTL`,
+  source unique du contrôle et du prompt) ; `heartbeat` toléré (Hermes le remet à 0 au premier plan : un modèle
+  le remplit d'office, 3 refus arrêtaient l'exécution) ; le journal d'audit nomme le paramètre refusé (le motif
+  du refus de `date +FORMAT` du 22/10 était tronqué). `date +%Y-%m-%d-%Hh%M` reste permis.
+- **D3 — un seul plafond.** `guard.COMMAND_TIMEOUT = 360` s : timeout du scan dans le prompt et maximum de tout
+  appel `terminal`, sous les deux plafonds de Hermes (420 s, 600 s) ; la tranche en dérive. `scripts/guard-probe.py`
+  vérifie dans l'image, contre Hermes lui-même, qu'aucun plafond effectif n'est en dessous.
+  `TERMINAL_MAX_FOREGROUND_TIMEOUT=1200` retiré du Dockerfile (inutile) ; le garde-fou ne lit plus cette variable.
+- **D4 — passage partiel publié, et dit.** Encadré « Passage Digi-Key PARTIEL du … : k référence(s) sur n
+  interrogée(s) ; les autres gardent le statut de leur dernière vérification… » en tête du PDF, du chapitre et de
+  l'e-mail (et dans la sortie de `finalize`), « Digi-Key : k/n (PARTIEL) » dans l'en-tête du PDF ; passage
+  complet signalé comme tel ; passage inachevé (exécution terminée entre deux tranches) dit « inachevé ».
+  Couverture enregistrée par le passage lui-même : une vérification à la demande ultérieure ne la change pas.
+  Les références non vérifiées passent en tête du passage suivant. Rejeté : refuser de publier (avis et e-mail des fins de vie
+  retardés d'une semaine pour 16 références sur 386).
+- **D5 — signalement inchangé.** Statut `error` et motif dans `last_error` (0.7.1) ; chien de garde de l'hôte
+  (10 h chaque jour) : alerte immédiate à un nouveau problème, rappel tous les 3 jours tant qu'il dure, e-mail de
+  rétablissement, aux adresses de la page Paramètres.
+- **D6 — la veille reste active après un échec.** Une veille en pause n'est plus surveillée par le chien de
+  garde : la remettre en pause rendrait l'échec silencieux. Coût d'un échec borné (garde-fou : arrêt au 3e refus).
+
+### Corrigé
+
+- **Scan des composants au-delà de 7 min** : il aboutit (voir D1). Prompt : relancer l'appel exact tant que
+  `"complete": false`, sans rien faire d'autre entre deux tranches ; un appel sans sortie JSON (délai dépassé)
+  est relancé une seule fois.
+- Garde-fou : un `timeout` non numérique (`NaN`) est refusé ; les noms de paramètres refusés sont bornés dans le
+  journal d'audit.
+- Sonde de l'image (`guard-probe.py`) : elle teste la première commande de la veille selon son type, avec le
+  timeout du prompt, et échoue si un plafond de Hermes est sous `COMMAND_TIMEOUT`.
+
+### Mesures
+
+- Tir simulé du 22/10 (386 références à 2,6 s, horloge simulée, aucun réseau) : 0.7.1 → un appel de 902 s
+  (abandonné à 420 s, rien d'enregistré) ; 0.7.2 → 5 appels de 221 s au plus, 347/386 vérifiées (même budget,
+  même couverture), lot de 30, puis finalize, PDF, Excel et e-mail. 5 000 références à 0,6 s : 3 appels, 900
+  vérifiées (plafond d'appels), comme avant.
+- Surcoût réel d'une tranche (hors Digi-Key : enregistrement et base des composants) : 10 à 60 ms ; sortie d'une
+  tranche inachevée : ≈ 320 octets. Surcoût LLM estimé : un aller-retour par tranche supplémentaire (≈ 10 k tokens
+  de contexte, presque tous en cache), < 0,01 $ par tir.
+
+### Déploiement
+
+- `make update`. Rien à régler : les plafonds de Hermes restent à leurs valeurs par défaut.
+
 ## [0.7.1] — 2026-10-22
 
 Incident de la nuit du 21 au 22/10/2026 : tir de contrôle de la veille composants

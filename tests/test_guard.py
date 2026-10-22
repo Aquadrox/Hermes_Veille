@@ -10,23 +10,20 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 import pytest
 from test_components import BOM, finalize, tools  # noqa: F401 - fixtures partagées
 from test_prompt_injection import load_plugin
 
-from veille_core import cli, components, digikey, guard, hermes, render, service, store
+from veille_core import cli, components, guard, hermes, render, service, store
 
-REPO = Path(__file__).resolve().parent.parent
 SLUG = "composants-nomenclature-2"
 DATE = "date +%Y-%m-%d-%Hh%M"
 
 
 @pytest.fixture(autouse=True)
-def image_env(monkeypatch):
-    """Réglage de l'image (Dockerfile) et aucune exécution suivie d'un test à l'autre."""
-    monkeypatch.setenv("TERMINAL_MAX_FOREGROUND_TIMEOUT", "1200")
+def no_tracked_runs(monkeypatch):
+    """Aucune exécution suivie d'un test à l'autre."""
     monkeypatch.setattr(guard, "_runs", {}, raising=False)
 
 
@@ -53,9 +50,9 @@ def scan(**extra) -> dict:
 @pytest.mark.parametrize("extra", [{"background": True}, {"notify": True}, {"pty": True},
                                    {"background": True, "notify": True}])
 def test_extra_terminal_parameter_is_refused_with_the_allowed_ones(run, extra):
-    reason = guard.check("terminal", scan(timeout=1200, **extra), run)
-    assert reason.startswith(f"paramètre(s) non autorisé(s) pour terminal : {', '.join(sorted(extra))}")
-    assert "params permis : command, timeout (<= 1200 s), workdir ; relance sans les autres" in reason
+    reason = guard.check("terminal", scan(timeout=guard.COMMAND_TIMEOUT, **extra), run)
+    assert reason.startswith(f"paramètre(s) {', '.join(sorted(extra))} non autorisé(s) pour terminal : ")
+    assert "params permis : command, timeout (<= 360 s), workdir ; relance sans les autres" in reason
     assert "premier plan" in reason  # pourquoi : pas d'arrière-plan pour une veille
 
 
@@ -65,30 +62,22 @@ def test_extra_file_parameter_lists_the_allowed_ones(run, incident):
 
 
 # --------------------------------------------------------------------------
-# 2. Scan : timeout = 1200 accepté ; au-delà, en deçà ou absent, refus qui donne l'appel exact
+# 2. Scan : timeout = COMMAND_TIMEOUT accepté ; au-delà, en deçà ou absent, refus qui donne l'appel exact
+#    (0.7.2 : 360 s au lieu de 1 200, sous le délai d'outil de Hermes ; plafonds : tests/test_scan_timeout.py)
 # --------------------------------------------------------------------------
 def test_scan_runs_with_the_documented_timeout(run):
-    assert guard.check("terminal", scan(timeout=1200), run) is None
-    assert guard.check("terminal", scan(timeout="1200", workdir=str(store.veille_dir(SLUG))), run) is None
-    reason = guard.check("terminal", scan(timeout=1800), run)
-    assert reason.startswith("durée maximale 1200 s") and "relance avec un timeout <= 1200" in reason
+    assert guard.check("terminal", scan(timeout=360), run) is None
+    assert guard.check("terminal", scan(timeout="360", workdir=str(store.veille_dir(SLUG))), run) is None
+    reason = guard.check("terminal", scan(timeout=1200), run)
+    assert reason.startswith("durée maximale 360 s") and "relance avec un timeout <= 360" in reason
 
 
-@pytest.mark.parametrize("args", [scan(), scan(timeout=600), scan(timeout=0)])
+@pytest.mark.parametrize("args", [scan(), scan(timeout=60), scan(timeout=0)])
 def test_scan_without_its_timeout_is_refused(run, args):
-    """Sans timeout, Hermes arrête la commande au bout de 180 s : passage Digi-Key perdu."""
+    """Sans timeout, Hermes arrête la commande au bout de 180 s, avant la fin de sa tranche."""
     reason = guard.check("terminal", args, run)
-    assert reason.startswith("timeout 1200 obligatoire pour veillectl components scan : ")
-    assert f'{{"command": "veillectl components scan {SLUG}", "timeout": 1200}}' in reason
-
-
-def test_scan_worst_case_fits_in_the_foreground_cap():
-    """Pire cas du scan : budget Digi-Key, puis le dernier appel en cours (jeton expiré : 2 authentifications
-    et 2 requêtes), puis l'enregistrement. Il doit tenir dans SCAN_TIMEOUT, lui-même <= plafond de l'image."""
-    worst = service.SCAN_BUDGET_S + 4 * digikey.HTTP_TIMEOUT + 60
-    assert worst <= guard.SCAN_TIMEOUT
-    cap = int(re.search(r"TERMINAL_MAX_FOREGROUND_TIMEOUT=(\d+)", (REPO / "Dockerfile").read_text()).group(1))
-    assert guard.SCAN_TIMEOUT <= cap
+    assert reason.startswith("timeout 360 obligatoire pour veillectl components scan : ")
+    assert f'{{"command": "veillectl components scan {SLUG}", "timeout": 360}}' in reason
 
 
 # --------------------------------------------------------------------------
@@ -313,6 +302,8 @@ def test_legitimate_refusals_still_apply(run, incident):
         assert guard.check(tool, args, run), (tool, args)
     assert "outil « process_manage » non autorisé" in guard.check("process_manage", {}, run)
     assert guard.check("terminal", {"command": f"ls {r}/ > x"}, run).startswith("caractère non autorisé")
+    assert guard.check("terminal", {"command": f"veillectl report publish {SLUG} {r}/2026-10-21-23h00-veille.md"},
+                       run).startswith("commande non autorisée")  # commande d'une veille thématique
 
 
 def test_plugin_end_of_run_check_fails_closed(incident, monkeypatch):

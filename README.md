@@ -107,7 +107,8 @@ préfixé « [EOL ×N] ».
 
 ```
 dimanche 23h — job de la veille composants
-  1. veillectl components scan <slug>      statut Digi-Key de TOUTES les références (déterministe)
+  1. veillectl components scan <slug>      statut Digi-Key de TOUTES les références (déterministe),
+                                           par tranches de < 6 min relancées jusqu'à "complete": true
                                            + lot du jour pour la recherche web (40 par défaut)
   2. agent : recherche web (pages PCN des fabricants, Mouser, Digi-Key, Farnell…) -> D-pcn.json
   3. veillectl components finalize …       validation, dédoublonnage, enregistrement, rapport PDF,
@@ -163,9 +164,9 @@ lundi 6h30 — job de la veille thématique rattachée
   qu'un **index** des fichiers des veilles (qui font foi) : reconstruite à chaque démarrage
   (`veillectl catalog rebuild`), elle retire ce qu'une veille réinitialisée avait apporté (ce que d'autres
   veilles en ont déjà repris leur reste) et garde ce qu'une veille archivée savait. Un échec de la base n'interrompt jamais une analyse (tracé dans l'audit).
-- **Volume** : le statut Digi-Key couvre toutes les références à chaque exécution (≈ 0,6 s par
-  référence, 900 au plus) ; la recherche web, coûteuse en tokens, tourne par **lots**
-  (`batch_size`). Avec 300 références et des lots de 40, chacune est recherchée sur le web toutes les
+- **Volume** : le statut Digi-Key couvre toutes les références à chaque exécution (≈ 0,6 à 2,6 s par
+  référence, 900 au plus, 15 min de budget par passage) ; la recherche web, coûteuse en tokens, tourne par
+  **lots** (`batch_size`). Avec 300 références et des lots de 40, chacune est recherchée sur le web toutes les
   8 semaines environ, et **en priorité** dès que son statut Digi-Key change ou que Digi-Key ne la
   trouve plus.
 - **Panne passagère de Digi-Key** (connexion coupée, délai dépassé, HTTP 5xx, HTTP 429) : le passage
@@ -177,6 +178,13 @@ lundi 6h30 — job de la veille thématique rattachée
   budget de temps (15 min) et le plafond d'appels gardent la priorité. Chaque tentative est journalisée
   (`tentative n/10`, erreur, attente). L'abandon, ou des incidents surmontés, sont signalés dans
   l'avancement, l'audit et la sortie du scan.
+- **Passage par tranches** (0.7.2) : Hermes abandonne tout appel d'outil au bout de 7 min (420 s) ; chaque
+  appel de `veillectl components scan` traite donc au plus ≈ 4 min de Digi-Key, **enregistre** ce qu'il a lu
+  et rend `"complete": false` ; l'agent relance le même appel, qui reprend aux références non encore
+  vérifiées par ce passage (repris s'il a avancé depuis moins d'une heure, même à cheval sur minuit). Budget,
+  plafond d'appels et pannes tolérées valent pour le passage entier ; le lot web n'est tiré qu'à sa fin. Un passage **partiel** (budget atteint, Digi-Key en panne, exécution terminée avant sa fin) est
+  publié et **dit comme tel** : encadré « Passage Digi-Key PARTIEL : k référence(s) sur n » dans le PDF et
+  l'e-mail, « Digi-Key : k/n (PARTIEL) » en en-tête ; les autres passent en tête du passage suivant.
 - **À la demande** (interface ou Telegram) : « Lancer l'analyse » / `run_veille_now` exécute tout de
   suite l'analyse complète ; « Vérifier les statuts Digi-Key » / `check_component_statuses` (ou
   `veillectl components scan <slug> --status-only`) relit en arrière-plan le statut de toutes les
@@ -280,9 +288,11 @@ hors du LLM :
   `veille_core/guard.py`). Avant chaque appel d'outil d'une exécution planifiée, par listes
   blanches : outils web, fichiers et terminal seulement ; lecture du brief, du prompt et des rapports
   de **sa** veille ; écriture des seuls fichiers de sortie horodatés ; terminal limité à `date`, `ls`
-  de ses rapports et aux commandes `veillectl` de son job pour **son** slug, sans guillemets ni
-  caractère spécial du shell, ni arrière-plan, ni durée au-delà de 20 min (la commande passerait en
-  arrière-plan) ; le scan des composants exige `timeout: 1200`. Tout le reste est refusé, chaque refus
+  de ses rapports et aux commandes `veillectl` de **son type** de veille pour **son** slug, sans guillemets
+  ni caractère spécial du shell, ni arrière-plan, ni durée au-delà de 6 min (`guard.COMMAND_TIMEOUT`,
+  plafond unique, sous les 7 min que Hermes accorde à tout appel d'outil et sous son premier plan de
+  10 min : vérifié dans l'image par `scripts/guard-probe.py`) ; le scan des composants exige
+  `timeout: 360`. Tout le reste est refusé, chaque refus
   dit ce qui est permis (paramètres, chemins, appel exact) et est inscrit au journal d'audit (page
   Santé, origine « veille-guard »). Au **3e refus**, l'exécution est arrêtée : plus aucun appel permis.
   Une exécution arrêtée ou qui se termine **sans rapport publié** est déclarée **en échec** à Hermes
