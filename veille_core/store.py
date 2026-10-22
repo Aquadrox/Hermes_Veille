@@ -276,7 +276,8 @@ def list_reports(slug: str) -> list[dict]:
 
 def published_since(slug: str, since: float) -> str | None:
     """Nom du rapport PDF produit depuis `since` (horodatage epoch), ou None. Seul `veillectl` produit le PDF,
-    juste avant l'e-mail : c'est la preuve qu'une exécution a publié (même convention que le chien de garde)."""
+    juste avant l'e-mail : sans lui, l'exécution n'a rien publié (même convention que le chien de garde ; un
+    e-mail refusé après le PDF est signalé par la commande elle-même)."""
     for p in (veille_dir(slug) / "rapports").glob("*-veille.pdf"):
         try:
             if p.stat().st_mtime >= since:

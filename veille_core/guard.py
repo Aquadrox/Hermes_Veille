@@ -41,7 +41,7 @@ OUTPUT_RE = re.compile(r"(\d{4}-\d{2}-\d{2}-\d{2}h\d{2})-(?:veille\.md|charts\.j
 _COMMAND_RE = re.compile(r"[A-Za-z0-9_.,:/+=@%# -]+")  # aucun caractère que le shell interprète
 _DATE_FORMAT_RE = re.compile(r"\+[%A-Za-z0-9:_-]+")
 _LS_FLAGS_RE = re.compile(r"-[1ahlrt]+")
-_SHORT_RE = re.compile(r"\. | : | \(")  # motif d'un refus, sans ses indications
+_SHORT_RE = re.compile(r"\. | : | \(|\n")  # motif d'un refus, sans ses indications
 
 # Paramètres admis par outil ; un autre paramètre doit être vide (mode V4A de `patch`, `cross_profile`…).
 ALLOWED_ARGS = {
@@ -58,7 +58,7 @@ SIMPLE_COMMAND = ("caractère non autorisé : une commande simple, sans guilleme
                   "($ ; | & < > * ` \\ retour à la ligne…), ni redirection ni arrière-plan : lance-la telle "
                   "quelle, sa sortie revient à l'appel")
 FOREGROUND = " (les commandes d'une veille s'exécutent au premier plan : ni background, ni notify, ni pty)"
-# `veillectl components scan` : budget Digi-Key, dernier appel et enregistrement compris, ≈ 1 040 s au pire
+# `veillectl components scan` : budget Digi-Key, dernier appel et enregistrement compris, ≈ 1 040 s (17 min) au pire
 # (tests/test_guard.py). Au premier plan seulement, donc <= TERMINAL_MAX_FOREGROUND_TIMEOUT de l'image.
 SCAN_TIMEOUT = 1200
 MAX_REFUSALS = 3  # refus par exécution : au-delà, l'agent tourne à vide (incident du 21/10/2026, 111 min)
@@ -217,6 +217,10 @@ _runs: dict[str, _Run] = {}  # exécutions planifiées en cours dans ce processu
 _runs_lock = threading.Lock()  # appels d'outils parallèles, exécutions simultanées de plusieurs veilles
 
 
+def _stopped(refusals: int) -> str:
+    return f"le guard a refusé {refusals} appels : l'analyse ne peut pas aboutir"
+
+
 def _run(run_id: str, s: Session) -> _Run:
     """Suivi de l'exécution `run_id`, créé à son premier appel d'outil ; sous _runs_lock."""
     run = _runs.get(run_id)
@@ -239,8 +243,8 @@ def enforce(tool: str, args: dict, s: Session | None, run_id: str = "") -> str |
             if reason or stopped:
                 run.refusals += 1
                 if run.refusals >= MAX_REFUSALS:
-                    stop = (f"{STOPPED} : le guard a refusé {run.refusals} appels : l'analyse ne peut pas aboutir. "
-                            "Tout nouvel appel sera refusé : termine maintenant par ta réponse finale.")
+                    stop = (f"{STOPPED} : {_stopped(run.refusals)}. Tout nouvel appel sera refusé : termine "
+                            "maintenant par ta réponse finale.")
                     reason = stop if stopped else f"{reason}\n{stop}"
     if reason:
         store.audit("veille-guard", "refus", s.slug or "", f"{_detail(tool, args)} — {_SHORT_RE.split(reason, 1)[0]}")
@@ -262,7 +266,7 @@ def finish(run_id: str, s: Session | None) -> str | None:
     stopped = run is not None and run.refusals >= MAX_REFUSALS
     if report and not stopped:
         return None
-    parts = [f"le guard a refusé {run.refusals} appels : l'analyse ne peut pas aboutir"] if stopped else []
+    parts = [_stopped(run.refusals)] if stopped else []
     parts.append(f"rapport {report} publié" if report else NO_REPORT)
     reason = " ; ".join(parts)
     store.audit("veille-guard", "échec", s.slug, reason)

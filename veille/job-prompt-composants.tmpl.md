@@ -15,7 +15,7 @@ RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 
 ÉTAPES OBLIGATOIRES, dans cet ordre :
 
-1. PRÉPARATION — exécute, avec l'appel exact de OUTILS AUTORISÉS (timeout de la commande : ${scan_timeout} secondes, au premier plan : elle interroge Digi-Key pour tous les composants et peut durer jusqu'à 18 minutes ; attends sa sortie) :
+1. PRÉPARATION — exécute, avec l'appel exact de OUTILS AUTORISÉS (timeout de la commande : ${scan_timeout} secondes, au premier plan : elle interroge Digi-Key pour tous les composants et peut durer environ 17 minutes ; attends sa sortie) :
    veillectl components scan ${slug}
    Elle affiche en JSON le LOT de composants à rechercher sur le web aujourd'hui (au plus ${batch_size}) : pour chacun, `mpn`, `manufacturer`, `since` (chercher les avis publiés depuis cette date ; null = jamais vérifié : cherche aussi l'état actuel et l'historique), `digikey_status`, `digikey_error` (non nul : Digi-Key ne connaît pas la référence, voir étape 3 ; ces composants ont en plus `alldatasheet`, `web_status` et `maker`, voir REPLI ALLDATASHEET) et `known` (avis déjà enregistrés : ne les recherche pas à nouveau) ; ainsi que `track_progress` (voir étape 3).
 

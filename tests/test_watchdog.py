@@ -1,6 +1,7 @@
 import datetime as dt
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -12,16 +13,18 @@ spec.loader.exec_module(watchdog)
 
 
 def volume(tmp_path, *, last_status="ok", report_days_ago=2, paused=False, max_age=192, size=30000, kind=None,
-           last_run_at=None, last_error=None):
+           last_run_at=None, last_error=None, created_at="2026-01-01T00:00:00+01:00"):
     vol = tmp_path / "data"
     d = vol / "veilles" / "demo"
     (d / "rapports").mkdir(parents=True)
     (d / "veille.json").write_text(json.dumps({
         "slug": "demo", "name": "Démo", "job_id": "j1", "max_age_hours": max_age,
-        "created_at": "2026-01-01T00:00:00+01:00", **({"kind": kind} if kind else {})}))
+        "created_at": created_at, **({"kind": kind} if kind else {})}))
     if report_days_ago is not None:
-        date = (dt.datetime.now() - dt.timedelta(days=report_days_ago)).strftime("%Y-%m-%d")
-        (d / "rapports" / f"{date}-veille.pdf").write_bytes(b"x" * size)
+        made = dt.datetime.now() - dt.timedelta(days=report_days_ago)
+        pdf = d / "rapports" / f"{made:%Y-%m-%d}-veille.pdf"
+        pdf.write_bytes(b"x" * size)
+        os.utime(pdf, (made.timestamp(),) * 2)  # produit ce jour-là
     (vol / "cron").mkdir()
     job = {"id": "j1", "name": "Démo [demo]", "last_status": last_status, "last_run_at": last_run_at,
            "last_error": last_error, "enabled": not paused, "state": "paused" if paused else "scheduled"}
@@ -131,9 +134,12 @@ def test_ok_run_without_report_is_a_problem(tmp_path, capsys):
     vol = volume(tmp_path, kind="composants", size=15000, last_run_at=iso(dt.timedelta(hours=1)))
     assert run(vol, tmp_path, "--dry-run") == 1
     assert "dernier run « ok » le" in capsys.readouterr().out
-    # aucun rapport du tout : idem, même pour une veille récente
-    vol = volume(tmp_path / "b", report_days_ago=None, last_run_at=iso(dt.timedelta(minutes=5)))
+    # aucun rapport du tout : idem, même pour une veille récente (le contrôle de fraîcheur, lui, patiente)
+    vol = volume(tmp_path / "b", report_days_ago=None, last_run_at=iso(dt.timedelta(minutes=5)),
+                 created_at=iso(dt.timedelta(days=1)))
     assert run(vol, tmp_path / "b", "--dry-run") == 1
+    out = capsys.readouterr().out
+    assert "dernier run « ok » le" in out and "aucun rapport encore (veille récente)" in out
 
 
 def test_ok_run_with_its_report_is_healthy(tmp_path):

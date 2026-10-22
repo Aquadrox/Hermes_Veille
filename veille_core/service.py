@@ -487,18 +487,25 @@ def check_statuses_now(slug: str, actor: str = "cli") -> str:
 
 
 def run_wait(slug: str, actor: str = "cli") -> str:
-    """Lance la veille et attend la fin (cible `make run-now`) ; ServiceError si elle n'a publié aucun rapport.
+    """Lance la veille et attend la fin (cible `make run-now`) ; ServiceError si elle n'a publié aucun rapport
+    ou si Hermes l'a enregistrée en échec (garde-fou compris).
 
-    `hermes cron run` sort en 0 même quand l'exécution échoue : le rapport produit fait seul foi.
+    `hermes cron run` sort en 0 même quand l'exécution échoue : rapport produit et statut sont vérifiés ici.
     """
     v = store.load(slug)
     job_id = _check_runnable(v)
     audit(actor, "run", slug, "synchrone")
+    before = hermes.job_status(hermes.get_job(job_id, _safe_jobs())).get("last_run_at")
     started = time.time()
     out = hermes.run_sync(job_id)
-    if store.published_since(slug, started) is None:
-        error = hermes.job_status(hermes.get_job(job_id, _safe_jobs())).get("last_error")
-        raise ServiceError(f"échec : {guard.NO_REPORT}" + (f" — {error}" if error else "") + f"\n{out}")
+    job = hermes.job_status(hermes.get_job(job_id, _safe_jobs()))
+    # Statut de CETTE exécution seulement : sans nouvelle date, il serait celui de la précédente.
+    failed = job.get("last_run_at") != before and job.get("last_status") not in (None, "", "ok")
+    error = (job.get("last_error") or f"statut {job['last_status']}") if failed else None
+    report = store.published_since(slug, started)
+    if report is None or error:
+        raise ServiceError("échec : " + " — ".join(filter(None, (None if report else guard.NO_REPORT, error)))
+                           + f"\n{out}")
     return out
 
 

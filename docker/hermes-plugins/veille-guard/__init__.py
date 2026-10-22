@@ -15,6 +15,7 @@ import sys
 
 _APP = os.environ.get("VEILLE_APP", "/opt/veille-app")
 _CRON_FAILURE = "[CRON_FAILURE]"  # 1re ligne seule de la réponse finale : Hermes (>= v0.22) enregistre un échec
+_ANSWER_MAX = 1000  # réponse de l'agent jointe au motif (last_error, lu aussi par le MCP) : bornée
 if _APP not in sys.path:
     sys.path.append(_APP)  # après les modules de Hermes : n'en masque aucun
 
@@ -79,7 +80,9 @@ def _on_transform_llm_output(response_text: str = "", session_id: str = "", turn
         reason = f"garde-fou en erreur ({type(exc).__name__}) : rapport non vérifié" if _cron("", session_id or "") else None
     if not reason:
         return None
-    return f"{_CRON_FAILURE}\nveille-guard : {reason}\n\nRéponse de l'agent :\n{response_text}"
+    # Texte de l'agent, exposé au web : encadré comme non fiable partout où last_error est relu.
+    answer = f"\n\nRéponse de l'agent :\n{guard.wrap(response_text[:_ANSWER_MAX])}" if guard else ""
+    return f"{_CRON_FAILURE}\nveille-guard : {reason}{answer}"
 
 
 def register(ctx) -> None:

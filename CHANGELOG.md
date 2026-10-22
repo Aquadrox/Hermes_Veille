@@ -21,10 +21,11 @@ l'agent avait besoin (paramètre `background`, durée au-delà de 1 200 s, lectu
   rapport PDF (donc sans e-mail) est déclarée **en échec** à Hermes, jamais en succès : le plugin
   `veille-guard` (hook `transform_llm_output`) place `[CRON_FAILURE]` en tête de la réponse finale,
   Hermes v0.22 enregistre `last_status: error` et le motif, en français, dans `last_error` (interface,
-  `veillectl show`, MCP, chien de garde) ; trace « veille-guard / échec » au journal d'audit. Une erreur
-  du garde-fou pendant cette vérification déclare aussi l'échec. `veillectl run --wait` (`make run-now`)
-  vérifie lui-même le rapport et sort en erreur (code 1) sans lui : `hermes cron run` sort en 0 même
-  quand l'exécution échoue.
+  `veillectl show`, MCP, chien de garde), suivi de la réponse de l'agent, bornée à 1 000 caractères et
+  encadrée comme contenu non fiable (elle peut citer le web) ; trace « veille-guard / échec » au journal
+  d'audit. Une erreur du garde-fou pendant cette vérification déclare aussi l'échec. `veillectl run
+  --wait` (`make run-now`) vérifie lui-même le rapport et le statut de cette exécution, et sort en erreur
+  (code 1) : `hermes cron run` sort en 0 même quand l'exécution échoue.
 - **Arrêt après refus répétés** : au 3e refus d'une exécution, l'agent reçoit « exécution arrêtée : le
   guard a refusé 3 appels : l'analyse ne peut pas aboutir » ; tout appel suivant, même permis, est
   refusé, et l'exécution est déclarée en échec (même si un rapport a été publié, précisé dans le motif).
@@ -40,16 +41,18 @@ l'agent avait besoin (paramètre `background`, durée au-delà de 1 200 s, lectu
   900 s, dernier appel en cours, enregistrement), verrouillé par un test contre le Dockerfile.
   `background`, `notify` et `pty` restent refusés (résultat lisible seulement par `process_manage`,
   refusé ; aucune notification possible après la fin d'une exécution planifiée).
-- **Chien de garde** : un dernier run « ok » qui n'a produit aucun rapport (fenêtre de 3 h avant sa fin)
-  est un problème, au même titre qu'un run en erreur.
+- **Chien de garde** : un dernier run « ok » qui n'a produit aucun rapport (date de modification du PDF,
+  fenêtre de 3 h avant la fin du run, indépendante du fuseau de l'hôte) est un problème, au même titre
+  qu'un run en erreur.
 
 ### Ajouté
 
 - Section **« OUTILS AUTORISÉS »** dans les deux prompts, générée par le garde-fou (source unique) :
   outils, paramètres, fichiers et appels `terminal` exacts de la veille, dont
   `{"command": "veillectl components scan <slug>", "timeout": 1200}`.
-- `scripts/guard-probe.py` vérifie aussi, dans l'image, qu'une exécution sans rapport est déclarée en
-  échec selon Hermes lui-même.
+- `scripts/guard-probe.py` vérifie aussi, dans l'image, que le scan avec `timeout: 1200` est permis
+  (plafond de l'image cohérent) et qu'une exécution sans rapport est déclarée en échec selon Hermes
+  lui-même, ses appels d'outils et sa réponse finale reliés par le tour.
 
 ## [0.7.0] — 2026-10-21
 

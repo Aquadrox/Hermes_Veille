@@ -60,7 +60,7 @@ ALERT_FROM_NAME = "Surveillance veille"
 REPORT_SUFFIX = "-veille.pdf"
 REPORT_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})(?:-(\d{2})h(\d{2}))?")  # heure optionnelle (v0.3.2)
 OK_STATUSES = {None, "", "ok", "success", "running", "skipped"}
-RUN_GRACE_HOURS = 3  # durée maximale plausible d'une exécution : son rapport est daté d'après son début
+RUN_GRACE_HOURS = 3  # durée maximale plausible d'une exécution : son rapport est produit après son début
 
 
 def run(cmd, timeout=60):
@@ -197,28 +197,24 @@ def check_container(container):
     return None
 
 
-def newest_report(veille):
-    """(chemin, date) du rapport PDF le plus récent de la veille, ou None."""
+def report_paths(veille):
+    """Rapports PDF de la veille (chemins)."""
     reports_dir = os.path.join(veille["dir"], "rapports")
     if not os.path.isdir(reports_dir):
-        return None
-    paths = [os.path.join(reports_dir, n) for n in os.listdir(reports_dir) if n.endswith(REPORT_SUFFIX)]
-    if not paths:
-        return None
-    newest = max(paths, key=report_date)
-    return newest, report_date(newest)
+        return []
+    return [os.path.join(reports_dir, n) for n in os.listdir(reports_dir) if n.endswith(REPORT_SUFFIX)]
 
 
 def check_report(veille, max_age_hours, min_size, now):
     """Renvoie (problème | None, détail)."""
-    report = newest_report(veille)
-    if report is None:
+    paths = report_paths(veille)
+    if not paths:
         created = parse_iso(veille.get("created_at"))
         if created and (now - created).total_seconds() / 3600 < max_age_hours:
             return None, "aucun rapport encore (veille récente)"
         return "aucun rapport", ""
-    path, ref = report
-    newest = os.path.basename(path)
+    path = max(paths, key=report_date)
+    newest, ref = os.path.basename(path), report_date(path)
     age_h = (now - ref).total_seconds() / 3600.0
     size = os.path.getsize(path)
     detail = f"{newest} — {size / 1024:.0f} Ko — daté du {ref:%d/%m/%Y} ({age_h / 24:.1f} j)"
@@ -232,12 +228,14 @@ def check_report(veille, max_age_hours, min_size, now):
 
 def check_last_run(veille, job):
     """Dernier run « ok » qui n'a produit aucun rapport (garde-fou absent ou contourné) : problème, ou None.
-    L'échec que le garde-fou déclare lui-même arrive, lui, en statut « error »."""
+    L'échec que le garde-fou déclare lui-même arrive, lui, en statut « error ». Date de MODIFICATION du PDF
+    ici : instant absolu, comparable à `last_run_at` quel que soit le fuseau de l'hôte (une copie la rajeunit,
+    ce qui ne peut que taire une alerte)."""
     last_run = parse_iso(job.get("last_run_at"))
     if job.get("last_status") not in ("ok", "success") or last_run is None:
         return None
-    report = newest_report(veille)
-    if report and report[1] >= last_run - dt.timedelta(hours=RUN_GRACE_HOURS):
+    since = last_run.timestamp() - RUN_GRACE_HOURS * 3600
+    if any(os.path.getmtime(p) >= since for p in report_paths(veille)):
         return None
     return f"dernier run « ok » le {last_run:%d/%m/%Y à %H:%M} sans rapport publié (ni PDF, ni e-mail)"
 

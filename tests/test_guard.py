@@ -156,12 +156,23 @@ def test_plugin_declares_the_failure_to_hermes(run, incident, monkeypatch):
                                           turn_id="tour-1")
     assert out.split("\n")[0] == "[CRON_FAILURE]"
     assert out.split("\n")[1] == "veille-guard : aucun rapport publié par cette exécution (ni PDF, ni e-mail)"
-    assert out.endswith("Réponse de l'agent :\nTerminé.")
+    assert out.endswith("Réponse de l'agent :\n" + guard.wrap("Terminé."))  # texte exposé au web : non fiable
     # rapport publié : réponse inchangée ; session interactive : jamais touchée
     plugin._on_pre_tool_call(tool_name="terminal", args={"command": DATE}, **{**ids, "turn_id": "tour-2"})
     finalize(incident, [])
     assert plugin._on_transform_llm_output(response_text="OK", turn_id="tour-2") is None
     assert plugin._on_transform_llm_output(response_text="OK", session_id="s", turn_id="t") is None
+
+
+def test_plugin_stops_the_run_and_bounds_the_agent_text(incident, monkeypatch):
+    plugin = load_plugin(monkeypatch)
+    ids = {"task_id": f"cron:{incident.job_id}:exec1", "session_id": "20261021_231500_9f3a", "turn_id": "tour-1"}
+    verdicts = [plugin._on_pre_tool_call(tool_name="process_manage", args={"action": "list"}, **ids) for _ in range(3)]
+    assert guard.STOPPED not in verdicts[1]["message"] and guard.STOPPED in verdicts[2]["message"]
+    assert guard.STOPPED in plugin._on_pre_tool_call(tool_name="web_search", args={"query": "x"}, **ids)["message"]
+    out = plugin._on_transform_llm_output(response_text="x" * 5000, turn_id="tour-1")
+    assert "veille-guard : le guard a refusé 4 appels : l'analyse ne peut pas aboutir ; aucun rapport" in out
+    assert "x" * 1000 in out and "x" * 1001 not in out  # last_error borné
 
 
 def test_run_wait_fails_without_report(incident, capsys):
@@ -170,23 +181,45 @@ def test_run_wait_fails_without_report(incident, capsys):
     assert "aucun rapport publié" in capsys.readouterr().err
 
 
-def test_run_wait_reports_hermes_error(incident, monkeypatch):
-    def failing_run(job_id, timeout=0):
+def hermes_run(publish: bool, **job):
+    """Faux `hermes cron run` : publie (ou non) le rapport, puis enregistre l'exécution comme Hermes."""
+    def run_sync(job_id, timeout=0):
+        if publish:
+            (store.veille_dir(SLUG) / "rapports").mkdir(parents=True, exist_ok=True)
+            (store.veille_dir(SLUG) / "rapports" / f"{store.report_stamp()}-veille.pdf").write_bytes(b"%PDF")
         jobs = hermes.load_jobs()
-        jobs[0].update(last_status="error", last_error="veille-guard : le guard a refusé 3 appels")
+        jobs[0].update(job)
         hermes.paths.jobs_file().write_text(json.dumps({"jobs": jobs}))
-        return "Ran now: failed."
-    monkeypatch.setattr(hermes, "run_sync", failing_run)
-    with pytest.raises(service.ServiceError, match="le guard a refusé 3 appels"):
+        return f"Ran now: {'failed' if job.get('last_status') == 'error' else 'succeeded'}."
+    return run_sync
+
+
+def test_run_wait_reports_hermes_error(incident, monkeypatch):
+    reason = "veille-guard : le guard a refusé 3 appels : l'analyse ne peut pas aboutir ; rapport x publié"
+    monkeypatch.setattr(hermes, "run_sync", hermes_run(False, last_run_at="2026-10-22T00:51:29+02:00",
+                                                       last_status="error", last_error=reason))
+    with pytest.raises(service.ServiceError, match="aucun rapport publié .* — veille-guard : le guard a refusé 3"):
+        service.run_wait(SLUG)
+    # rapport publié, mais exécution arrêtée par le garde-fou : échec aussi (statut de Hermes)
+    monkeypatch.setattr(hermes, "run_sync", hermes_run(True, last_run_at="2026-10-22T01:30:00+02:00",
+                                                       last_status="error", last_error=reason))
+    with pytest.raises(service.ServiceError, match="^échec : veille-guard : le guard a refusé 3"):
         service.run_wait(SLUG)
 
 
+def test_run_wait_ignores_the_status_of_a_previous_run(incident, monkeypatch):
+    """`hermes cron run` qui n'a rien exécuté : l'erreur affichée n'est pas celle d'une exécution précédente."""
+    monkeypatch.setattr(hermes, "run_sync", hermes_run(False, last_run_at="2026-10-15T00:00:00+02:00",
+                                                       last_status="error", last_error="ancienne erreur"))
+    with pytest.raises(service.ServiceError, match="ancienne erreur"):
+        service.run_wait(SLUG)  # 1re fois : nouvelle date, erreur de cette exécution
+    with pytest.raises(service.ServiceError) as exc:
+        service.run_wait(SLUG)  # même date : rien de nouveau, seul le rapport manquant compte
+    assert "ancienne erreur" not in str(exc.value) and guard.NO_REPORT in str(exc.value)
+
+
 def test_run_wait_succeeds_with_report(incident, monkeypatch):
-    def publishing_run(job_id, timeout=0):
-        (incident.dir / "rapports").mkdir(parents=True, exist_ok=True)
-        (incident.dir / "rapports" / f"{store.report_stamp()}-veille.pdf").write_bytes(b"%PDF")
-        return "Ran now: succeeded."
-    monkeypatch.setattr(hermes, "run_sync", publishing_run)
+    monkeypatch.setattr(hermes, "run_sync", hermes_run(True, last_run_at="2026-10-22T00:20:00+02:00", last_status="ok"))
     assert service.run_wait(SLUG) == "Ran now: succeeded."
 
 
@@ -234,9 +267,18 @@ def test_refusals_are_counted_per_run_and_concurrently(run, incident):
     for _ in range(guard.MAX_REFUSALS - 1):
         guard.enforce("process_manage", {}, run, "tour-1")
     assert guard.enforce("web_search", {"query": "x"}, run, "tour-2") is None  # autre exécution : non arrêtée
-    with ThreadPoolExecutor(8) as pool:  # appels d'outils parallèles d'une même exécution
-        list(pool.map(lambda _: guard.enforce("process_manage", {}, run, "tour-3"), range(40)))
-    assert guard._runs["tour-3"].refusals == 40 and guard._runs["tour-1"].refusals == 2
+    # Appels d'outils parallèles d'une même exécution : compte exact (le GIL rend la course rare, pas impossible :
+    # le verrou protège création, éviction et décision d'arrêt).
+    with ThreadPoolExecutor(8) as pool:
+        list(pool.map(lambda _: guard.enforce("process_manage", {}, run, "tour-3"), range(200)))
+    assert guard._runs["tour-3"].refusals == 200 and guard._runs["tour-1"].refusals == 2
+
+
+def test_stop_keeps_a_short_audit_motive(run):
+    for _ in range(guard.MAX_REFUSALS - 1):
+        guard.enforce("process_manage", {}, run, "tour-1")
+    assert guard.enforce("terminal", {"command": "   "}, run, "tour-1").startswith("commande vide\n" + guard.STOPPED)
+    assert service.read_audit(1)[0]["detail"] == "terminal — commande vide"
 
 
 def test_run_tracking_is_bounded(run):
