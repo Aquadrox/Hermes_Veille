@@ -274,6 +274,18 @@ def list_reports(slug: str) -> list[dict]:
     return sorted(by_stamp.values(), key=lambda e: e["stamp"], reverse=True)
 
 
+def published_since(slug: str, since: float) -> str | None:
+    """Nom du rapport PDF produit depuis `since` (horodatage epoch), ou None. Seul `veillectl` produit le PDF,
+    juste avant l'e-mail : c'est la preuve qu'une exécution a publié (même convention que le chien de garde)."""
+    for p in (veille_dir(slug) / "rapports").glob("*-veille.pdf"):
+        try:
+            if p.stat().st_mtime >= since:
+                return p.name
+        except OSError:  # supprimé entre-temps
+            continue
+    return None
+
+
 def report_path(slug: str, name: str) -> Path:
     if not REPORT_RE.match(name or ""):
         raise StoreError("nom de rapport invalide")

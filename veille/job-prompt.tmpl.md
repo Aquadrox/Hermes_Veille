@@ -6,6 +6,8 @@ OBJECTIF : rédiger le rapport de veille. Sa mise en page (PDF stylé) et son en
 
 ${security}
 
+${tools}
+
 RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 - Brief de mission : `${dir}/config.md`
 - Rapports (historique + sortie du jour) : `${dir}/rapports/`

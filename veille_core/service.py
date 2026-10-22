@@ -26,6 +26,7 @@ from . import (
     credentials,
     db,
     digikey,
+    guard,
     hermes,
     paths,
     pricing,
@@ -45,6 +46,7 @@ PLACEHOLDER_RECIPIENT = store.PLACEHOLDER_RECIPIENT
 COMPONENTS_TEMPLATE = "composants"
 COMPONENTS_SCHEDULE = "0 23 * * 0"  # dimanche 23h : heures creuses DeepSeek toute l'année
 CHAPTER_MARK = "<!-- chapitre-composants -->"
+SCAN_BUDGET_S = 900  # passage Digi-Key d'un scan : la suite au prochain passage (plafond : guard.SCAN_TIMEOUT)
 
 
 class ServiceError(RuntimeError):
@@ -485,11 +487,19 @@ def check_statuses_now(slug: str, actor: str = "cli") -> str:
 
 
 def run_wait(slug: str, actor: str = "cli") -> str:
-    """Lance la veille et attend la fin (cible `make run-now`)."""
+    """Lance la veille et attend la fin (cible `make run-now`) ; ServiceError si elle n'a publié aucun rapport.
+
+    `hermes cron run` sort en 0 même quand l'exécution échoue : le rapport produit fait seul foi.
+    """
     v = store.load(slug)
     job_id = _check_runnable(v)
     audit(actor, "run", slug, "synchrone")
-    return hermes.run_sync(job_id)
+    started = time.time()
+    out = hermes.run_sync(job_id)
+    if store.published_since(slug, started) is None:
+        error = hermes.job_status(hermes.get_job(job_id, _safe_jobs())).get("last_error")
+        raise ServiceError(f"échec : {guard.NO_REPORT}" + (f" — {error}" if error else "") + f"\n{out}")
+    return out
 
 
 def archive(slug: str, actor: str = "cli") -> Path:
@@ -591,7 +601,7 @@ def _set_link(v: Veille, target: str | None) -> bool:
 
 
 def components_scan(slug: str, actor: str = "job", client: digikey.Client | None = None,
-                    budget_s: float = 900, plan_batch: bool = True) -> dict:
+                    budget_s: float = SCAN_BUDGET_S, plan_batch: bool = True) -> dict:
     """Statut Digi-Key de tous les composants, puis lot de recherche web du jour (enregistré).
 
     `plan_batch=False` (vérification à la demande) : le lot web en cours n'est pas touché, pour ne

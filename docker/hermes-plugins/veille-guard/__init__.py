@@ -2,7 +2,8 @@
 
 Plugin livré dans l'image (/opt/hermes/plugins, lecture seule) et activé par l'amorçage. Il refuse,
 AVANT exécution, tout appel d'outil d'une exécution planifiée hors des listes blanches de sa veille,
-et encadre le contenu externe rendu à l'agent comme non fiable.
+encadre le contenu externe rendu à l'agent comme non fiable, et déclare en échec à Hermes l'exécution
+arrêtée par ses refus ou terminée sans rapport publié.
 
 Hermes laisse passer l'appel quand un hook lève une exception : chaque erreur du garde-fou (y compris
 un échec d'import) refuse donc l'appel d'une exécution planifiée, au lieu de le laisser passer.
@@ -13,6 +14,7 @@ import os
 import sys
 
 _APP = os.environ.get("VEILLE_APP", "/opt/veille-app")
+_CRON_FAILURE = "[CRON_FAILURE]"  # 1re ligne seule de la réponse finale : Hermes (>= v0.22) enregistre un échec
 if _APP not in sys.path:
     sys.path.append(_APP)  # après les modules de Hermes : n'en masque aucun
 
@@ -40,12 +42,15 @@ def _session(task_id, session_id):
     return guard.session(task_id, session_id, cron=_cron(task_id, session_id))
 
 
-def _on_pre_tool_call(tool_name: str = "", args=None, task_id: str = "", session_id: str = "", **_):
+def _on_pre_tool_call(tool_name: str = "", args=None, task_id: str = "", session_id: str = "", turn_id: str = "",
+                      **_):
     try:
         if guard is None:
             reason = f"garde-fou indisponible ({_IMPORT_ERROR})" if _cron(task_id or "", session_id or "") else None
         else:
-            reason = guard.enforce(tool_name, args if isinstance(args, dict) else {}, _session(task_id, session_id))
+            # Exécution planifiée = un seul tour Hermes : son identifiant compte les refus de l'exécution.
+            reason = guard.enforce(tool_name, args if isinstance(args, dict) else {}, _session(task_id, session_id),
+                                   turn_id or "")
     except Exception as exc:  # noqa: BLE001
         reason = f"garde-fou en erreur ({type(exc).__name__}) : appel refusé"
     return {"action": "block", "message": f"veille-guard : {reason}"} if reason else None
@@ -61,6 +66,23 @@ def _on_transform_tool_result(tool_name: str = "", args=None, result=None, task_
         return None
 
 
+def _on_transform_llm_output(response_text: str = "", session_id: str = "", turn_id: str = "", **_):
+    """Réponse finale d'une exécution planifiée qui n'a pas publié son rapport, ou que le garde-fou a arrêtée :
+    « [CRON_FAILURE] » en 1re ligne, Hermes l'enregistre en échec (last_status « error », last_error : la
+    suite). None : réponse inchangée. Une erreur du garde-fou déclare l'échec plutôt qu'un faux succès."""
+    try:
+        if guard is None:
+            reason = f"garde-fou indisponible ({_IMPORT_ERROR})" if _cron("", session_id or "") else None
+        else:
+            reason = guard.finish(turn_id or "", _session("", session_id))
+    except Exception as exc:  # noqa: BLE001
+        reason = f"garde-fou en erreur ({type(exc).__name__}) : rapport non vérifié" if _cron("", session_id or "") else None
+    if not reason:
+        return None
+    return f"{_CRON_FAILURE}\nveille-guard : {reason}\n\nRéponse de l'agent :\n{response_text}"
+
+
 def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
     ctx.register_hook("transform_tool_result", _on_transform_tool_result)
+    ctx.register_hook("transform_llm_output", _on_transform_llm_output)
