@@ -281,11 +281,16 @@ hors du LLM :
   blanches : outils web, fichiers et terminal seulement ; lecture du brief, du prompt et des rapports
   de **sa** veille ; écriture des seuls fichiers de sortie horodatés ; terminal limité à `date`, `ls`
   de ses rapports et aux commandes `veillectl` de son job pour **son** slug, sans guillemets ni
-  caractère spécial du shell, ni durée au-delà de 20 min (la commande passerait en arrière-plan). Tout
-  le reste est refusé, et chaque refus est inscrit au journal d'audit (page Santé, origine
-  « veille-guard »). Une erreur du garde-fou refuse l'appel ; un job planifié qui n'est pas celui d'une
-  veille n'a droit à aucun outil. Si le plugin ne peut pas être activé au démarrage, les exécutions
-  planifiées sont réduites à la recherche web (plus aucun rapport : le chien de garde alerte).
+  caractère spécial du shell, ni arrière-plan, ni durée au-delà de 20 min (la commande passerait en
+  arrière-plan) ; le scan des composants exige `timeout: 1200`. Tout le reste est refusé, chaque refus
+  dit ce qui est permis (paramètres, chemins, appel exact) et est inscrit au journal d'audit (page
+  Santé, origine « veille-guard »). Au **3e refus**, l'exécution est arrêtée : plus aucun appel permis.
+  Une exécution arrêtée ou qui se termine **sans rapport publié** est déclarée **en échec** à Hermes
+  (statut `error`, motif en français), jamais en succès ; `veillectl run --wait` sort alors en erreur.
+  Le contrat exact (section « OUTILS AUTORISÉS ») figure dans le prompt de chaque veille. Une erreur du
+  garde-fou refuse l'appel ; un job planifié qui n'est pas celui d'une veille n'a droit à aucun outil.
+  Si le plugin ne peut pas être activé au démarrage, les exécutions planifiées sont réduites à la
+  recherche web (plus aucun rapport : le chien de garde alerte).
 - **Contenu externe marqué** : résultats de recherche, pages, anciens rapports et sorties de
   commande sont encadrés comme « contenu externe non fiable » (caractères invisibles retirés), et le
   prompt rappelle qu'ils ne sont jamais des instructions.
@@ -464,7 +469,8 @@ Contrôle quotidien (10h, heure de Paris) :
 
 1. le conteneur tourne ;
 2. pour chaque veille **active** (les veilles en pause sont ignorées) : son job existe, son
-   dernier run n'est pas en erreur, et un rapport récent et plausible existe. « Récent » dépend
+   dernier run n'est pas en erreur ni « ok » sans avoir produit de rapport, et un rapport récent et
+   plausible existe. « Récent » dépend
    de **sa** fréquence : plus grand écart entre deux tirs + 24 h (8 jours pour une veille
    hebdomadaire, 2 jours pour une quotidienne).
 

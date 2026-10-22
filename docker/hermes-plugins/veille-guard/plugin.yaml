@@ -1,7 +1,8 @@
 name: veille-guard
-version: "1.0.0"
-description: "Garde-fou des veilles contre l'injection de prompt : listes blanches d'outils, de fichiers et de commandes pour les exécutions planifiées, contenu externe encadré comme non fiable (règles : veille_core/guard.py)."
+version: "1.1.0"
+description: "Garde-fou des veilles contre l'injection de prompt : listes blanches d'outils, de fichiers et de commandes pour les exécutions planifiées, contenu externe encadré comme non fiable, échec déclaré sans rapport publié (règles : veille_core/guard.py)."
 author: veille-hermes
 provides_hooks:
   - pre_tool_call
   - transform_tool_result
+  - transform_llm_output

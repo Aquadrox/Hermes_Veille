@@ -7,6 +7,53 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.7.1] — 2026-10-22
+
+Incident de la nuit du 21 au 22/10/2026 : tir de contrôle de la veille composants
+« composants-nomenclature-2 » (386 références) terminé en 111 min au lieu de ~16, statut « ok » et code de
+sortie 0, mais ni rapport ni e-mail (0,19 $ consommés). Le garde-fou avait refusé tous les appels dont
+l'agent avait besoin (paramètre `background`, durée au-delà de 1 200 s, lecture du dossier de la veille,
+`process_manage`, redirection en arrière-plan), sans dire quoi faire, et l'exécution avait continué.
+
+### Corrigé
+
+- **Échec explicite sans rapport** : une exécution planifiée qui se termine sans avoir produit son
+  rapport PDF (donc sans e-mail) est déclarée **en échec** à Hermes, jamais en succès : le plugin
+  `veille-guard` (hook `transform_llm_output`) place `[CRON_FAILURE]` en tête de la réponse finale,
+  Hermes v0.22 enregistre `last_status: error` et le motif, en français, dans `last_error` (interface,
+  `veillectl show`, MCP, chien de garde), suivi de la réponse de l'agent, bornée à 1 000 caractères et
+  encadrée comme contenu non fiable (elle peut citer le web) ; trace « veille-guard / échec » au journal
+  d'audit. Une erreur du garde-fou pendant cette vérification déclare aussi l'échec. `veillectl run
+  --wait` (`make run-now`) vérifie lui-même le rapport et le statut de cette exécution, et sort en erreur
+  (code 1) : `hermes cron run` sort en 0 même quand l'exécution échoue.
+- **Arrêt après refus répétés** : au 3e refus d'une exécution, l'agent reçoit « exécution arrêtée : le
+  guard a refusé 3 appels : l'analyse ne peut pas aboutir » ; tout appel suivant, même permis, est
+  refusé, et l'exécution est déclarée en échec (même si un rapport a été publié, précisé dans le motif).
+  Refus comptés par exécution (tour Hermes), sous verrou (appels d'outils parallèles).
+- **Refus actionnables** : un paramètre refusé liste ceux qui sont permis (« params permis : command,
+  timeout (<= 1200 s), workdir ; relance sans les autres ») ; un chemin refusé, les chemins permis
+  (`config.md`, `job-prompt.md`, `rapports/`) et le rappel que le dossier de la veille ne se lit que par
+  fichiers précis ; une durée refusée, la limite ; une redirection, de lancer la commande telle quelle.
+  Le journal d'audit garde le seul motif court.
+- **Scan exécutable tel que le prompt le donne** : `veillectl components scan` exige `timeout: 1200`
+  (sans lui, Hermes arrête la commande au bout de 180 s et tout le passage Digi-Key est perdu) ; le refus
+  donne l'appel exact. Plafond de 1 200 s conservé : pire cas du scan ≈ 1 040 s (budget Digi-Key de
+  900 s, dernier appel en cours, enregistrement), verrouillé par un test contre le Dockerfile.
+  `background`, `notify` et `pty` restent refusés (résultat lisible seulement par `process_manage`,
+  refusé ; aucune notification possible après la fin d'une exécution planifiée).
+- **Chien de garde** : un dernier run « ok » qui n'a produit aucun rapport (date de modification du PDF,
+  fenêtre de 3 h avant la fin du run, indépendante du fuseau de l'hôte) est un problème, au même titre
+  qu'un run en erreur.
+
+### Ajouté
+
+- Section **« OUTILS AUTORISÉS »** dans les deux prompts, générée par le garde-fou (source unique) :
+  outils, paramètres, fichiers et appels `terminal` exacts de la veille, dont
+  `{"command": "veillectl components scan <slug>", "timeout": 1200}`.
+- `scripts/guard-probe.py` vérifie aussi, dans l'image, que le scan avec `timeout: 1200` est permis
+  (plafond de l'image cohérent) et qu'une exécution sans rapport est déclarée en échec selon Hermes
+  lui-même, ses appels d'outils et sa réponse finale reliés par le tour.
+
 ## [0.7.0] — 2026-10-21
 
 Recherche web des veilles par l'API **DeepSeek Search & Fetch** (ouverte le 17/10/2026), avec la clé déjà

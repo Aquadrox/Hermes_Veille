@@ -1,6 +1,7 @@
 import datetime as dt
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -11,19 +12,22 @@ watchdog = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(watchdog)
 
 
-def volume(tmp_path, *, last_status="ok", report_days_ago=2, paused=False, max_age=192, size=30000, kind=None):
+def volume(tmp_path, *, last_status="ok", report_days_ago=2, paused=False, max_age=192, size=30000, kind=None,
+           last_run_at=None, last_error=None, created_at="2026-01-01T00:00:00+01:00"):
     vol = tmp_path / "data"
     d = vol / "veilles" / "demo"
     (d / "rapports").mkdir(parents=True)
     (d / "veille.json").write_text(json.dumps({
         "slug": "demo", "name": "Démo", "job_id": "j1", "max_age_hours": max_age,
-        "created_at": "2026-01-01T00:00:00+01:00", **({"kind": kind} if kind else {})}))
+        "created_at": created_at, **({"kind": kind} if kind else {})}))
     if report_days_ago is not None:
-        date = (dt.datetime.now() - dt.timedelta(days=report_days_ago)).strftime("%Y-%m-%d")
-        (d / "rapports" / f"{date}-veille.pdf").write_bytes(b"x" * size)
+        made = dt.datetime.now() - dt.timedelta(days=report_days_ago)
+        pdf = d / "rapports" / f"{made:%Y-%m-%d}-veille.pdf"
+        pdf.write_bytes(b"x" * size)
+        os.utime(pdf, (made.timestamp(),) * 2)  # produit ce jour-là
     (vol / "cron").mkdir()
-    job = {"id": "j1", "name": "Démo [demo]", "last_status": last_status,
-           "enabled": not paused, "state": "paused" if paused else "scheduled"}
+    job = {"id": "j1", "name": "Démo [demo]", "last_status": last_status, "last_run_at": last_run_at,
+           "last_error": last_error, "enabled": not paused, "state": "paused" if paused else "scheduled"}
     (vol / "cron" / "jobs.json").write_text(json.dumps({"jobs": [job]}))
     return vol
 
@@ -119,3 +123,35 @@ def test_report_date_reads_optional_time(tmp_path):
     problem, detail = watchdog.check_report({"dir": str(vol / "veilles" / "demo")}, 192, 20000,
                                             dt.datetime.now() + dt.timedelta(days=1))
     assert problem is None and f"{day}-23h59-veille.pdf" in detail
+
+
+# Incident du 21-22/10/2026 : run « ok » de 111 min, sans rapport ni e-mail.
+def iso(delta: dt.timedelta) -> str:
+    return (dt.datetime.now().astimezone() - delta).isoformat(timespec="seconds")
+
+
+def test_ok_run_without_report_is_a_problem(tmp_path, capsys):
+    vol = volume(tmp_path, kind="composants", size=15000, last_run_at=iso(dt.timedelta(hours=1)))
+    assert run(vol, tmp_path, "--dry-run") == 1
+    assert "dernier run « ok » le" in capsys.readouterr().out
+    # aucun rapport du tout : idem, même pour une veille récente (le contrôle de fraîcheur, lui, patiente)
+    vol = volume(tmp_path / "b", report_days_ago=None, last_run_at=iso(dt.timedelta(minutes=5)),
+                 created_at=iso(dt.timedelta(days=1)))
+    assert run(vol, tmp_path / "b", "--dry-run") == 1
+    out = capsys.readouterr().out
+    assert "dernier run « ok » le" in out and "aucun rapport encore (veille récente)" in out
+
+
+def test_ok_run_with_its_report_is_healthy(tmp_path):
+    vol = volume(tmp_path, kind="composants", size=15000, last_run_at=iso(dt.timedelta(minutes=10)))
+    stamp = (dt.datetime.now() - dt.timedelta(minutes=110)).strftime("%Y-%m-%d-%Hh%M")  # début du run de 111 min
+    (vol / "veilles" / "demo" / "rapports" / f"{stamp}-veille.pdf").write_bytes(b"x" * 15000)
+    assert run(vol, tmp_path, "--dry-run") == 0
+
+
+def test_failure_declared_by_the_guard_is_alerted_with_its_reason(tmp_path, capsys):
+    reason = "veille-guard : le guard a refusé 3 appels : l'analyse ne peut pas aboutir"
+    vol = volume(tmp_path, last_status="error", last_run_at=iso(dt.timedelta(hours=1)), last_error=reason)
+    assert run(vol, tmp_path, "--dry-run") == 1
+    out = capsys.readouterr().out
+    assert "dernier run en échec (error) : veille-guard : le guard a refusé 3 appels" in out

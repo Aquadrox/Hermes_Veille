@@ -10,6 +10,10 @@ appel d'outil d'une exécution planifiée, par listes blanches (tout le reste es
 - terminal : `date`, `ls` de ses rapports et les commandes `veillectl` de son job, pour SON slug,
   sans aucun caractère spécial du shell (ni guillemet, ni `$`, `;`, `|`, `&`, `<`, `>`, `*`…).
 
+Chaque refus dit ce qui est permis, pour que l'agent se corrige du premier coup. Il compte : au
+MAX_REFUSALS-ième d'une exécution, plus aucun appel n'est permis, et une exécution arrêtée ou qui se
+termine sans avoir publié son rapport est déclarée en échec à Hermes (`finish`), jamais en succès.
+
 Il encadre aussi le contenu externe rendu à l'agent comme « non fiable » (marquage, pas une barrière).
 Bibliothèque standard uniquement : ce module est chargé dans le processus de Hermes.
 """
@@ -17,8 +21,10 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import store
@@ -35,7 +41,7 @@ OUTPUT_RE = re.compile(r"(\d{4}-\d{2}-\d{2}-\d{2}h\d{2})-(?:veille\.md|charts\.j
 _COMMAND_RE = re.compile(r"[A-Za-z0-9_.,:/+=@%# -]+")  # aucun caractère que le shell interprète
 _DATE_FORMAT_RE = re.compile(r"\+[%A-Za-z0-9:_-]+")
 _LS_FLAGS_RE = re.compile(r"-[1ahlrt]+")
-_SHORT_RE = re.compile(r"\. | : | \(")  # motif d'un refus, sans ses indications
+_SHORT_RE = re.compile(r"\. | : | \(|\n")  # motif d'un refus, sans ses indications
 
 # Paramètres admis par outil ; un autre paramètre doit être vide (mode V4A de `patch`, `cross_profile`…).
 ALLOWED_ARGS = {
@@ -49,7 +55,16 @@ ALLOWED_ARGS = {
 }
 _TRUSTED_FILES = ("config.md", "job-prompt.md")  # rédigés par l'administrateur ou rendus par l'application
 SIMPLE_COMMAND = ("caractère non autorisé : une commande simple, sans guillemets ni caractère spécial du shell "
-                  "($ ; | & < > * ` \\ retour à la ligne…)")
+                  "($ ; | & < > * ` \\ retour à la ligne…), ni redirection ni arrière-plan : lance-la telle "
+                  "quelle, sa sortie revient à l'appel")
+FOREGROUND = " (les commandes d'une veille s'exécutent au premier plan : ni background, ni notify, ni pty)"
+# `veillectl components scan` : budget Digi-Key, dernier appel et enregistrement compris, ≈ 1 040 s (17 min) au pire
+# (tests/test_guard.py). Au premier plan seulement, donc <= TERMINAL_MAX_FOREGROUND_TIMEOUT de l'image.
+SCAN_TIMEOUT = 1200
+MAX_REFUSALS = 3  # refus par exécution : au-delà, l'agent tourne à vide (incident du 21/10/2026, 111 min)
+MAX_TRACKED_RUNS = 64  # exécutions suivies par processus : une exécution interrompue ne se termine pas ici
+STOPPED = "exécution arrêtée"
+NO_REPORT = "aucun rapport publié par cette exécution (ni PDF, ni e-mail)"
 
 
 @dataclass(frozen=True)
@@ -106,22 +121,29 @@ def _file(tool: str, args: dict, s: Session) -> str | None:
     p = _real(args.get("path"))
     if p is None:
         return f"chemin absolu requis (dossier {s.rapports})"
-    if tool in ("write_file", "patch"):
+    write = tool in ("write_file", "patch")
+    if write:
         m = _output(args["path"], s)
         if m and (s.rapports / f"{m.group(1)}-veille.pdf").exists():  # historique relu par les exécutions suivantes
             return f"rapport {m.group(1)} déjà publié : ses fichiers ne se modifient plus (nouveau D pour un nouveau rapport)"
         ok = bool(m)
-        where = f"{s.rapports}/D-veille.md, D-charts.json, D-mail.json ou D-pcn.json"
     elif tool == "read_file":
         ok = p.parent == s.rapports or p in {s.dir / name for name in _TRUSTED_FILES}
-        where = f"{s.dir}/config.md, job-prompt.md et {s.rapports}/"
     else:  # search_files
         ok = p == s.rapports or p.parent == s.rapports
-        where = f"{s.rapports}/"
-    return None if ok else f"fichier hors de la veille {s.slug} : {where} seulement"
+    if ok:
+        return None
+    if write:
+        where = (f"écriture permise seulement de {s.rapports}/D-veille.md, D-charts.json, D-mail.json ou "
+                 "D-pcn.json (D : AAAA-MM-JJ-HHhMM)")
+    else:  # choix assumé : le reste du dossier (liste suivie, destinataires…) n'est pas utile à l'agent
+        where = (f"lecture permise seulement de {s.dir}/config.md, {s.dir}/job-prompt.md et des fichiers de "
+                 f"{s.rapports}/ (search_files : dans {s.rapports}/) ; le dossier de la veille ne se lit pas en "
+                 "entier : vise un fichier précis")
+    return f"fichier hors de la veille {s.slug} : {where}"
 
 
-def _command(command, s: Session) -> str | None:
+def _command(command, s: Session, timeout: float = 0) -> str | None:
     if not isinstance(command, str) or not _COMMAND_RE.fullmatch(command):
         return SIMPLE_COMMAND
     w = command.split()
@@ -136,7 +158,10 @@ def _command(command, s: Session) -> str | None:
     if w[0] == "veillectl" and len(w) >= 4 and w[3] == s.slug:
         action, args = tuple(w[1:3]), w[4:]
         if action == ("components", "scan") and not args:
-            return None
+            return None if timeout >= SCAN_TIMEOUT else (
+                f"timeout {SCAN_TIMEOUT} obligatoire pour veillectl components scan : en deçà, Hermes arrête la "
+                "commande avant la fin (au bout de 180 s sans timeout) et le passage Digi-Key est perdu. Appel "
+                f'exact : {{"command": "veillectl components scan {s.slug}", "timeout": {SCAN_TIMEOUT}}}')
         if action == ("components", "progress") and args and not any(a.startswith("-") for a in args):
             return None
         if action == ("components", "finalize") and len(args) == 1 and _output(args[0], s, "-pcn.json"):
@@ -144,7 +169,8 @@ def _command(command, s: Session) -> str | None:
         if action == ("report", "publish") and len(args) == 1 and _output(args[0], s, "-veille.md"):
             return None
     return (f"commande non autorisée. Seules sont permises : date, ls {s.rapports}/, et pour la veille "
-            f"{s.slug} : veillectl components scan|progress|finalize, veillectl report publish")
+            f"{s.slug} : veillectl components scan|progress|finalize, veillectl report publish "
+            "(appels exacts : section OUTILS AUTORISÉS du prompt)")
 
 
 def check(tool: str, args: dict, s: Session | None) -> str | None:
@@ -157,15 +183,19 @@ def check(tool: str, args: dict, s: Session | None) -> str | None:
         return f"outil « {tool} » non autorisé pour une veille (permis : {', '.join(ALLOWED_ARGS)})"
     allowed = ALLOWED_ARGS[tool]
     extra = sorted(k for k, value in args.items() if allowed is not None and k not in allowed and value)
+    cap = _foreground_cap()
     if extra:
-        return f"paramètre(s) non autorisé(s) pour {tool} : {', '.join(extra)}"
+        permitted = ", ".join(f"{k} (<= {cap} s)" if k == "timeout" else k for k in sorted(allowed))
+        return (f"paramètre(s) non autorisé(s) pour {tool} : {', '.join(extra)} — params permis : {permitted} ; "
+                "relance sans les autres" + (FOREGROUND if tool == "terminal" else ""))
     if tool == "terminal":
         if args.get("workdir") and _real(args["workdir"]) != s.dir:
-            return f"répertoire de travail hors de la veille {s.slug}"
-        cap = _foreground_cap()
-        if _number(args.get("timeout")) > cap:
-            return f"durée maximale {cap} s : au-delà, Hermes passerait la commande en arrière-plan, sans résultat lisible"
-        return _command(args.get("command"), s)
+            return f"répertoire de travail hors de la veille {s.slug} : workdir {s.dir} ou aucun"
+        timeout = _number(args.get("timeout"))
+        if timeout > cap:
+            return (f"durée maximale {cap} s : relance avec un timeout <= {cap} (au-delà, Hermes passerait la "
+                    "commande en arrière-plan, sans résultat lisible)")
+        return _command(args.get("command"), s, timeout)
     if allowed is not None:
         return _file(tool, args, s)
     return None
@@ -176,12 +206,70 @@ def _detail(tool: str, args: dict) -> str:
     return f"{tool} {str(value)[:200]}".strip()
 
 
-def enforce(tool: str, args: dict, s: Session | None) -> str | None:
-    """`check`, plus la trace du refus dans le journal d'audit (page Santé), sans la liste de ce qui
-    est permis : l'agent la reçoit pour se corriger, le journal n'en a pas besoin."""
+@dataclass
+class _Run:
+    session: Session
+    started: float = field(default_factory=time.time)
+    refusals: int = 0
+
+
+_runs: dict[str, _Run] = {}  # exécutions planifiées en cours dans ce processus, par tour Hermes (turn_id)
+_runs_lock = threading.Lock()  # appels d'outils parallèles, exécutions simultanées de plusieurs veilles
+
+
+def _stopped(refusals: int) -> str:
+    return f"le guard a refusé {refusals} appels : l'analyse ne peut pas aboutir"
+
+
+def _run(run_id: str, s: Session) -> _Run:
+    """Suivi de l'exécution `run_id`, créé à son premier appel d'outil ; sous _runs_lock."""
+    run = _runs.get(run_id)
+    if run is None:
+        if len(_runs) >= MAX_TRACKED_RUNS:
+            del _runs[next(iter(_runs))]  # la plus ancienne : interrompue avant sa réponse finale
+        run = _runs[run_id] = _Run(s)
+    return run
+
+
+def enforce(tool: str, args: dict, s: Session | None, run_id: str = "") -> str | None:
+    """`check` compté par exécution (`run_id` : tour Hermes), plus la trace du refus dans le journal d'audit
+    (page Santé), sans la liste de ce qui est permis : l'agent la reçoit pour se corriger, le journal n'en a
+    pas besoin. Au MAX_REFUSALS-ième refus, l'exécution est arrêtée : tout appel suivant est refusé."""
     reason = check(tool, args, s)
+    if s is not None and s.slug and run_id:
+        with _runs_lock:
+            run = _run(run_id, s)
+            stopped = run.refusals >= MAX_REFUSALS
+            if reason or stopped:
+                run.refusals += 1
+                if run.refusals >= MAX_REFUSALS:
+                    stop = (f"{STOPPED} : {_stopped(run.refusals)}. Tout nouvel appel sera refusé : termine "
+                            "maintenant par ta réponse finale.")
+                    reason = stop if stopped else f"{reason}\n{stop}"
     if reason:
         store.audit("veille-guard", "refus", s.slug or "", f"{_detail(tool, args)} — {_SHORT_RE.split(reason, 1)[0]}")
+    return reason
+
+
+def finish(run_id: str, s: Session | None) -> str | None:
+    """Fin d'une exécution planifiée (réponse finale de l'agent) : motif de son échec, tracé au journal
+    d'audit, ou None si elle a publié son rapport sans être arrêtée. `s` sert si l'exécution n'a fait aucun
+    appel d'outil (elle n'a donc rien publié) ; sans `run_id`, rien n'est décidé."""
+    if not run_id:
+        return None
+    with _runs_lock:
+        run = _runs.pop(run_id, None)
+    s = run.session if run else s
+    if s is None or s.slug is None:
+        return None
+    report = store.published_since(s.slug, run.started) if run else None
+    stopped = run is not None and run.refusals >= MAX_REFUSALS
+    if report and not stopped:
+        return None
+    parts = [_stopped(run.refusals)] if stopped else []
+    parts.append(f"rapport {report} publié" if report else NO_REPORT)
+    reason = " ; ".join(parts)
+    store.audit("veille-guard", "échec", s.slug, reason)
     return reason
 
 
@@ -202,6 +290,33 @@ def mark(tool: str, args: dict, result, s: Session | None) -> str | None:
     if tool == "read_file" and _real(args.get("path")) in {s.dir / name for name in _TRUSTED_FILES}:
         return None
     return wrap(result)
+
+
+def prompt_tools(kind: str, dir_: Path, slug: str) -> str:
+    """Contrat exact des outils, placé dans les deux gabarits de prompt (rappel : `check` l'applique) :
+    l'agent n'a rien à essayer."""
+    r = f"{dir_}/rapports"
+    if kind == "composants":
+        writes = f"`{r}/D-pcn.json`"
+        commands = [f"veillectl components scan {slug}", f"veillectl components progress {slug} <MPN> …",
+                    f"veillectl components finalize {slug} {r}/D-pcn.json"]
+    else:
+        writes = f"`{r}/D-veille.md`, `D-charts.json` et `D-mail.json`"
+        commands = [f"veillectl report publish {slug} {r}/D-veille.md"]
+    calls = "\n".join(f'  {{"command": "{c}", "timeout": {SCAN_TIMEOUT}}}' for c in commands)
+    return (
+        "OUTILS AUTORISÉS — contrat exact, vérifié avant chaque appel : tout autre appel est refusé, et au "
+        f"{MAX_REFUSALS}e refus l'exécution est arrêtée en échec. N'essaie rien d'autre.\n"
+        "- web_search, web_extract : recherche et lecture de pages web.\n"
+        f"- read_file (path, offset, limit) : `{dir_}/config.md`, `{dir_}/job-prompt.md` ou un fichier de `{r}/` ; "
+        f"search_files : dans `{r}/` seulement. Le reste du dossier de la veille ne se lit pas : vise un fichier "
+        "précis.\n"
+        f"- write_file (path, content) et patch : {writes} seulement.\n"
+        "- terminal : paramètres `command` et `timeout` SEULEMENT (ni background, ni notify, ni pty : chaque "
+        "commande s'exécute au premier plan et rend sa sortie), commande écrite telle quelle, sans guillemets, "
+        f"redirection (>, 2>&1), &, ; ni |. Commandes permises : `date +%Y-%m-%d-%Hh%M`, `ls -t {r}/`, et ces "
+        f"appels exacts, arguments de l'outil terminal (D : voir RÉPERTOIRES) :\n{calls}"
+    )
 
 
 def prompt_rules(dir_: Path) -> str:

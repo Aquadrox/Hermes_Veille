@@ -40,6 +40,7 @@ MAX_ATTEMPTS = 10   # pannes passagères tolérées par passage, toutes référe
 BACKOFF = (5, 10, 20, 30, 45, 60)  # attentes (s) avant la 1re, 2e… reprise ; la dernière est le plafond
 JITTER = 0.2        # ± 20 % : des reprises qui ne tombent pas toutes à la même seconde
 RETRY_AFTER = 10    # HTTP 429 sans en-tête Retry-After exploitable (s)
+HTTP_TIMEOUT = 20   # s par requête (connexion, puis lecture)
 
 # Pannes passagères : le réseau ou le serveur, pas la requête. HTTPError (sous-classe d'URLError) est traitée
 # avant. HTTPException : réponse tronquée (IncompleteRead) ou ligne d'état illisible, après une coupure.
@@ -102,7 +103,7 @@ class Client:
                 self._sleep(wait)
         self._last = self._clock()
         self.calls += 1
-        with self._urlopen(req, timeout=20) as r:
+        with self._urlopen(req, timeout=HTTP_TIMEOUT) as r:
             data = json.loads(r.read().decode() or "{}")
         return data if isinstance(data, dict) else {}
 

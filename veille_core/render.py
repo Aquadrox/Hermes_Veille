@@ -44,8 +44,9 @@ def render(v: Veille) -> str:
     tpl_path = paths.defaults_dir() / TEMPLATES.get(v.kind, TEMPLATE_NAME)
     tpl = Template(tpl_path.read_text(encoding="utf-8"))
     values = {k: _quote_safe(val) for k, val in variables(v).items()}
-    # Règles multilignes, construites à partir du chemin du volume (slug validé par SLUG_RE).
-    return tpl.substitute(values, security=guard.prompt_rules(v.dir))
+    # Règles et contrat des outils multilignes, construits à partir du chemin du volume (slug validé par SLUG_RE).
+    return tpl.substitute(values, security=guard.prompt_rules(v.dir), tools=guard.prompt_tools(v.kind, v.dir, v.slug),
+                          scan_timeout=guard.SCAN_TIMEOUT)
 
 
 def write(v: Veille) -> bool:
