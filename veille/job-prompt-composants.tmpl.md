@@ -15,9 +15,10 @@ RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 
 ÉTAPES OBLIGATOIRES, dans cet ordre :
 
-1. PRÉPARATION — exécute, avec l'appel exact de OUTILS AUTORISÉS (timeout de la commande : ${scan_timeout} secondes, au premier plan : elle interroge Digi-Key pour tous les composants et peut durer environ 17 minutes ; attends sa sortie) :
+1. PRÉPARATION — exécute, avec l'appel exact de OUTILS AUTORISÉS (timeout de la commande : ${command_timeout} secondes, au premier plan ; attends sa sortie) :
    veillectl components scan ${slug}
-   Elle affiche en JSON le LOT de composants à rechercher sur le web aujourd'hui (au plus ${batch_size}) : pour chacun, `mpn`, `manufacturer`, `since` (chercher les avis publiés depuis cette date ; null = jamais vérifié : cherche aussi l'état actuel et l'historique), `digikey_status`, `digikey_error` (non nul : Digi-Key ne connaît pas la référence, voir étape 3 ; ces composants ont en plus `alldatasheet`, `web_status` et `maker`, voir REPLI ALLDATASHEET) et `known` (avis déjà enregistrés : ne les recherche pas à nouveau) ; ainsi que `track_progress` (voir étape 3).
+   Elle interroge Digi-Key pour tous les composants, PAR TRANCHES de quelques minutes (plusieurs tranches pour une longue liste) : tant que sa sortie contient "complete": false, relance EXACTEMENT le même appel, sans rien changer ni rien faire d'autre entre deux tranches (le passage reprend où il s'est arrêté ; le champ `next` dit où il en est). Ne passe à l'étape 2 qu'avec "complete": true.
+   Sa sortie finale affiche en JSON le LOT de composants à rechercher sur le web aujourd'hui (au plus ${batch_size}) : pour chacun, `mpn`, `manufacturer`, `since` (chercher les avis publiés depuis cette date ; null = jamais vérifié : cherche aussi l'état actuel et l'historique), `digikey_status`, `digikey_error` (non nul : Digi-Key ne connaît pas la référence, voir étape 3 ; ces composants ont en plus `alldatasheet`, `web_status` et `maker`, voir REPLI ALLDATASHEET) et `known` (avis déjà enregistrés : ne les recherche pas à nouveau) ; ainsi que `track_progress` (voir étape 3).
 
 2. LIS le brief `${dir}/config.md` : sources à privilégier, mots-clés, règles de fiabilité.
 

@@ -46,7 +46,11 @@ PLACEHOLDER_RECIPIENT = store.PLACEHOLDER_RECIPIENT
 COMPONENTS_TEMPLATE = "composants"
 COMPONENTS_SCHEDULE = "0 23 * * 0"  # dimanche 23h : heures creuses DeepSeek toute l'année
 CHAPTER_MARK = "<!-- chapitre-composants -->"
-SCAN_BUDGET_S = 900  # passage Digi-Key d'un scan : la suite au prochain passage (plafond : guard.SCAN_TIMEOUT)
+SCAN_BUDGET_S = 900  # passage Digi-Key, toutes tranches confondues : la suite au prochain passage
+# Tranche d'un appel `veillectl components scan` (D1, voir components_scan) : elle, l'appel Digi-Key en cours à son
+# terme (jeton expiré : 2 authentifications et 2 requêtes) et l'enregistrement tiennent dans guard.COMMAND_TIMEOUT.
+SCAN_SLICE_S = guard.COMMAND_TIMEOUT - 4 * digikey.HTTP_TIMEOUT - 60  # 220 s
+SCAN_BUDGET_STOP = "budget de temps ou d'appels atteint : suite au prochain passage"
 
 
 class ServiceError(RuntimeError):
@@ -608,73 +612,111 @@ def _set_link(v: Veille, target: str | None) -> bool:
 
 
 def components_scan(slug: str, actor: str = "job", client: digikey.Client | None = None,
-                    budget_s: float = SCAN_BUDGET_S, plan_batch: bool = True) -> dict:
+                    budget_s: float | None = None, plan_batch: bool = True) -> dict:
     """Statut Digi-Key de tous les composants, puis lot de recherche web du jour (enregistré).
 
-    `plan_batch=False` (vérification à la demande) : le lot web en cours n'est pas touché, pour ne
-    pas fausser une exécution planifiée qui serait entre ses étapes « scan » et « finalize ».
+    D1 (incident du 22/10/2026) — passage PAR TRANCHES reprenables. Un passage complet (≈ 17 min pour 386
+    références) dépasse le délai que Hermes accorde à un appel d'outil (420 s) : chaque appel de l'agent traite au
+    plus SCAN_SLICE_S de Digi-Key, ENREGISTRE ce qu'il a lu, puis rend `"complete": false` ; relancé tel quel, il
+    reprend aux références non vérifiées aujourd'hui. Le passage garde son budget (SCAN_BUDGET_S, MAX_CALLS, pannes
+    tolérées), cumulé sur ses tranches (`scan` de components.json) ; le lot web n'est tiré qu'à sa fin, avec les mêmes
+    règles qu'avant. Rejetés : l'arrière-plan avec `process_manage` (registre de processus commun à toutes les
+    sessions de Hermes : une porte de plus pour une page piégée), relever les plafonds de Hermes (délai commun à
+    toutes ses sessions, commande opaque et sans reprise ; voir guard.COMMAND_TIMEOUT), un script lancé par Hermes
+    avant l'agent (sa sortie, dont des titres d'avis venus du web, entrerait dans le prompt sans le marquage « non
+    fiable » des résultats d'outils). Un passage du jour (date du serveur) ; une tranche arrêtée net (SIGTERM) ne
+    perd que ses propres lectures.
 
-    Les appels réseau (plusieurs minutes pour 300 composants) se font HORS verrou ; les résultats
-    sont ensuite appliqués par clé à la liste relue sous verrou (éditions concurrentes préservées).
+    `plan_batch=False` (vérification à la demande, processus détaché, sans délai d'outil) : un seul appel pour tout
+    le passage ; ni le lot web en cours ni le passage du job ne sont touchés, pour ne pas fausser une exécution
+    planifiée qui serait entre ses étapes « scan » et « finalize ».
+
+    Les appels réseau se font HORS verrou ; les résultats sont ensuite appliqués par clé à la liste relue sous
+    verrou (éditions concurrentes préservées).
 
     Lancement manuel suivi : avancement publié (référence en cours, puis lot) ; `track_progress` dit
     à l'agent de signaler ses groupes de recherche web (`components_progress`).
 
     Panne passagère de Digi-Key (réseau, HTTP 5xx ou 429) : le passage attend (`digikey.retry_delay`) puis
-    reprend à la référence interrompue, sans réinterroger les précédentes. Au plus `digikey.MAX_ATTEMPTS`
-    pannes par passage, toutes références confondues ; le budget de temps et MAX_CALLS restent prioritaires.
-    Après abandon, les références non interrogées gardent leur date de vérification : elles partent au lot web.
+    reprend à la référence interrompue, sans réinterroger les précédentes (à la tranche suivante si l'attente
+    la dépasse). Au plus `digikey.MAX_ATTEMPTS` pannes par passage, toutes références confondues ; le budget de
+    temps et MAX_CALLS restent prioritaires. Après abandon, les références non interrogées gardent leur date de
+    vérification : elles partent au lot web, et le rapport dit le passage partiel (`components.scan_coverage`).
     """
     _components_veille(slug)
     track = _tracker(slug, "analyse" if plan_batch else "statuts")
     day = comp.today()
+    budget = SCAN_BUDGET_S if budget_s is None else budget_s
     creds = digikey.credentials()
+    data = comp.load_components(slug)
+    last = data.get("scan") or {}
+    # Passage du job : celui du jour s'il n'est pas fini, sinon un nouveau (budget neuf).
+    run = (last if plan_batch and last.get("date") == day and not last.get("done")
+           else {"date": day, "seconds": 0.0, "calls": 0, "incidents": 0})
     info: dict = {"configured": bool(creds or client), "checked": 0, "errors": 0}
     results: dict[str, dict] = {}
+    complete = True  # passage fini à l'issue de cet appel ; sinon tranche écoulée, suite à l'appel suivant
+    total = len(data["components"])
     dk_progress: dict = {"skipped": True}
     if creds or client:
         client = client or digikey.Client(*creds)
         start = time.monotonic()
-        # Sauf ceux déjà vérifiés aujourd'hui (relance du même jour).
-        todo = [c for c in sorted(comp.load_components(slug)["components"],
-                                  key=lambda c: (c.get("dk") or {}).get("checked_at") or "")
+        # Sauf ceux déjà vérifiés aujourd'hui (tranches précédentes, relance du même jour).
+        todo = [c for c in sorted(data["components"], key=lambda c: (c.get("dk") or {}).get("checked_at") or "")
                 if ((c.get("dk") or {}).get("checked_at") or "") != day]
-        i = failures = 0  # référence en cours ; pannes passagères du passage, toutes références confondues
+        done_before = total - len(todo)
+        left = budget - run["seconds"]  # budget restant du passage
+        slice_s = min(SCAN_SLICE_S, left) if plan_batch else left
+        calls_left = digikey.MAX_CALLS - run["calls"]
+        i = 0
+        failures = run["incidents"]  # pannes passagères du passage, toutes références et tranches confondues
+        if failures:
+            info["incidents"] = failures
         while i < len(todo):
             c = todo[i]
-            if client.calls >= digikey.MAX_CALLS or time.monotonic() - start > budget_s:
-                info["stopped"] = "budget de temps ou d'appels atteint : suite au prochain passage"
+            elapsed = time.monotonic() - start
+            if client.calls >= calls_left or elapsed > left:
+                info["stopped"] = SCAN_BUDGET_STOP
+                break
+            if elapsed > slice_s:
+                complete = False
                 break
             if track:
                 track.update(throttle=True, step="digikey",
-                             digikey=_dk_progress(info, i, len(todo), current=c["mpn"]))
+                             digikey=_dk_progress(info, done_before + i, total, current=c["mpn"]))
             try:
                 results[comp.key_of(c["mpn"], c["manufacturer"])] = client.status(c["mpn"], c["manufacturer"])
             except digikey.TransientError as exc:
                 failures += 1
                 info["incidents"] = failures
                 wait = digikey.retry_delay(failures, exc)
+                resume = time.monotonic() - start + wait
                 attempt = f"tentative {failures}/{digikey.MAX_ATTEMPTS} : {exc}"
                 if failures >= digikey.MAX_ATTEMPTS:
                     info["error"] = f"{exc} : abandon après {failures} tentatives, reprise au prochain passage"
-                elif client.calls >= digikey.MAX_CALLS or time.monotonic() - start + wait > budget_s:  # prioritaires
-                    info["stopped"] = "budget de temps ou d'appels atteint : suite au prochain passage"
+                elif client.calls >= calls_left or resume > left:  # prioritaires
+                    info["stopped"] = SCAN_BUDGET_STOP
                     info["error"] = (f"{exc} : abandon après {failures} tentative(s), budget de temps ou d'appels "
                                      "atteint, reprise au prochain passage")
-                attempt += " ; abandon, reprise au prochain passage" if "error" in info else f" ; reprise dans {wait:.0f} s"
+                elif resume > slice_s:
+                    complete = False  # l'attente déborderait la tranche : la tranche suivante reprend ici
+                attempt += (" ; abandon, reprise au prochain passage" if "error" in info
+                            else f" ; reprise dans {wait:.0f} s" if complete else " ; reprise à la tranche suivante")
                 print(f"Digi-Key — {attempt}", file=sys.stderr, flush=True)  # journal du lancement (stdout : le JSON)
-                if "error" in info:
+                if "error" in info or not complete:
                     break
                 if track:
-                    track.update(step="digikey", digikey={"done": i, "total": len(todo), "current": c["mpn"],
-                                                          "note": attempt[:200]})
+                    track.update(step="digikey", digikey={"done": done_before + i, "total": total,
+                                                          "current": c["mpn"], "note": attempt[:200]})
                 client.pause(wait)
                 continue  # même référence : les précédentes ne sont pas réinterrogées
             except digikey.DigiKeyError as exc:
                 info["error"] = str(exc)
                 break
             i += 1
-        dk_progress = _dk_progress(info, len(results), len(todo))
+        run.update(seconds=run["seconds"] + time.monotonic() - start, calls=run["calls"] + client.calls,
+                   incidents=failures)
+        dk_progress = _dk_progress(info, done_before + len(results), total)
     with _locked():
         v = _components_veille(slug)
         data, notices = comp.load_components(slug), comp.load_notices(slug)
@@ -703,13 +745,31 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
                 if not prev.get("error"):  # Digi-Key ne la trouve plus : recherche web prioritaire, une fois
                     dk["changed_at"] = day
             c["dk"] = dk
-        lot = comp.batch(data["components"], v.batch_size) if data["components"] and plan_batch else []
+        lot = []
         if plan_batch:
-            data["batch"] = [comp.key_of(c["mpn"], c["manufacturer"]) for c in lot]
+            if complete:
+                lot = comp.batch(data["components"], v.batch_size) if data["components"] else []
+                data["batch"] = [comp.key_of(c["mpn"], c["manufacturer"]) for c in lot]
+                run.update(done=True, note=_dk_note(info))
+            data["scan"] = {**run, "configured": info["configured"]}  # couverture du rapport (D4)
         comp.save_components(slug, data)
         if new:
             comp.save_notices(slug, notices)
         _index(slug, data["components"], notices)
+        if info["configured"]:
+            info.update(done=comp.checked_on(data["components"], day), total=len(data["components"]))
+    note = _dk_note(info)
+    audit(actor, "components-scan", slug, f"Digi-Key {info['checked']} vérifié(s), {len(new)} avis ; "
+          + (f"lot web {len(lot)}" if complete else f"tranche : {info['done']}/{info['total']} vérifié(s)")
+          + (f" ; Digi-Key : {note[:200]}" if note else ""))
+    if not complete:
+        if track:
+            track.update(step="digikey", digikey=dk_progress)
+        # Sortie différente à chaque tranche (avancement, budget) : Hermes ne la prend pas pour une boucle.
+        return {"slug": slug, "date": day, "complete": False, "digikey": info,
+                "next": (f"passage Digi-Key en cours : {info['done']}/{info['total']} références vérifiées, "
+                         f"{run['seconds']:.0f} s sur {budget:.0f} s de budget. Relance exactement la même commande "
+                         "pour continuer.")}
     if track:
         if plan_batch:
             track.update(step="web", digikey=dk_progress, batch=[
@@ -719,10 +779,7 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
     known: dict[str, list[str]] = {}
     for n in notices:
         known.setdefault(n["key"], []).append(n.get("number") or n["title"])
-    note = _dk_note(info)
-    audit(actor, "components-scan", slug, f"Digi-Key {info['checked']} vérifié(s), {len(new)} avis ; lot web "
-                                          f"{len(lot)}" + (f" ; Digi-Key : {note[:200]}" if note else ""))
-    return {"slug": slug, "date": day, "track_progress": track is not None and plan_batch,
+    return {"slug": slug, "date": day, "complete": True, "track_progress": track is not None and plan_batch,
             "digikey": info, "new_digikey_notices": len(new),
             "batch": [{"mpn": c["mpn"], "manufacturer": c["manufacturer"],
                        "since": comp.search_since(c), "digikey_status": (c.get("dk") or {}).get("status"),
@@ -1140,7 +1197,8 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
                                           "rejected": len(rejected)})
 
     report = comp.pending(notices, "report", {day})
-    view = comp.digest(data["components"], notices, report)
+    view = comp.digest(data["components"], notices, report, data.get("scan"))
+    cov = view["coverage"]  # D4 : un passage Digi-Key partiel est dit partout (PDF, en-tête, e-mail, sortie)
     body = comp.to_markdown(view, heading="#")
     searched = [c["mpn"] for c in data["components"] if comp.key_of(c["mpn"], c["manufacturer"]) in lot]
     body += (f"\n*Recherche web de cette exécution ({len(searched)}) : "
@@ -1149,13 +1207,17 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         body += f"\n*{len(rejected)} entrée(s) de la recherche web rejetée(s) (source ou référence invalide).*\n"
     md, pdf = (store.veille_dir(slug) / "rapports" / f"{stamp}-veille.{ext}" for ext in ("md", "pdf"))
     store.atomic_write(md, body)
-    _build_pdf(v, md, pdf, subtitle=f"Avis PCN et fins de vie — {stamp[:10]} {stamp[11:]}",
-               meta=f"Composants suivis : {view['components']} | Recherche web du jour : {len(lot)}")
+    meta = f"Composants suivis : {view['components']} | Recherche web du jour : {len(lot)}"
+    if cov:
+        meta += f" | Digi-Key : {cov['checked']}/{cov['total']}" + (" (PARTIEL)" if cov["partial"] else "")
+    _build_pdf(v, md, pdf, subtitle=f"Avis PCN et fins de vie — {stamp[:10]} {stamp[11:]}", meta=meta)
     _mark(slug, {n["id"] for n in report}, "report", day)
     lines = [f"OK: veille composants — {len(new)} nouvel(s) avis "
              f"(dont {critical} fin(s) de vie / dernière(s) commande(s)), "
              f"{len(statuses)} statut(s) établi(s) sur le web, {len(rejected)} rejet(s), PDF {pdf}"]
     lines += [f"  rejet {r}" for r in rejected[:20]]
+    if cov and cov["partial"]:
+        lines.append(f"  {cov['text']}")
     mail = comp.pending(notices, "mail")
     if linked:
         # Livrés par le chapitre de la veille : le canal e-mail reste à jour en cas de détachement.
@@ -1166,7 +1228,7 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         return "\n".join(lines)
     if track:
         track.update(phase="mail")
-    view = comp.digest(data["components"], notices, mail)
+    view = comp.digest(data["components"], notices, mail, data.get("scan"))
     xlsx = _write_xlsx(pdf.parent, slug, data, notices, stamp, actor)
     hint = "Liste complète des composants dans le fichier Excel joint." if xlsx else ""
     with tempfile.NamedTemporaryFile("w", suffix=".html", encoding="utf-8", delete=False) as fh:
@@ -1212,7 +1274,7 @@ def components_chapter(slug: str, for_slug: str, report_md: Path,
         # l'ajout du chapitre) : pas réellement envoyés, donc réinclus.
         failed = {d for d in comp.delivery_days(notices, channel) if not any(rdir.glob(f"{d}*-veille.pdf"))}
         new = comp.pending(notices, channel, {day} | failed)
-        view = comp.digest(data["components"], notices, new)
+        view = comp.digest(data["components"], notices, new, data.get("scan"))
         text = path.read_text(encoding="utf-8").split(CHAPTER_MARK)[0].rstrip()
         store.atomic_write(path, f"{text}\n\n{CHAPTER_MARK}\n\n{comp.to_markdown(view)}")
         for n in new:  # nouvelle date de livraison, y compris pour les réinclus
