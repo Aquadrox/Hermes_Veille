@@ -52,11 +52,12 @@ def demo(env):
 
 def test_annotations_split_read_and_write(srv):
     t = tools(srv)
-    assert len(t) == 31
+    assert len(t) == 35
     reads = {n for n, x in t.items() if x.annotations.read_only_hint}
     assert reads == {"list_veilles", "get_veille", "get_brief", "list_brief_templates", "list_reports",
                      "read_report", "get_run_log", "run_history", "preview_schedule", "get_costs", "health",
-                     "list_components", "list_notices", "preview_component_import"}
+                     "list_components", "list_notices", "preview_component_import", "get_component_sheet",
+                     "list_alternatives"}
     assert t["archive_veille"].annotations.destructive_hint is True
     assert t["reset_component_search"].annotations.destructive_hint is True
     assert t["run_veille_now"].annotations.open_world_hint is True
@@ -64,7 +65,7 @@ def test_annotations_split_read_and_write(srv):
 
 def test_readonly_mode_hides_write_tools(env):
     t = tools(build_server(readonly=True))
-    assert len(t) == 14 and all(x.annotations.read_only_hint for x in t.values())
+    assert len(t) == 16 and all(x.annotations.read_only_hint for x in t.values())
 
 
 def test_list_and_get(srv, demo):
@@ -197,7 +198,7 @@ def test_check_flag(env):
     out = subprocess.run([sys.executable, "-m", "veille_mcp", "--check", "--readonly"], cwd=REPO,
                          capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(REPO)}, check=True)
     info = json.loads(out.stdout)
-    assert info["readonly"] is True and len(info["tools"]) == 14
+    assert info["readonly"] is True and len(info["tools"]) == 16
 
 
 def test_get_costs_and_peak_preview(srv, demo, env):

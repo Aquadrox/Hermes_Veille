@@ -7,6 +7,46 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.8.0] — 2026-10-26
+
+Alternatives aux composants en fin de vie : fiche composant (caractéristiques Digi-Key), caractéristiques
+critiques choisies par l'utilisateur, recherche paramétrique de références actives équivalentes, consultable
+dans l'interface et par MCP.
+
+### Ajouté
+
+- **Fiche composant** : le passage Digi-Key garde la catégorie et les caractéristiques de chaque référence
+  (même requête, aucun appel de plus), dans `specs.json` (et non `components.json`, relu par la liste et le
+  tableau de bord). Détail du composant : « Fiche composant », caractéristiques à cocher (critiques).
+- **Alternatives** (`digikey.Client.similar`, `components.rank_alternatives`) : pour un passif ou un discret
+  (résistance, condensateur, inductance, ferrite, diode, transistor, quartz), recherche Digi-Key dans la même
+  sous-catégorie filtrée sur les valeurs des caractéristiques critiques ; fiches actives seulement, critiques
+  revérifiées, 5 au plus, score et différences. Critiques par défaut de la famille (valeur, boîtier,
+  montage, tenue principale), remplacées par le choix de l'utilisateur.
+- **Automatique** après chaque passage Digi-Key pour les composants en fin de vie ou en dernière commande
+  sans recherche depuis 30 jours (ou recherchés avec d'autres critères), dans le temps restant de la tranche,
+  50 recherches au plus.
+- **À la demande** : bouton du détail d'un composant (synchrone), « Alternatives des fins de vie » au-dessus
+  de la liste (arrière-plan, avancement suivi), `veillectl components alternatives <slug> [MPN …]`.
+- **Interface** : badge « ⇄ n » et filtre « Avec alternatives » de la liste, alternatives en cartes
+  (PWA : pas de défilement horizontal à 390 px), fiche en lecture seule dans la base des composants.
+- **MCP** : `get_component_sheet`, `list_alternatives` (lecture), `set_critical_parameters`,
+  `search_alternatives` (≤ 10 MPN pendant l'appel, sinon en arrière-plan) ; `list_components` donne la
+  famille et le nombre d'alternatives. 35 outils (16 en lecture).
+
+### Modifié
+
+- Réinitialiser la recherche efface aussi fiches et alternatives (copiées avec le reste) ; les caractéristiques
+  critiques choisies sont gardées.
+- `check_statuses_now` et la recherche en arrière-plan partagent un même lancement détaché
+  (`service._spawn_components`).
+
+### Déploiement
+
+- `make update`. Rien à régler : les fiches se remplissent au prochain passage Digi-Key (ou « Vérifier les
+  statuts Digi-Key »). Recommandé : un essai avec les vraies clés Digi-Key (« Alternatives des fins de vie »)
+  pour valider le format de la recherche paramétrique v4, établi d'après la documentation.
+
 ## [0.7.3] — 2026-10-26
 
 Incident du 25/10/2026 (veille Industrie 4.0) : tir en échec `blocked_config`. Le conteneur ne reçoit

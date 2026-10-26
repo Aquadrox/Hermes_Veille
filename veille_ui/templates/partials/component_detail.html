@@ -1,8 +1,12 @@
 {# Détail d'un composant (ligne dépliée de la liste) : identité, statut Digi-Key (ou établi par la
-   recherche web si Digi-Key ne connaît pas la référence), avis complets ; base des composants : veilles qui
-   l'ont analysé. #}
+   recherche web si Digi-Key ne connaît pas la référence), avis complets, fiche composant et alternatives ;
+   base des composants : veilles qui l'ont analysé. `spec` : sa fiche Digi-Key (specs.json). Dans une veille (`slug`), la fiche se modifie et la
+   recherche se relance (htmx, remplace ce bloc ; app.js active htmx sur le fragment chargé). #}
 {% from "partials/macros.html" import badge, source_link, watch_links %}
-<div class="comp-detail">
+{% set sh = component_sheet(r, spec) %}
+{% set editable = slug is defined and r.tracked %}
+<div class="comp-detail" id="cd-{{ r.anchor }}">
+  {% if detail_error %}<p class="small err" role="alert">{{ detail_error }}</p>{% endif %}
   <p><strong>{{ r.mpn }}</strong> — {{ r.manufacturer }}
     {% if not r.tracked %}<span class="muted small">(retiré de la liste suivie)</span>{% endif %}</p>
   {% if r.watches %}<p class="small muted">Analysé par : {{ watch_links(r.watches, active) }}</p>{% endif %}
@@ -32,4 +36,50 @@
     {% endfor %}
   </ul>
   {% else %}<p class="small muted">Aucun avis détecté pour ce composant.</p>{% endif %}
+  {% if sh.params %}
+  <details class="sheet">
+    <summary>Fiche composant{% if sh.family %} · {{ sh.family }}{% endif %}
+      <span class="muted small">({{ sh.params|length }} caractéristiques ; critiques : {{ "choisies" if sh.custom else "défauts de la famille" }})</span></summary>
+    {% if sh.category %}<p class="small muted">Digi-Key : {{ sh.category }}</p>{% endif %}
+    {% if editable and not sh.unsearchable %}
+    <form hx-post="/veilles/{{ slug }}/components/{{ r.anchor }}/critical" hx-target="#cd-{{ r.anchor }}" hx-swap="outerHTML">
+      <p class="small muted">Coche les caractéristiques que toute alternative doit avoir à l'identique.</p>
+      <ul class="params">
+        {% for p in sh.params %}<li><label class="p-row"><input type="checkbox" name="param" value="{{ p.id }}"{% if p.critical %} checked{% endif %}{% if not p.valued %} disabled{% endif %}><span class="p-name">{{ p.name }}</span><span class="p-val">{{ p.value }}</span></label></li>{% endfor %}
+      </ul>
+      <div class="actions"><button class="primary" name="op" value="save">Enregistrer les critiques</button>
+        {% if sh.custom %}<button name="op" value="reset">Revenir aux défauts</button>{% endif %}</div>
+    </form>
+    {% else %}
+    <ul class="params">
+      {% for p in sh.params %}<li class="p-row{% if p.critical %} crit{% endif %}"><span class="p-name">{{ p.name }}{% if p.critical %} ★{% endif %}</span><span class="p-val">{{ p.value }}</span></li>{% endfor %}
+    </ul>
+    {% endif %}
+  </details>
+  {% endif %}
+  {% set rec = sh.alternatives %}
+  {% if rec or (editable and sh.family) %}
+  <div class="alts">
+    <p><strong>Alternatives</strong>
+      {% if rec %}<span class="muted small">· recherchées le {{ rec.searched_at }} ·
+        {% if rec.criteria %}critères : {% for x in rec.criteria %}{{ x.name }} = {{ x.value }}{{ " ; " if not loop.last }}{% endfor %}{% else %}même catégorie seulement{% endif %}</span>{% endif %}</p>
+    {% if editable and sh.stale %}<p class="small warn">Critères modifiés depuis cette recherche : relance-la pour les appliquer.</p>{% endif %}
+    {% if rec and rec['items'] %}
+    <ul class="alt-list">
+      {% for a in rec['items'] %}
+      <li><div class="alt-head"><strong>{% if a.url %}{{ source_link({"url": a.url, "label": a.mpn}) }}{% else %}{{ a.mpn }}{% endif %}</strong>
+          <span class="muted">{{ a.manufacturer }}</span> <span class="badge alt">{{ a.score }} %</span></div>
+        {% if a.description %}<div class="small muted">{{ a.description }}</div>{% endif %}
+        {% if a.diffs %}<ul class="diffs small">{% for d in a.diffs %}<li>{{ d.name }} : {{ d.ref }} → <strong>{{ d.alt }}</strong></li>{% endfor %}</ul>
+        {% else %}<div class="small">Autres caractéristiques identiques.</div>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% elif rec %}<p class="small muted">Aucune référence active trouvée avec ces critères : décoche-en pour élargir la recherche.</p>
+    {% else %}<p class="small muted">Pas encore recherchées{% if not r.critical %} (automatique pour les composants en fin de vie ou en dernière commande){% endif %}.</p>{% endif %}
+    {% if editable and sh.family and digikey_configured %}
+    <button hx-post="/veilles/{{ slug }}/components/{{ r.anchor }}/alternatives" hx-target="#cd-{{ r.anchor }}" hx-swap="outerHTML" hx-disabled-elt="this">{{ "Relancer la recherche" if rec else "Rechercher des alternatives" }}</button>
+    {% endif %}
+    <p class="small muted">Suggestions Digi-Key paramétriques (références actives, mêmes caractéristiques critiques) : à qualifier avant tout remplacement.</p>
+  </div>
+  {% endif %}
 </div>

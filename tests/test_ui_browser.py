@@ -493,3 +493,40 @@ def test_recipients_second_finger_during_drag(form):
     cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
     pg.wait_for_timeout(200)
     assert pg.locator(".rcpt-ghost, .rcpt-held, .rcpt-dragging").count() == 0 and _recipients(pg) == []
+
+
+def test_component_sheet_and_alternatives_mobile(tools, monkeypatch):  # noqa: F811
+    """Fiche composant en PWA mobile : filtre « avec alternatives », cases critiques enregistrées (htmx, sans JS en
+    ligne), retour aux défauts, recherche relancée ; aucun défilement horizontal, aucune violation CSP."""
+    from test_alternatives import BOM, LTB, AltClient, res
+
+    from veille_core import components as comp
+    from veille_core import store
+    bom = service.create_veille(name="Carte R", subject="BOM", schedule_expr=service.COMPONENTS_SCHEDULE,
+                                recipients=["achats@example.org"], brief=store.brief_templates()["composants"],
+                                kind="composants", components=comp.parse_components(BOM))
+    service.components_scan(bom.slug, client=AltClient(LTB, similar={"52": [res("ERJ-3EKF1002V", (2, "±5%"))]}))
+    monkeypatch.setenv("DIGIKEY_CLIENT_ID", "id")
+    monkeypatch.setenv("DIGIKEY_CLIENT_SECRET", "secret")
+    monkeypatch.setattr(service.digikey, "Client", lambda *a: AltClient({}, similar={"52": [res("RMCF0603FT10K0")]}))
+    with _browser(monkeypatch, f"/veilles/{bom.slug}") as pg:
+        pg.select_option("select[data-types]", "alts")
+        assert _visible(pg, ["RC0603FR-0710KL"]) == ["RC0603FR-0710KL"]
+        pg.locator("tr.comp", has_text="RC0603FR-0710KL").locator(".comp-toggle").click()
+        detail = pg.locator("tr.detail:not([hidden])")
+        detail.get_by_role("link", name="ERJ-3EKF1002V").wait_for()
+        detail.locator("details.sheet summary").click()
+        assert detail.locator("input[name=param]:checked").count() == 2  # défauts : valeur et boîtier
+        detail.locator("label", has_text="Tolerance").click()  # toute la ligne est la cible tactile
+        assert _visible(pg, ["RC0603FR-0710KL"]) == ["RC0603FR-0710KL"]  # une case n'est pas un filtre
+        detail.get_by_role("button", name="Enregistrer les critiques").click()
+        detail.get_by_text("Critères modifiés depuis cette recherche").wait_for()
+        assert comp.load_components(bom.slug)["components"][0]["critical_params"] == [1, 2, 5]
+        assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        detail.locator("details.sheet summary").click()
+        detail.get_by_role("button", name="Revenir aux défauts").click()  # bouton cliqué transmis (op=reset)
+        detail.get_by_text("critiques : défauts de la famille").wait_for()
+        assert "critical_params" not in comp.load_components(bom.slug)["components"][0]
+        detail.get_by_role("button", name="Relancer la recherche").click()
+        detail.get_by_role("link", name="RMCF0603FT10K0").wait_for()
+        assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")

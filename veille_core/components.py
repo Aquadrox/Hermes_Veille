@@ -2,6 +2,10 @@
 
     veilles/<slug>/components.json   {"components": [...], "batch": [clés du lot web en cours]}
     veilles/<slug>/notices.json      {"notices": [...]}
+    veilles/<slug>/specs.json        {"specs": {clé: fiche Digi-Key}}   (voir « Fiche composant et alternatives »)
+
+Chaque référence garde ce qu'en sait Digi-Key (`dk` : statut, fiche produit, alternatives suggérées) et, si
+l'utilisateur les a choisies, ses caractéristiques critiques (`critical_params`).
 
 Les candidats viennent d'un agent LLM qui lit le web : ce sont des données NON FIABLES.
 Tout passe par `validate_candidates` (schéma strict, URL http(s), tailles bornées) et chaque
@@ -176,9 +180,11 @@ def combine(current: list[dict], items: list[dict], mode: str = "add") -> tuple[
 
 
 def _fresh(c: dict, added_at: str | None = None) -> dict:
-    """Référence sans aucun état de veille (ni vérification, ni statut)."""
-    return {"mpn": c["mpn"], "manufacturer": c["manufacturer"],
-            "added_at": added_at or today(), "web_checked_at": None, "dk": None}
+    """Référence sans aucun état de veille (ni vérification, ni statut). Les caractéristiques critiques choisies par
+    l'utilisateur sont gardées : un choix, pas un résultat de recherche."""
+    return {"mpn": c["mpn"], "manufacturer": c["manufacturer"], "added_at": added_at or today(),
+            "web_checked_at": None, "dk": None,
+            **({"critical_params": c["critical_params"]} if c.get("critical_params") is not None else {})}
 
 
 def replace_components(current: list[dict], wanted: list[dict]) -> list[dict]:
@@ -196,7 +202,7 @@ def replace_components(current: list[dict], wanted: list[dict]) -> list[dict]:
 
 
 def reset_state(components: list[dict]) -> list[dict]:
-    """Même liste (références, dates d'ajout), sans aucun état : tout sera revérifié."""
+    """Même liste (références, dates d'ajout, caractéristiques critiques), sans aucun état : tout sera revérifié."""
     return [_fresh(c, c.get("added_at")) for c in components]
 
 
@@ -309,6 +315,16 @@ def _matcher(components: list[dict]):
             cands = [c for c in cands if same_manufacturer(c["manufacturer"], manufacturer)]
         return cands[0] if len(cands) == 1 else None
     return match
+
+
+def find(components: list[dict], mpn: str, manufacturer: str = "") -> dict:
+    """Référence suivie de ce MPN (le fabricant départage un MPN suivi chez plusieurs) ; lève sinon."""
+    c = _matcher(components)(mpn, manufacturer)
+    if c is None:
+        many = sum(1 for x in components if norm_mpn(x["mpn"]) == norm_mpn(_text(mpn, "label"))) > 1
+        raise ComponentsError(f"« {_text(mpn, 'label')[:64]} » : " + (
+            "suivie chez plusieurs fabricants, préciser le fabricant" if many else "référence non suivie par cette veille"))
+    return c
 
 
 def validate_candidates(raw, components: list[dict]) -> tuple[list[dict], list[str]]:
@@ -568,6 +584,213 @@ def search_since(c: dict) -> str | None:
 
 
 # --------------------------------------------------------------------------
+# Fiche composant et alternatives
+# --------------------------------------------------------------------------
+# Fiche = catégorie et caractéristiques lues chez Digi-Key ({"category": [{"id", "name"}], "params": [{"id", "name",
+# "value", "vid"}]}), dans `specs.json` ({"specs": {clé: fiche}}) et non dans components.json : une quinzaine de
+# caractéristiques par référence multiplieraient par 8 le fichier que relisent la liste et le tableau de bord (mesuré :
+# 1,3 -> 11 Mo et page ×2 pour 5000 références) ; la fiche n'est lue que pour le détail, la recherche et le MCP.
+# Les alternatives trouvées (peu nombreuses, affichées dans la liste) restent dans `dk.alternatives`.
+#
+# Catégorie Digi-Key (d'un niveau quelconque) -> famille dont on cherche des alternatives : passifs et discrets,
+# qui s'échangent sur leurs caractéristiques. Les circuits intégrés n'en sont pas : un équivalent paramétrique y
+# serait trompeur (brochage, fonctions, logiciel).
+FAMILIES = {
+    "Resistors": "Résistance",
+    "Capacitors": "Condensateur",
+    "Inductors, Coils, Chokes": "Inductance",
+    "Ferrite Beads and Chips": "Ferrite",
+    "Discrete Semiconductor Products": "Semi-conducteur discret",
+    "Crystals, Oscillators, Resonators": "Quartz / oscillateur",
+}
+# Caractéristiques critiques par défaut (libellés Digi-Key, anglais) : valeur nominale, boîtier, montage et tenue
+# principale de chaque famille. Celles que la fiche n'a pas sont ignorées ; un choix de l'utilisateur les remplace.
+DEFAULT_CRITICAL = frozenset({
+    "Package / Case", "Mounting Type",
+    "Resistance", "Capacitance", "Voltage - Rated", "Inductance", "Impedance @ Frequency",
+    "Voltage - DC Reverse (Vr) (Max)", "Current - Average Rectified (Io)", "Voltage - Zener (Nom) (Vz)",
+    "FET Type", "Drain to Source Voltage (Vdss)", "Current - Continuous Drain (Id) @ 25°C",
+    "Transistor Type", "Voltage - Collector Emitter Breakdown (Max)", "Current - Collector (Ic) (Max)",
+    "Frequency", "Load Capacitance",
+})
+MAX_ALTERNATIVES = 5
+MAX_DIFFS = 8          # différences affichées par alternative
+ALT_MAX_AGE_DAYS = 30  # une recherche plus ancienne est refaite (catalogue des distributeurs vivant)
+_NO_VALUE = frozenset({"", "-", "—"})
+
+
+def load_specs(slug: str) -> dict[str, dict]:
+    """Fiches d'une veille. Copie de Digi-Key relue à chaque passage : illisible, elle est vide (et réécrite au
+    passage suivant) plutôt qu'une erreur qui bloquerait le passage ou la page."""
+    try:
+        specs = _load(slug, "specs.json").get("specs")
+    except ComponentsError:
+        return {}
+    return specs if isinstance(specs, dict) else {}
+
+
+def save_specs(slug: str, specs: dict[str, dict]) -> None:
+    _save(slug, "specs.json", {"specs": specs})
+
+
+def params(spec: dict | None) -> list[dict]:
+    """Caractéristiques d'une fiche (entrées mal formées ignorées : fichier retouché à la main)."""
+    items = (spec or {}).get("params") if isinstance(spec, dict) else None
+    return [p for p in items if isinstance(p, dict) and isinstance(p.get("id"), int)
+            and isinstance(p.get("name"), str) and isinstance(p.get("value"), str)] if isinstance(items, list) else []
+
+
+def _categories(spec: dict | None) -> list[dict]:
+    cats = (spec or {}).get("category") if isinstance(spec, dict) else None
+    return [x for x in cats if isinstance(x, dict) and x.get("id") and isinstance(x.get("name"), str)] \
+        if isinstance(cats, list) else []
+
+
+def _valued(p: dict) -> bool:
+    """Caractéristique renseignée (Digi-Key note « - » une valeur sans objet) : seule à pouvoir être critique."""
+    return p["value"].strip() not in _NO_VALUE
+
+
+def family(spec: dict | None) -> str | None:
+    """Famille de la référence (FAMILIES) d'après sa catégorie Digi-Key, ou None (inconnue ou non concernée)."""
+    return next((FAMILIES[x["name"]] for x in _categories(spec) if x["name"] in FAMILIES), None)
+
+
+def leaf_category(spec: dict | None) -> str | None:
+    """Sous-catégorie Digi-Key la plus précise (périmètre de la recherche d'alternatives)."""
+    cats = _categories(spec)
+    return str(cats[-1]["id"]) if cats else None
+
+
+def criteria(c: dict, spec: dict | None) -> list[dict]:
+    """Caractéristiques critiques effectives : celles choisies par l'utilisateur (`critical_params`, même une liste
+    vide), sinon les défauts de la famille (DEFAULT_CRITICAL) ; jamais une caractéristique sans valeur."""
+    chosen = c.get("critical_params")
+    if chosen is None:
+        return [p for p in params(spec) if _valued(p) and p["name"] in DEFAULT_CRITICAL]
+    ids = set(chosen) if isinstance(chosen, list) else set()
+    return [p for p in params(spec) if _valued(p) and p["id"] in ids]
+
+
+def critical_ids(c: dict, spec: dict | None, wanted) -> list[int]:
+    """Choix de l'utilisateur -> identifiants triés, validés contre la fiche (identifiants ou libellés Digi-Key,
+    casse ignorée) ; lève sur une caractéristique inconnue ou sans valeur."""
+    valued = [p for p in params(spec) if _valued(p)]
+    by_id, by_name = {p["id"]: p for p in valued}, {p["name"].lower(): p for p in valued}
+    out, bad = set(), []
+    for w in wanted:
+        p = by_id.get(w) if isinstance(w, int) and not isinstance(w, bool) else by_name.get(str(w).strip().lower())
+        if p is None and isinstance(w, str) and w.strip().isdigit():
+            p = by_id.get(int(w))
+        if p is None:
+            bad.append(str(w)[:60])
+        else:
+            out.add(p["id"])
+    if bad:
+        raise ComponentsError(f"caractéristique(s) inconnue(s) ou sans valeur sur la fiche de {c['mpn']} : "
+                              + ", ".join(bad[:10]))
+    return sorted(out)
+
+
+def _same(a: dict, b: dict | None) -> bool:
+    """Même valeur : identifiant de valeur Digi-Key (ValueId) si les deux l'ont, sinon le texte affiché."""
+    if b is None:
+        return False
+    if a.get("vid") and b.get("vid"):
+        return a["vid"] == b["vid"]
+    return " ".join(a["value"].split()).lower() == " ".join(b["value"].split()).lower()
+
+
+def rank_alternatives(c: dict, spec: dict | None, products: list[dict], crit: list[dict]) -> list[dict]:
+    """Fiches renvoyées par `digikey.Client.similar` -> MAX_ALTERNATIVES alternatives : fiches ACTIVES d'une autre
+    référence, aux mêmes valeurs critiques (revérifiées : un filtre ignoré par l'API ne passe pas), classées par
+    score (part des autres caractéristiques identiques) ; chacune avec ses différences avec la référence."""
+    crit_ids = {p["id"] for p in crit}
+    others = [p for p in params(spec) if p["id"] not in crit_ids and _valued(p)]
+    own, seen, out = loose_mpn(c["mpn"]), set(), []
+    for prod in products:
+        mpn, mfr = _text(prod.get("mpn"), "label"), _text(prod.get("manufacturer"), "label")
+        key = key_of(mpn, mfr)
+        if (not mpn or loose_mpn(mpn) == own or key in seen
+                or DK_LIFECYCLE.get(str(prod.get("status") or "").lower()) != "ACTIVE"):
+            continue
+        vals = {p["id"]: p for p in params(prod)}
+        if not all(_same(p, vals.get(p["id"])) for p in crit):
+            continue
+        seen.add(key)
+        diffs = [{"name": p["name"], "ref": p["value"], "alt": vals[p["id"]]["value"] if p["id"] in vals else "—"}
+                 for p in others if not _same(p, vals.get(p["id"]))]
+        out.append({"mpn": mpn, "manufacturer": mfr, "status": _text(prod.get("status"), "label"),
+                    "url": normalize_url(prod.get("product_url") or "") if prod.get("product_url") else None,
+                    "description": _text(prod.get("description"), "title"),
+                    "score": round(100 * (len(others) - len(diffs)) / len(others)) if others else 100,
+                    "diffs": diffs[:MAX_DIFFS]})
+    out.sort(key=lambda a: (-a["score"], a["mpn"]))
+    return out[:MAX_ALTERNATIVES]
+
+
+def alternatives_record(c: dict, spec: dict | None, products: list[dict], day: str) -> dict:
+    """Résultat d'une recherche, enregistré dans `dk.alternatives` : date, critères appliqués, alternatives."""
+    crit = criteria(c, spec)
+    return {"searched_at": day, "criteria": [{"id": p["id"], "name": p["name"], "value": p["value"]} for p in crit],
+            "items": rank_alternatives(c, spec, products, crit)}
+
+
+def alternatives(c: dict) -> dict | None:
+    """Dernière recherche d'alternatives de la référence, ou None (jamais faite, ou fichier retouché)."""
+    rec = (c.get("dk") or {}).get("alternatives")
+    ok = (isinstance(rec, dict) and isinstance(rec.get("searched_at"), str)
+          and isinstance(rec.get("criteria"), list) and isinstance(rec.get("items"), list))
+    return rec if ok else None
+
+
+def alternatives_stale(c: dict, spec: dict | None) -> bool:
+    """Recherche faite avec d'autres critères que les critères actuels (choix de l'utilisateur modifié). Sans fiche
+    (pas encore relue), rien à comparer : pas périmée."""
+    rec = alternatives(c)
+    return rec is not None and bool(params(spec)) and [
+        x.get("id") for x in rec["criteria"] if isinstance(x, dict)] != [p["id"] for p in criteria(c, spec)]
+
+
+def searchable(spec: dict | None) -> str:
+    """Motif pour lequel on ne peut pas chercher d'alternatives à cette référence, vide si on peut."""
+    if not params(spec) and not _categories(spec):
+        return "pas de fiche Digi-Key (statut Digi-Key à vérifier d'abord)"
+    if family(spec) is None:
+        return "famille non concernée (seuls les passifs et les discrets le sont)"
+    return ""
+
+
+def alternatives_due(components: list[dict], specs: dict[str, dict], notices: list[dict], day: str) -> list[dict]:
+    """Références dont chercher les alternatives sans qu'on le demande : en fin de vie ou en dernière commande,
+    d'une famille concernée, sans recherche récente (ALT_MAX_AGE_DAYS) ou recherchées avec d'autres critères.
+    Jamais recherchées d'abord, puis les plus anciennes."""
+    worst = worst_by_key(notices)
+    limit = (dt.date.fromisoformat(day) - dt.timedelta(days=ALT_MAX_AGE_DAYS)).isoformat()
+    due = []
+    for c in components:
+        key = key_of(c["mpn"], c["manufacturer"])
+        w, spec = worst.get(key), specs.get(key)
+        if not w or w["type"] not in CRITICAL or searchable(spec):
+            continue
+        rec = alternatives(c)
+        if rec is None or rec["searched_at"] < limit or alternatives_stale(c, spec):
+            due.append(c)
+    return sorted(due, key=lambda c: (alternatives(c) or {}).get("searched_at") or "")
+
+
+def sheet(c: dict, spec: dict | None) -> dict:
+    """Fiche composant (interface, MCP) : famille, catégorie, caractéristiques (critiques marquées), origine des
+    critères, dernière recherche d'alternatives (`stale` : faite avec d'autres critères)."""
+    crit = {p["id"] for p in criteria(c, spec)}
+    return {"family": family(spec), "category": " › ".join(x["name"] for x in _categories(spec)),
+            "unsearchable": searchable(spec),
+            "params": [{**p, "critical": p["id"] in crit, "valued": _valued(p)} for p in params(spec)],
+            "custom": c.get("critical_params") is not None, "alternatives": alternatives(c),
+            "stale": alternatives_stale(c, spec)}
+
+
+# --------------------------------------------------------------------------
 # Synthèse
 # --------------------------------------------------------------------------
 def severity(ntype: str) -> int:
@@ -653,6 +876,7 @@ def group(notices: list[dict], components: list[dict], include_quiet: bool = Fal
             "key": key, "anchor": anchor(key), "tracked": bool(c), "dk": dk, "web": web,
             "mpn": c.get("mpn") or worst["mpn"], "manufacturer": c.get("manufacturer") or worst["manufacturer"],
             "web_checked_at": c.get("web_checked_at"), "notices": ns, "worst": worst, "link": link,
+            "critical_params": c.get("critical_params"), "alts": len((alternatives(c) or {}).get("items") or []),
             "types": list(dict.fromkeys(n["type"] for n in ns)),
             "critical": bool(c) and any(n["type"] in CRITICAL for n in ns),
             "deadline": next((d for n in ns if (d := n.get("ltb_date") or n.get("eol_date"))), ""),
