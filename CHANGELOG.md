@@ -7,6 +7,29 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.7.3] — 2026-10-26
+
+Incident du 25/10/2026 (veille Industrie 4.0) : tir en échec `blocked_config`. Le conteneur ne reçoit
+`DEEPSEEK_API_KEY` / `BREVO_API_KEY` qu'en variables d'environnement (`env_file` du dépôt), alors que Hermes lit
+les clés de provider dans `$HERMES_HOME/.env` ; après un déploiement qui régénère `config.yaml` (ligne `api_key`
+commentée), le `.env` du volume restait sans clé.
+
+### Corrigé
+
+- **Secrets recopiés à chaque démarrage** : `envfile.sync_env_to_file()` recopie de façon idempotente les secrets
+  de l'environnement vers le `.env` du volume (réécrit seulement si la valeur change, mode 600, ne renvoie jamais
+  les valeurs) ; nouvelle sous-commande `veillectl env-sync`, appelée par `50-seed-veille` à chaque démarrage
+  (étape 1 bis). 6 tests de régression (`tests/test_envfile.py`).
+
+### Modifié
+
+- Dépendances (reprise de la PR Dependabot #33) : fastapi 0.142.2 → 0.144.0, starlette 1.7.0 → 1.8.0,
+  ruff 0.16.10 → 0.17.1 (aucune nouvelle alerte).
+
+### Déploiement
+
+- `make update`. Rien à régler.
+
 ## [0.7.2] — 2026-10-22
 
 Incident du 22/10/2026, 07:00 (0.7.1) : tir de la veille composants « composants-nomenclature-2 » (386 références)
