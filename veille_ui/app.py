@@ -471,12 +471,12 @@ def create_app() -> FastAPI:
         """Détail d'un composant, chargé au clic dans la liste (app.js) : avis, fiche, alternatives."""
         return detail_response(request, slug, anchor)
 
-    @app.post("/veilles/{slug}/components/{anchor}/{op}", response_class=HTMLResponse)
-    async def component_action(request: Request, slug: str, anchor: str, op: str):
+    @app.post("/veilles/{slug}/components/{anchor}/{action}", response_class=HTMLResponse)
+    async def component_action(request: Request, slug: str, anchor: str, action: str):
         """Fiche d'un composant (htmx) : ses caractéristiques critiques (`critical`, champ `op` = reset pour revenir
         aux défauts de la famille), ou la recherche de ses alternatives (`alternatives` : un appel Digi-Key, pendant
         la requête). Renvoie le détail à jour ; en 400 avec le motif d'un échec."""
-        if op not in ("critical", "alternatives"):
+        if action not in ("critical", "alternatives"):
             return PlainTextResponse("action inconnue", status_code=404)
         form = await request.form()
         try:
@@ -487,16 +487,16 @@ def create_app() -> FastAPI:
             return PlainTextResponse("composant introuvable", status_code=404)
         error = None
         try:
-            if op == "critical":
+            if action == "critical":
                 wanted = None if form.get("op") == "reset" else form.getlist("param")
                 await run_in_threadpool(service.set_critical_params, slug, row["key"], wanted, ACTOR)
             else:
-                r = await run_in_threadpool(service.components_alternatives, slug, [row["mpn"]], ACTOR)
-                error = r.get("error") or "; ".join(s["reason"] for s in r["skipped"]) or None
+                r = await run_in_threadpool(lambda: service.components_alternatives(slug, actor=ACTOR, key=row["key"]))
+                error = "; ".join(s["reason"] for s in r["skipped"]) or None  # refus de Digi-Key : dans le bloc
         except USER_ERRORS as exc:
             error = str(exc)
         return await run_in_threadpool(detail_response, request, slug, anchor, 400 if error else 200,
-                                       detail_error=error)
+                                       detail_error=error, sheet_open=action == "critical")
 
     @app.get("/veilles/{slug}/edit", response_class=HTMLResponse)
     def edit_form(request: Request, slug: str):

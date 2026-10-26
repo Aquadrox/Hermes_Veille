@@ -37,11 +37,11 @@
   </ul>
   {% else %}<p class="small muted">Aucun avis détecté pour ce composant.</p>{% endif %}
   {% if sh.params %}
-  <details class="sheet">
+  <details class="sheet"{% if sheet_open %} open{% endif %}>
     <summary>Fiche composant{% if sh.family %} · {{ sh.family }}{% endif %}
-      <span class="muted small">({{ sh.params|length }} caractéristiques ; critiques : {{ "choisies" if sh.custom else "défauts de la famille" }})</span></summary>
+      <span class="muted small">({{ sh.params|length }} caractéristiques{% if editable and sh.family %} ; critiques : {{ "choisies" if sh.custom else "défauts de la famille" }}{% endif %})</span></summary>
     {% if sh.category %}<p class="small muted">Digi-Key : {{ sh.category }}</p>{% endif %}
-    {% if editable and not sh.unsearchable %}
+    {% if editable and sh.family %}
     <form hx-post="/veilles/{{ slug }}/components/{{ r.anchor }}/critical" hx-target="#cd-{{ r.anchor }}" hx-swap="outerHTML">
       <p class="small muted">Coche les caractéristiques que toute alternative doit avoir à l'identique.</p>
       <ul class="params">
@@ -50,9 +50,9 @@
       <div class="actions"><button class="primary" name="op" value="save">Enregistrer les critiques</button>
         {% if sh.custom %}<button name="op" value="reset">Revenir aux défauts</button>{% endif %}</div>
     </form>
-    {% else %}
+    {% else %}{# lecture seule : les critères d'une recherche sont ceux affichés avec ses alternatives #}
     <ul class="params">
-      {% for p in sh.params %}<li class="p-row{% if p.critical %} crit{% endif %}"><span class="p-name">{{ p.name }}{% if p.critical %} ★{% endif %}</span><span class="p-val">{{ p.value }}</span></li>{% endfor %}
+      {% for p in sh.params %}<li class="p-row"><span class="p-name">{{ p.name }}</span><span class="p-val">{{ p.value }}</span></li>{% endfor %}
     </ul>
     {% endif %}
   </details>
@@ -64,7 +64,8 @@
       {% if rec %}<span class="muted small">· recherchées le {{ rec.searched_at }} ·
         {% if rec.criteria %}critères : {% for x in rec.criteria %}{{ x.name }} = {{ x.value }}{{ " ; " if not loop.last }}{% endfor %}{% else %}même catégorie seulement{% endif %}</span>{% endif %}</p>
     {% if editable and sh.stale %}<p class="small warn">Critères modifiés depuis cette recherche : relance-la pour les appliquer.</p>{% endif %}
-    {% if rec and rec['items'] %}
+    {% if rec and rec.error %}<p class="small err">Recherche refusée par Digi-Key : {{ rec.error }}</p>
+    {% elif rec and rec['items'] %}
     <ul class="alt-list">
       {% for a in rec['items'] %}
       <li><div class="alt-head"><strong>{% if a.url %}{{ source_link({"url": a.url, "label": a.mpn}) }}{% else %}{{ a.mpn }}{% endif %}</strong>
@@ -76,7 +77,8 @@
     </ul>
     {% elif rec %}<p class="small muted">Aucune référence active trouvée avec ces critères : décoche-en pour élargir la recherche.</p>
     {% else %}<p class="small muted">Pas encore recherchées{% if not r.critical %} (automatique pour les composants en fin de vie ou en dernière commande){% endif %}.</p>{% endif %}
-    {% if editable and sh.family and digikey_configured %}
+    {% if editable and sh.unsearchable and sh.family %}<p class="small warn">{{ sh.unsearchable }}.</p>{% endif %}
+    {% if editable and not sh.unsearchable and digikey_configured %}
     <button hx-post="/veilles/{{ slug }}/components/{{ r.anchor }}/alternatives" hx-target="#cd-{{ r.anchor }}" hx-swap="outerHTML" hx-disabled-elt="this">{{ "Relancer la recherche" if rec else "Rechercher des alternatives" }}</button>
     {% endif %}
     <p class="small muted">Suggestions Digi-Key paramétriques (références actives, mêmes caractéristiques critiques) : à qualifier avant tout remplacement.</p>

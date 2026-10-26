@@ -321,7 +321,14 @@ def _alternatives(sheet: dict) -> dict | None:
         return None
     return {"searched_at": rec["searched_at"], "stale": sheet["stale"],
             "criteria": [f"{x.get('name')} = {x.get('value')}" for x in rec["criteria"] if isinstance(x, dict)],
-            "items": rec["items"]}
+            "items": rec["items"], **({"error": rec["error"]} if rec.get("error") else {})}
+
+
+def _tracked(slug: str, mpn: str, manufacturer: str | None) -> tuple[dict, dict | None]:
+    """(référence suivie de ce MPN, sa fiche) ; erreur d'outil si inconnue ou ambiguë."""
+    v = _guard(service._components_veille, slug)
+    c = _guard(components.find, _guard(components.load_components, v.slug)["components"], mpn, manufacturer or "")
+    return c, components.load_specs(v.slug).get(components.key_of(c["mpn"], c["manufacturer"]))
 
 
 def get_component_sheet(slug: str, mpn: str, manufacturer: str | None = None) -> dict:
@@ -330,9 +337,8 @@ def get_component_sheet(slug: str, mpn: str, manufacturer: str | None = None) ->
     de la famille) et dernière recherche d'alternatives (date, critères, `stale` : faite avec d'autres critères
     que les actuels, alternatives classées par score avec leurs différences). `manufacturer` départage un MPN
     suivi chez plusieurs fabricants."""
-    v = _guard(service._components_veille, slug)
-    c = _guard(components.find, _guard(components.load_components, v.slug)["components"], mpn, manufacturer or "")
-    sh = components.sheet(c, components.load_specs(v.slug).get(components.key_of(c["mpn"], c["manufacturer"])))
+    c, spec = _tracked(slug, mpn, manufacturer)
+    sh = components.sheet(c, spec)
     return {"mpn": c["mpn"], "manufacturer": c["manufacturer"], "family": sh["family"], "category": sh["category"],
             "alternatives_possible": not sh["unsearchable"], "reason": sh["unsearchable"] or None,
             "critical_source": "utilisateur" if sh["custom"] else "défauts de la famille",
@@ -346,13 +352,19 @@ def list_alternatives(slug: str | None = None, mpn: str | None = None, limit: in
     en tête : référence, avis le plus critique, date et critères de la recherche, alternatives (MPN, fabricant,
     statut, score, différences, lien). `slug` omis : toutes les veilles composants ; `mpn` : cette référence."""
     slugs = [slug] if slug else [v.slug for v in store.list_all() if v.kind == "composants"]
+    return _alternative_rows(slugs, {components.norm_mpn(mpn)} if mpn else None)[: max(1, min(limit, 500))]
+
+
+def _alternative_rows(slugs: list[str], mpns: set[str] | None = None) -> list[dict]:
+    """Alternatives enregistrées des références de ces veilles (MPN normalisés `mpns` seulement, si donnés), fins de
+    vie en tête."""
     rows = []
     for s in slugs:
         v = _guard(service._components_veille, s)
         worst = components.worst_by_key(_guard(components.load_notices, v.slug))
         specs = None  # lues seulement si une référence a des alternatives
         for c in _guard(components.load_components, v.slug)["components"]:
-            if (mpn and components.norm_mpn(c["mpn"]) != components.norm_mpn(mpn)) or components.alternatives(c) is None:
+            if (mpns is not None and components.norm_mpn(c["mpn"]) not in mpns) or components.alternatives(c) is None:
                 continue
             key = components.key_of(c["mpn"], c["manufacturer"])
             specs = components.load_specs(v.slug) if specs is None else specs
@@ -361,7 +373,7 @@ def list_alternatives(slug: str | None = None, mpn: str | None = None, limit: in
             rows.append({"veille": s, "mpn": c["mpn"], "manufacturer": c["manufacturer"], "family": sh["family"],
                          "worst_notice": w["type"] if w else None, **_alternatives(sh)})
     rows.sort(key=lambda r: (components.severity(r["worst_notice"]) if r["worst_notice"] else 99, r["mpn"]))
-    return rows[: max(1, min(limit, 500))]
+    return rows
 
 
 def list_notices(slug: str | None = None, type: NoticeType | None = None, since: str | None = None,
@@ -638,22 +650,20 @@ def search_alternatives(slug: str, mpns: list[str] | None = None) -> dict:
     concernés (`skipped` donne le motif des autres)."""
     if mpns and len(mpns) <= ALT_SYNC_MAX:
         r = _guard(service.components_alternatives, slug, mpns, actor=_actor())
-        found = list_alternatives(slug) if r["targets"] else []
         wanted = {components.norm_mpn(m) for m in r["targets"]}
-        return {"slug": slug, **r, "alternatives": [a for a in found if components.norm_mpn(a["mpn"]) in wanted]}
+        return {"slug": slug, **r, "alternatives": _alternative_rows([slug], wanted) if wanted else []}
     log = _guard(service.alternatives_now, slug, mpns, actor=_actor())
     return {"slug": slug, "started": True, "log": log,
             "hint": "get_run_log pour suivre (progress.summary), puis list_alternatives"}
 
 
-def set_critical_parameters(slug: str, mpn: str, parameters: list[str] | None,
+def set_critical_parameters(slug: str, mpn: str, parameters: list[str | int] | None,
                             manufacturer: str | None = None) -> dict:
     """Caractéristiques critiques d'une référence : celles que ses alternatives doivent avoir à l'identique
-    (libellés ou identifiants donnés par `get_component_sheet`). Liste vide : aucune (même catégorie seulement) ;
-    null : retour aux défauts de sa famille (valeur, boîtier, montage, tenue principale). Relancer ensuite
+    (libellés ou identifiants donnés par `get_component_sheet`). null : retour aux défauts de sa famille (valeur,
+    boîtier, montage, tenue principale) ; il en faut au moins une pour chercher. Relancer ensuite
     `search_alternatives` pour cette référence. Renvoie la fiche mise à jour."""
-    v = _guard(service._components_veille, slug)
-    c = _guard(components.find, _guard(components.load_components, v.slug)["components"], mpn, manufacturer or "")
+    c, _ = _tracked(slug, mpn, manufacturer)
     _guard(service.set_critical_params, slug, components.key_of(c["mpn"], c["manufacturer"]), parameters,
            actor=_actor())
     return get_component_sheet(slug, c["mpn"], c["manufacturer"])

@@ -25,11 +25,18 @@ dans l'interface et par MCP.
   montage, tenue principale), remplacées par le choix de l'utilisateur.
 - **Automatique** après chaque passage Digi-Key pour les composants en fin de vie ou en dernière commande
   sans recherche depuis 30 jours (ou recherchés avec d'autres critères), dans le temps restant de la tranche,
-  50 recherches au plus.
+  50 recherches au plus et sous le plafond d'appels du passage (`digikey.MAX_CALLS`). Une recherche refusée par
+  Digi-Key (HTTP 400, `digikey.RequestRefused`) est enregistrée, datée et affichée, sans bloquer les autres ;
+  une erreur d'accès ou une panne arrête la série. Au moins une caractéristique critique est exigée.
 - **À la demande** : bouton du détail d'un composant (synchrone), « Alternatives des fins de vie » au-dessus
   de la liste (arrière-plan, avancement suivi), `veillectl components alternatives <slug> [MPN …]`.
 - **Interface** : badge « ⇄ n » et filtre « Avec alternatives » de la liste, alternatives en cartes
-  (PWA : pas de défilement horizontal à 390 px), fiche en lecture seule dans la base des composants.
+  (PWA : pas de défilement horizontal à 390 px), fiche en lecture seule dans la base des composants ; un échec
+  d'une action htmx (autre que 401 / 403) est désormais signalé au lieu d'un bouton sans effet.
+- **Performance** (5000 références, mesuré) : fiches hors de `components.json` (sinon 1,3 → 11 Mo et page
+  ×2) ; `specs.json` gardé en mémoire tant qu'il ne change pas (détail d'un composant : 109 ms à froid, 44 ms
+  ensuite, contre 31 ms avant la fonction). Page de la veille : 159 → 183 ms avec des alternatives pour 10 %
+  des références.
 - **MCP** : `get_component_sheet`, `list_alternatives` (lecture), `set_critical_parameters`,
   `search_alternatives` (≤ 10 MPN pendant l'appel, sinon en arrière-plan) ; `list_components` donne la
   famille et le nombre d'alternatives. 35 outils (16 en lecture).

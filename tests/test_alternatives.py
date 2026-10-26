@@ -136,10 +136,13 @@ def test_similar_errors_name_the_search():
 # --------------------------------------------------------------------------
 def test_family_and_default_criteria():
     sp = spec()
-    assert comp.family(sp) == "Résistance" and comp.leaf_category(sp) == "52" and comp.searchable(sp) == ""
+    assert comp.family(sp) == "Résistance" and comp.leaf_category(sp) == "52" and comp.searchable(comp_with(), sp) == ""
     assert [p["name"] for p in comp.criteria(comp_with(), sp)] == ["Resistance", "Package / Case"]  # défauts présents
-    assert comp.family(spec(category=IC_CAT)) is None and "famille non concernée" in comp.searchable(spec(category=IC_CAT))
-    assert "pas de fiche" in comp.searchable(None) and "pas de fiche" in comp.searchable({})
+    ic = spec(category=IC_CAT)
+    assert comp.family(ic) is None and "famille non concernée" in comp.searchable(comp_with(), ic)
+    assert "pas de fiche" in comp.searchable(comp_with(), None) and "pas de fiche" in comp.searchable(comp_with(), {})
+    # aucune critique : toute référence active de la catégorie passerait (une 1 MΩ pour une 10 kΩ), refusé
+    assert "aucune caractéristique critique" in comp.searchable(comp_with(critical_params=[]), sp)
     ferrite = spec(category=[{"id": "9", "name": "Filters"}, {"id": "841", "name": "Ferrite Beads and Chips"}])
     assert comp.family(ferrite) == "Ferrite"
     # fiche retouchée à la main : entrées mal formées ignorées, jamais d'exception
@@ -378,12 +381,12 @@ def test_alternatives_now_runs_in_background_with_tracked_mpns_only(bom, monkeyp
 def test_progress_of_a_manual_alternatives_search(bom):
     service.components_scan(bom.slug, client=AltClient(LTB))
     manual(bom.slug, "alternatives")
-    service.components_alternatives(bom.slug, ["RC0603FR-0710KL"], client=AltClient({}))
+    service.components_alternatives(bom.slug, ["RC0603FR-0710KL"], client=AltClient({}), track=True)
     view = service.run_progress(bom.slug)
-    assert view["finished"] and view["summary"] == "Terminé : 1 / 1 référence(s)"
+    assert view["finished"] and view["summary"] == "Terminé : 1 / 1 référence(s), 0 avec alternatives"
     manual(bom.slug, "alternatives")
     service.components_alternatives(bom.slug, ["RC0603FR-0710KL"],
-                                    client=AltClient({}, error=digikey.DigiKeyError("HTTP 403")))
+                                    client=AltClient({}, error=digikey.DigiKeyError("HTTP 403")), track=True)
     assert service.run_progress(bom.slug)["warning"] == "HTTP 403"
 
 
@@ -490,6 +493,7 @@ def test_ui_set_critical_and_search(ui, bom, monkeypatch):
     hx = {"X-CSRF-Token": csrf, "HX-Request": "true"}
     r = client.post(url + "/critical", data={"param": ["1", "2"], "op": "save"}, headers=hx)
     assert r.status_code == 200 and "critiques : choisies" in r.text and "Critères modifiés depuis" in r.text
+    assert '<details class="sheet" open>' in r.text  # la fiche reste ouverte après l'enregistrement (mobile)
     assert stored(bom.slug, "RC0603FR-0710KL")["critical_params"] == [1, 2]
     r = client.post(url + "/critical", data={"param": ["99"], "op": "save"}, headers=hx)
     assert r.status_code == 400 and "inconnue" in r.text and 'role="alert"' in r.text
@@ -523,8 +527,10 @@ def test_ui_catalog_detail_is_read_only(ui, bom):
     service.components_scan(bom.slug, client=AltClient(LTB, similar={"52": [res("RMCF0603FT10K0")]}))
     key = comp.key_of("RC0603FR-0710KL", "YAGEO")
     d = client.get("/composants/detail", params={"key": key}).text
-    assert "RMCF0603FT10K0" in d and "Resistance ★" in d
+    assert "RMCF0603FT10K0" in d and "critères : Resistance = 10 kOhms" in d
+    # lecture seule : ni choix des critiques (propres à chaque veille), ni critiques par défaut présentées comme telles
     assert "hx-post" not in d and 'name="param"' not in d and "Critères modifiés" not in d
+    assert "★" not in d and "défauts de la famille" not in d
 
 
 def test_robustness_unreadable_sheet_text_values_progress_and_corrupt_list(ui, bom, monkeypatch):
@@ -550,3 +556,117 @@ def test_robustness_unreadable_sheet_text_values_progress_and_corrupt_list(ui, b
     (bom.dir / "components.json").write_text("{pas du json")
     hx = {"X-CSRF-Token": csrf, "HX-Request": "true"}
     assert client.get(url).status_code == 500 and client.post(url + "/critical", headers=hx).status_code == 500
+
+
+# --------------------------------------------------------------------------
+# Retours de revue
+# --------------------------------------------------------------------------
+def test_refused_request_is_recorded_and_does_not_block_the_others(bom, ui):
+    """Une recherche refusée (HTTP 400 : filtres d'une référence) est enregistrée, datée et affichée ; la série
+    continue. Elle ne repasse pas en tête au passage suivant (sinon elle bloquerait toutes les autres)."""
+    client, _ = ui
+    two = {**LTB, "GRM188R71H104KA93D": {**LTB["RC0603FR-0710KL"], "category": [
+        {"id": "3", "name": "Capacitors"}, {"id": "60", "name": "Ceramic Capacitors"}],
+        "params": [prm(1, "Capacitance", "0.1 µF"), prm(5, "Package / Case", "0603 (1608 Metric)")]}}
+
+    class Refusing(AltClient):
+        def similar(self, category_id, filters):
+            self.calls += 1
+            self.searches.append(category_id)
+            if category_id == "52":
+                raise digikey.RequestRefused("API Digi-Key : HTTP 400 (alternatives, catégorie 52)")
+            return [{**res("CL10B104KB8NNNC"), "category": [], "params": two["GRM188R71H104KA93D"]["params"]}]
+    c = Refusing(two)
+    out = service.components_scan(bom.slug, client=c)
+    assert sorted(c.searches) == ["52", "60"] and out["digikey"]["alternatives"]["searched"] == 2
+    rec = stored(bom.slug, "RC0603FR-0710KL")["dk"]["alternatives"]
+    assert rec["items"] == [] and "HTTP 400" in rec["error"] and rec["searched_at"] == comp.today()
+    assert stored(bom.slug, "GRM188R71H104KA93D")["dk"]["alternatives"]["items"][0]["mpn"] == "CL10B104KB8NNNC"
+    assert comp.alternatives_due(comp.load_components(bom.slug)["components"], comp.load_specs(bom.slug),
+                                 comp.load_notices(bom.slug), comp.today()) == []
+    d = client.get(f"/veilles/{bom.slug}/components/{anchor('RC0603FR-0710KL')}").text
+    assert "Recherche refusée par Digi-Key : API Digi-Key : HTTP 400" in d
+    # une erreur d'accès (403) arrête la série, rien d'enregistré
+    service.set_critical_params(bom.slug, comp.key_of("RC0603FR-0710KL", "YAGEO"), ["Resistance"])
+    out = service.components_alternatives(bom.slug, client=AltClient({}, error=digikey.DigiKeyError("HTTP 403")))
+    assert out["error"] == "HTTP 403" and out["searched"] == 0 and out["pending"] == 1
+
+
+def test_http_400_is_a_refused_request_and_keeps_its_nature():
+    from test_digikey import http_error
+    with pytest.raises(digikey.RequestRefused, match=r"HTTP 400 \(alternatives"):
+        Fake(TOKEN, http_error(400)).client().similar("52", [])
+    with pytest.raises(digikey.DigiKeyError) as e:
+        Fake(TOKEN, http_error(403)).client().similar("52", [])
+    assert not isinstance(e.value, digikey.RequestRefused)
+
+
+def test_stale_ignores_parameter_order_and_scan_budget_counts_alternatives(bom, monkeypatch):
+    rec = {"searched_at": "2026-10-26", "criteria": [{"id": 5}, {"id": 1}], "items": []}
+    assert not comp.alternatives_stale(comp_with(dk={"alternatives": rec}), spec(list(reversed(R10K))))
+    # appels du passage Digi-Key et recherches d'alternatives sous le même plafond (quota journalier)
+    monkeypatch.setattr(digikey, "MAX_CALLS", 3)  # 3 statuts lus : plus rien pour les alternatives
+    client = AltClient(LTB)
+    out = service.components_scan(bom.slug, client=client, plan_batch=False)
+    assert client.searches == [] and out["digikey"]["alternatives"]["pending"] == 1
+
+
+def test_sync_search_does_not_write_the_progress_of_a_background_one(bom):
+    service.components_scan(bom.slug, client=AltClient(LTB))
+    manual(bom.slug, "alternatives")  # « Alternatives des fins de vie » en cours
+    before = progress.read(bom.slug)
+    service.components_alternatives(bom.slug, ["RC0603FR-0710KL"], client=AltClient({}))  # bouton d'un composant
+    assert progress.read(bom.slug) == before
+    service.components_alternatives(bom.slug, client=AltClient({}), track=True)  # le lancement détaché lui-même
+    assert service.run_progress(bom.slug)["summary"].startswith("Terminé : ")
+
+
+def test_mcp_search_returns_its_targets_even_beyond_the_listing_limit(bom, monkeypatch):
+    pytest.importorskip("mcp")
+    from test_mcp import call, data
+
+    from veille_mcp.server import build_server
+    service.components_scan(bom.slug, client=AltClient(LTB))
+    rec = {"searched_at": comp.today(), "criteria": [], "items": [{"mpn": "X", "manufacturer": "Y", "score": 1}]}
+    filler = [{"mpn": f"EOL{i:03d}", "manufacturer": "YAGEO", "added_at": "2026-10-01", "web_checked_at": None,
+               "dk": {"status": "Obsolete", "alternatives": rec}} for i in range(60)]
+    data_ = comp.load_components(bom.slug)
+    data_["components"] += filler
+    comp.save_components(bom.slug, data_)
+    notices = [comp.status_notice(c, "OBSOLETE", "x", "https://dk/x", "dk", "digikey") for c in filler]
+    for n in notices:
+        n["found_at"] = comp.today()
+    comp.merge(n_ := comp.load_notices(bom.slug), notices)
+    comp.save_notices(bom.slug, n_)
+    monkeypatch.setattr(service.digikey, "Client", lambda *a: AltClient({}, similar={"52": [res("AC0603FR-0710KL")]}))
+    monkeypatch.setenv("DIGIKEY_CLIENT_ID", "id")
+    monkeypatch.setenv("DIGIKEY_CLIENT_SECRET", "secret")
+    srv = build_server()
+    assert len(data(call(srv, "list_alternatives", {"slug": bom.slug}))) == 50
+    out = data(call(srv, "search_alternatives", {"slug": bom.slug, "mpns": ["RC0603FR-0710KL"]}))
+    assert [a["mpn"] for a in out["alternatives"]] == ["RC0603FR-0710KL"]
+    sh = data(call(srv, "set_critical_parameters", {"slug": bom.slug, "mpn": "RC0603FR-0710KL", "parameters": [1, "5"]}))
+    assert [p["id"] for p in sh["parameters"] if p["critical"]] == [1, 5]  # identifiants entiers acceptés
+
+
+def test_specs_are_cached_until_the_file_changes(bom):
+    service.components_scan(bom.slug, client=AltClient(LTB))
+    first = comp.load_specs(bom.slug)
+    first["x"] = {}  # copie : le cache n'est pas modifié par l'appelant
+    assert "x" not in comp.load_specs(bom.slug)
+    comp.save_specs(bom.slug, {"k": spec()})
+    assert comp.load_specs(bom.slug) == {"k": spec()}
+
+
+def test_ui_search_targets_the_opened_reference_only(ui, bom, monkeypatch):
+    """Même MPN chez deux fabricants : la recherche du détail ne vise que la référence ouverte."""
+    client, csrf = ui
+    service.import_components(bom.slug, [{"mpn": "RC0603FR-0710KL", "manufacturer": "Vishay"}])
+    service.components_scan(bom.slug, client=AltClient(LTB))
+    monkeypatch.setenv("DIGIKEY_CLIENT_ID", "id")
+    monkeypatch.setenv("DIGIKEY_CLIENT_SECRET", "secret")
+    fake = AltClient({}, similar={"52": [res("AC0603FR-0710KL")]})
+    monkeypatch.setattr(service.digikey, "Client", lambda *a: fake)
+    url = f"/veilles/{bom.slug}/components/{anchor('RC0603FR-0710KL')}/alternatives"
+    r = client.post(url, headers={"X-CSRF-Token": csrf, "HX-Request": "true"})
+    assert r.status_code == 200 and len(fake.searches) == 1 and 'role="alert"' not in r.text

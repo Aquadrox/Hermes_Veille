@@ -158,7 +158,7 @@ def _components(args) -> int:
     elif args.action == "scan":
         print(json.dumps(service.components_scan(slug), ensure_ascii=False, indent=1))
     elif args.action == "alternatives":
-        r = service.components_alternatives(slug, args.items or None, actor="cli")
+        r = service.components_alternatives(slug, args.items or None, actor="cli", track=True)
         print(f"✓ alternatives : {service.alternatives_note(r)}")
         for s in r["skipped"]:
             print(f"  {s['mpn']} : {s['reason']}")

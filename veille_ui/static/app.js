@@ -379,8 +379,11 @@
     document.querySelectorAll("[data-recipients]").forEach(initRecipients);
   });
 
-  // Session expirée pendant une requête HTMX : retour à la page de connexion.
+  // Échec d'une requête HTMX : jeton invalide (403) ou autre (élément introuvable, fichier illisible) dit à
+  // l'utilisateur, plutôt qu'un bouton qui ne fait rien ; session expirée (401) : HX-Redirect vers la connexion.
   document.addEventListener("htmx:responseError", function (e) {
-    if (e.detail.xhr.status === 403) window.alert("Session expirée ou jeton invalide : recharge la page.");
+    var xhr = e.detail.xhr;
+    if (xhr.status === 403) window.alert("Session expirée ou jeton invalide : recharge la page.");
+    else if (xhr.status !== 401) window.alert("Action impossible (" + xhr.status + ") : " + (xhr.responseText || "").slice(0, 200));
   });
 })();

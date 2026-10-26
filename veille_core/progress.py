@@ -143,6 +143,8 @@ def view(state: dict, running: bool) -> dict:
                            if result.get("critical") else ""))
         elif ids and state.get(ids[0]):  # passage Digi-Key, recherche d'alternatives
             summary += f" : {_step_detail(state, ids[0])[0]}"
+            if "found" in result:
+                summary += f", {result['found']} avec alternatives"
     elif current < 0:
         summary = "Démarrage…" if running else "Interrompu au démarrage"
     else:

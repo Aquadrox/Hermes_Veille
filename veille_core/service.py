@@ -512,9 +512,8 @@ def alternatives_now(slug: str, mpns: list[str] | None = None, actor: str = "cli
     Seuls les MPN suivis passent en argument (tels qu'enregistrés : `components.MPN_RE`, jamais une option)."""
     picked = []
     if mpns:
-        wanted = {comp.norm_mpn(m) for m in mpns}
-        picked = list(dict.fromkeys(c["mpn"] for c in comp.load_components(_components_veille(slug).slug)["components"]
-                                    if comp.norm_mpn(c["mpn"]) in wanted))
+        chosen, _ = comp.select(comp.load_components(_components_veille(slug).slug)["components"], mpns)
+        picked = list(dict.fromkeys(c["mpn"] for c in chosen))
         if not picked:
             raise ServiceError("aucune de ces références n'est suivie par cette veille")
     return _spawn_components(slug, ["alternatives", slug, *picked], actor, "components-alternatives", "alternatives")
@@ -809,7 +808,8 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
             track.update(throttle=True, step="digikey", digikey={**dk_progress, "current": f"{c['mpn']} (alternatives)"})
         info["alternatives"] = _alternatives(slug, client, comp.alternatives_due(data["components"], specs, notices, day),
                                              specs, day, start + (slice_s if plan_batch else left),
-                                             alt_progress if track else None)
+                                             alt_progress if track else None,
+                                             max_calls=min(ALT_MAX_CALLS, digikey.MAX_CALLS - run["calls"]))
     note = _dk_note(info)
     alt = info.get("alternatives") or {}
     audit(actor, "components-scan", slug, f"Digi-Key {info['checked']} vérifié(s), {run['notices']} avis ; "
@@ -844,27 +844,33 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
 
 
 def _alternatives(slug: str, client: digikey.Client, targets: list[dict], specs: dict[str, dict], day: str,
-                  deadline: float | None = None, progress=None) -> dict:
+                  deadline: float | None = None, progress=None, max_calls: int = ALT_MAX_CALLS) -> dict:
     """Recherche paramétrique Digi-Key des alternatives de `targets` (réseau, HORS verrou), puis enregistrement dans
     `dk.alternatives` de chacune, par clé, dans la liste relue SOUS verrou (éditions concurrentes préservées).
 
-    Au plus ALT_MAX_CALLS recherches ; aucune ne commence après `deadline` (time.monotonic). La première erreur
-    Digi-Key arrête la série (les suivantes échoueraient de même) : ce qui reste attend la série suivante. Renvoie
-    {"searched", "found" (avec au moins une alternative), "pending"[, "error"]}."""
+    Au plus `max_calls` recherches ; aucune ne commence après `deadline` (time.monotonic). Une requête refusée
+    (`digikey.RequestRefused`, HTTP 400) est enregistrée comme résultat daté, affiché, et la série continue :
+    une référence aux filtres refusés ne bloque pas les autres. Toute autre erreur (accès, quota, panne) arrête la
+    série : ce qui reste attend la suivante. Renvoie {"searched", "found" (avec au moins une alternative),
+    "pending"[, "error"]}."""
     results, info = {}, {"searched": 0, "found": 0}
-    for i, c in enumerate(targets[:ALT_MAX_CALLS]):
+    for i, c in enumerate(targets[:max(0, max_calls)]):
         if deadline is not None and time.monotonic() > deadline:
             break
         if progress:
             progress(c, i, len(targets))
         key = comp.key_of(c["mpn"], c["manufacturer"])
         filters = [(p["id"], p["vid"]) for p in comp.criteria(c, specs.get(key)) if p.get("vid")]
+        refused = ""
         try:
             products = client.similar(comp.leaf_category(specs.get(key)), filters)
+        except digikey.RequestRefused as exc:
+            products, refused = [], str(exc)[:300]
+            info["error"] = refused
         except digikey.DigiKeyError as exc:
             info["error"] = str(exc)
             break
-        rec = comp.alternatives_record(c, specs.get(key), products, day)
+        rec = comp.alternatives_record(c, specs.get(key), products, day, refused)
         results[key] = rec
         info["searched"] += 1
         info["found"] += bool(rec["items"])
@@ -889,40 +895,41 @@ def alternatives_note(info: dict) -> str:
 
 
 def components_alternatives(slug: str, mpns: list[str] | None = None, actor: str = "cli",
-                            client: digikey.Client | None = None) -> dict:
-    """Recherche d'alternatives à la demande (interface, MCP, CLI), synchrone : les références `mpns` (tous leurs
-    fabricants ; même actives ou déjà recherchées), sinon les composants en fin de vie qui l'attendent
-    (`components.alternatives_due`). Renvoie le compte rendu de `_alternatives`, plus `targets` (MPN recherchés)
-    et `skipped` ([{"mpn", "reason"}] : non suivie, sans fiche Digi-Key, famille non concernée)."""
+                            client: digikey.Client | None = None, key: str | None = None, track: bool = False) -> dict:
+    """Recherche d'alternatives à la demande (interface, MCP, CLI), synchrone : la référence `key`, ou les
+    références `mpns` (tous leurs fabricants), même actives ou déjà recherchées ; sinon les composants en fin de
+    vie qui l'attendent (`components.alternatives_due`). `track` : lancement détaché suivi (CLI), seul écrivain de
+    son avancement. Renvoie le compte rendu de `_alternatives`, plus `targets` (MPN recherchés) et `skipped`
+    ([{"mpn", "reason"}] : non suivie, sans fiche Digi-Key, famille non concernée, aucune critique)."""
     _components_veille(slug)
     pair = None if client else _require_digikey()
     day = comp.today()
     data, specs = comp.load_components(slug), comp.load_specs(slug)
     skipped = []
-    if mpns:
-        wanted = {comp.norm_mpn(m) for m in mpns}
-        chosen = [c for c in data["components"] if comp.norm_mpn(c["mpn"]) in wanted]
-        tracked = {comp.norm_mpn(c["mpn"]) for c in chosen}
-        skipped += [{"mpn": m, "reason": "référence non suivie par cette veille"}
-                    for m in dict.fromkeys(mpns) if comp.norm_mpn(m) not in tracked]
+    if key:
+        chosen = [c for c in data["components"] if comp.key_of(c["mpn"], c["manufacturer"]) == key]
+    elif mpns:
+        chosen, unknown = comp.select(data["components"], mpns)
+        skipped += [{"mpn": m, "reason": "référence non suivie par cette veille"} for m in unknown]
     else:
         chosen = comp.alternatives_due(data["components"], specs, comp.load_notices(slug), day)
     targets = []
     for c in chosen:
-        reason = comp.searchable(specs.get(comp.key_of(c["mpn"], c["manufacturer"])))
+        reason = comp.searchable(c, specs.get(comp.key_of(c["mpn"], c["manufacturer"])))
         if reason:
             skipped.append({"mpn": c["mpn"], "reason": reason})
         else:
             targets.append(c)
-    track = _tracker(slug, "alternatives")
+    track = _tracker(slug, "alternatives") if track else None
 
     def progress(c, i, n):
         track.update(throttle=True, step="alternatives", alternatives={"done": i, "total": n, "current": c["mpn"]})
     info = _alternatives(slug, client or digikey.Client(*pair), targets, specs, day,
                          progress=progress if track else None)
     if track:
-        track.update(step="done", alternatives={"done": info["searched"], "total": len(targets),
-                                                **({"note": info["error"][:200]} if info.get("error") else {})})
+        track.update(step="done", result={"found": info["found"]},
+                     alternatives={"done": info["searched"], "total": len(targets),
+                                   **({"note": info["error"][:200]} if info.get("error") else {})})
     audit(actor, "components-alternatives", slug, alternatives_note(info)[:300])
     return {**info, "targets": [c["mpn"] for c in targets], "skipped": skipped}
 

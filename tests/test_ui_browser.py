@@ -523,7 +523,7 @@ def test_component_sheet_and_alternatives_mobile(tools, monkeypatch):  # noqa: F
         detail.get_by_text("Critères modifiés depuis cette recherche").wait_for()
         assert comp.load_components(bom.slug)["components"][0]["critical_params"] == [1, 2, 5]
         assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-        detail.locator("details.sheet summary").click()
+        assert detail.locator("details.sheet[open]").count() == 1  # fiche restée ouverte : on garde sa place
         detail.get_by_role("button", name="Revenir aux défauts").click()  # bouton cliqué transmis (op=reset)
         detail.get_by_text("critiques : défauts de la famille").wait_for()
         assert "critical_params" not in comp.load_components(bom.slug)["components"][0]

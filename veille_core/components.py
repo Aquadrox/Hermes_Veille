@@ -619,14 +619,30 @@ ALT_MAX_AGE_DAYS = 30  # une recherche plus ancienne est refaite (catalogue des 
 _NO_VALUE = frozenset({"", "-", "—"})
 
 
+_specs_cache: dict[Path, tuple[tuple, dict]] = {}  # fichier -> (identité lue, fiches)
+
+
 def load_specs(slug: str) -> dict[str, dict]:
     """Fiches d'une veille. Copie de Digi-Key relue à chaque passage : illisible, elle est vide (et réécrite au
-    passage suivant) plutôt qu'une erreur qui bloquerait le passage ou la page."""
+    passage suivant) plutôt qu'une erreur qui bloquerait le passage ou la page.
+
+    Gardées en mémoire tant que le fichier n'a pas changé (inode, date, taille : `store.atomic_write` le remplace) :
+    le détail d'un composant n'en relit pas plusieurs Mo à chaque ouverture. Copie de premier niveau renvoyée :
+    l'appelant peut ajouter ou remplacer une fiche, jamais en modifier une en place."""
+    path = store.veille_dir(slug) / "specs.json"
     try:
-        specs = _load(slug, "specs.json").get("specs")
-    except ComponentsError:
+        st = path.stat()
+    except FileNotFoundError:
         return {}
-    return specs if isinstance(specs, dict) else {}
+    ident = (st.st_ino, st.st_mtime_ns, st.st_size)
+    cached = _specs_cache.get(path)
+    if cached is None or cached[0] != ident:
+        try:
+            specs = _read(path).get("specs")
+        except ComponentsError:
+            specs = None
+        cached = _specs_cache[path] = (ident, specs if isinstance(specs, dict) else {})
+    return dict(cached[1])
 
 
 def save_specs(slug: str, specs: dict[str, dict]) -> None:
@@ -729,11 +745,12 @@ def rank_alternatives(c: dict, spec: dict | None, products: list[dict], crit: li
     return out[:MAX_ALTERNATIVES]
 
 
-def alternatives_record(c: dict, spec: dict | None, products: list[dict], day: str) -> dict:
-    """Résultat d'une recherche, enregistré dans `dk.alternatives` : date, critères appliqués, alternatives."""
+def alternatives_record(c: dict, spec: dict | None, products: list[dict], day: str, error: str = "") -> dict:
+    """Résultat d'une recherche, enregistré dans `dk.alternatives` : date, critères appliqués, alternatives ; ou
+    le refus de Digi-Key (`error`), daté lui aussi : la référence repasse après les autres, et le refus s'affiche."""
     crit = criteria(c, spec)
     return {"searched_at": day, "criteria": [{"id": p["id"], "name": p["name"], "value": p["value"]} for p in crit],
-            "items": rank_alternatives(c, spec, products, crit)}
+            "items": [] if error else rank_alternatives(c, spec, products, crit), **({"error": error} if error else {})}
 
 
 def alternatives(c: dict) -> dict | None:
@@ -748,17 +765,29 @@ def alternatives_stale(c: dict, spec: dict | None) -> bool:
     """Recherche faite avec d'autres critères que les critères actuels (choix de l'utilisateur modifié). Sans fiche
     (pas encore relue), rien à comparer : pas périmée."""
     rec = alternatives(c)
-    return rec is not None and bool(params(spec)) and [
-        x.get("id") for x in rec["criteria"] if isinstance(x, dict)] != [p["id"] for p in criteria(c, spec)]
+    return rec is not None and bool(params(spec)) and sorted(
+        str(x.get("id")) for x in rec["criteria"] if isinstance(x, dict)) != sorted(
+        str(p["id"]) for p in criteria(c, spec))  # ordre des caractéristiques de Digi-Key indifférent
 
 
-def searchable(spec: dict | None) -> str:
-    """Motif pour lequel on ne peut pas chercher d'alternatives à cette référence, vide si on peut."""
+def searchable(c: dict, spec: dict | None) -> str:
+    """Motif pour lequel on ne peut pas chercher d'alternatives à cette référence, vide si on peut. Sans aucune
+    critique, toute référence active de la catégorie passerait (une 1 MΩ pour une 10 kΩ) : refusé."""
     if not params(spec) and not _categories(spec):
         return "pas de fiche Digi-Key (statut Digi-Key à vérifier d'abord)"
     if family(spec) is None:
         return "famille non concernée (seuls les passifs et les discrets le sont)"
+    if not criteria(c, spec):
+        return "aucune caractéristique critique : en cocher au moins une (la valeur nominale)"
     return ""
+
+
+def select(components: list[dict], mpns: list[str]) -> tuple[list[dict], list[str]]:
+    """Références suivies de ces MPN (tous fabricants), et les MPN demandés qui ne le sont pas (bornés)."""
+    wanted = {norm_mpn(m) for m in mpns}
+    chosen = [c for c in components if norm_mpn(c["mpn"]) in wanted]
+    tracked = {norm_mpn(c["mpn"]) for c in chosen}
+    return chosen, [str(m)[:64] for m in dict.fromkeys(mpns) if norm_mpn(m) not in tracked]
 
 
 def alternatives_due(components: list[dict], specs: dict[str, dict], notices: list[dict], day: str) -> list[dict]:
@@ -771,7 +800,7 @@ def alternatives_due(components: list[dict], specs: dict[str, dict], notices: li
     for c in components:
         key = key_of(c["mpn"], c["manufacturer"])
         w, spec = worst.get(key), specs.get(key)
-        if not w or w["type"] not in CRITICAL or searchable(spec):
+        if not w or w["type"] not in CRITICAL or searchable(c, spec):
             continue
         rec = alternatives(c)
         if rec is None or rec["searched_at"] < limit or alternatives_stale(c, spec):
@@ -784,7 +813,7 @@ def sheet(c: dict, spec: dict | None) -> dict:
     critères, dernière recherche d'alternatives (`stale` : faite avec d'autres critères)."""
     crit = {p["id"] for p in criteria(c, spec)}
     return {"family": family(spec), "category": " › ".join(x["name"] for x in _categories(spec)),
-            "unsearchable": searchable(spec),
+            "unsearchable": searchable(c, spec),
             "params": [{**p, "critical": p["id"] in crit, "valued": _valued(p)} for p in params(spec)],
             "custom": c.get("critical_params") is not None, "alternatives": alternatives(c),
             "stale": alternatives_stale(c, spec)}

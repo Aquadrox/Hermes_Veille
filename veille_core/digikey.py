@@ -62,6 +62,11 @@ class DigiKeyError(RuntimeError):
     pass
 
 
+class RequestRefused(DigiKeyError):
+    """Requête refusée telle quelle (HTTP 400, 422) : propre à CETTE requête (une recherche d'alternatives aux
+    filtres refusés), pas à l'accès ; une autre requête peut aboutir."""
+
+
 class TransientError(DigiKeyError):
     """Panne passagère : la même requête peut aboutir un peu plus tard. `retry_after` : attente demandée par
     Digi-Key (HTTP 429), en secondes, sinon None."""
@@ -85,7 +90,8 @@ def _http_error(exc: urllib.error.HTTPError, what: str) -> DigiKeyError:
     if exc.code == 429:
         retry = str((exc.headers or {}).get("Retry-After") or "").strip()
         return TransientError(f"{what} : HTTP 429", int(retry) if retry.isdigit() else RETRY_AFTER)
-    return (TransientError if exc.code >= 500 else DigiKeyError)(f"{what} : HTTP {exc.code}")
+    kind = TransientError if exc.code >= 500 else RequestRefused if exc.code in (400, 422) else DigiKeyError
+    return kind(f"{what} : HTTP {exc.code}")
 
 
 def credentials() -> tuple[str, str] | None:
@@ -176,7 +182,7 @@ class Client:
         except TransientError as exc:
             raise TransientError(f"{exc} ({what})", exc.retry_after) from None
         except DigiKeyError as exc:
-            raise DigiKeyError(f"{exc} ({what})") from None
+            raise type(exc)(f"{exc} ({what})") from None  # même nature (RequestRefused) : l'appelant en décide
 
     def status(self, mpn: str, manufacturer: str) -> dict:
         """{'status', 'product_url'[, 'category', 'params']} ou {'error'} (référence introuvable, fabricant différent).
