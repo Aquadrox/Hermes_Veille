@@ -48,6 +48,15 @@ for dir in "$VEILLES_DIR" "$HERMES_HOME/imports"; do
         || log "ERREUR : impossible de créer $dir"
 done
 
+# --- 1 bis. Secrets du volume : repli durable (À CHAQUE démarrage) ---
+# Le conteneur reçoit les secrets (DEEPSEEK_API_KEY, BREVO_API_KEY…) en variables via env_file,
+# mais Hermes lit les clés de provider dans le `.env` du volume, et un processus lancé par l'agent
+# peut être privé de l'environnement : on les recopie donc dans $HERMES_HOME/.env à chaque
+# démarrage (idempotent), pour qu'aucun déploiement ni redémarrage ne les perde.
+if [ -x "$VEILLECTL" ]; then
+    as_hermes "$VEILLECTL" env-sync 2>&1 | sed 's/^/[seed-veille] env-sync: /'
+fi
+
 set_config() {
     if as_hermes "$HERMES_BIN" config set "$1" "$2" >/dev/null 2>&1; then
         log "$1 = $2"
