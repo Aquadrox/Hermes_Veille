@@ -34,7 +34,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import bom_import, catalog, components, db, hermes, schedule, service, store, version
+from . import bom_import, catalog, components, db, envfile, hermes, schedule, service, store, version
 
 
 def _print_overview() -> int:
@@ -297,6 +297,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("reconcile")
     sub.add_parser("migrate")
     sub.add_parser("bootstrap")
+    sub.add_parser("env-sync", help="recopie les secrets de l'environnement vers le .env du volume")
     # Python 3.11 ne rattache pas à `items` (nargs="*") les valeurs placées APRÈS une option
     # (« components add slug --file f.csv "MPN;Fab" ») : on les y ajoute, sans rien accepter d'autre.
     args, extra = ap.parse_known_args(argv)
@@ -365,6 +366,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "bootstrap":
             slug = service.bootstrap_default()
             print(f"✓ veille par défaut créée : {slug}" if slug else "rien à amorcer")
+        elif args.cmd == "env-sync":
+            written = envfile.sync_env_to_file()
+            print("✓ secrets synchronisés : " + (", ".join(written) if written else "aucun (environnement vide)"))
         elif args.cmd == "reconcile":
             for line in service.reconcile_all():
                 print(line)
