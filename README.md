@@ -205,6 +205,32 @@ lundi 6h30 — job de la veille thématique rattachée
   recherche web, c'est l'agent qui signale chaque groupe de recherches
   (`veillectl components progress`) : au mieux de ce qu'il fait, et seulement lors d'un lancement
   manuel — une exécution planifiée n'écrit rien et ne coûte aucun appel de plus.
+- **Fiche composant et alternatives** (0.8.0) : le passage Digi-Key garde la **fiche** de chaque référence
+  (catégorie et caractéristiques : valeur, tolérance, boîtier…), affichée dans le détail du composant. Pour
+  un **passif ou un discret** (résistance, condensateur, inductance, ferrite, diode, transistor, quartz) en
+  **fin de vie ou en dernière commande** (EOL, PDN, obsolète, LTB), l'application cherche ensuite chez
+  Digi-Key des références **actives** de la même sous-catégorie, aux mêmes **caractéristiques critiques**
+  (recherche paramétrique, sans LLM ni coût en tokens), et en garde 5 au plus, classées par score (part
+  des autres caractéristiques identiques) avec leurs différences. Les circuits intégrés ne sont pas
+  concernés : un équivalent paramétrique y serait trompeur.
+  - **Critiques** : par défaut, celles de la famille (valeur nominale, boîtier, montage, tension d'un
+    condensateur, Vds et Id d'un MOSFET…). Dans la fiche du composant (« Fiche composant »), coche celles
+    que toute alternative doit avoir à l'identique : ton choix remplace les défauts (« Revenir aux
+    défauts » pour l'annuler) et survit à une réinitialisation de la recherche. Une recherche faite avec
+    d'autres critères est signalée jusqu'à la suivante.
+  - **Quand** : après chaque passage Digi-Key, pour les fins de vie sans recherche depuis 30 jours (ou
+    recherchées avec d'autres critères), dans le temps restant de la tranche et 50 recherches au plus
+    (quota de l'offre gratuite). **À la demande** : « Rechercher des alternatives » dans le détail d'un
+    composant (même actif), « Alternatives des fins de vie » au-dessus de la liste (en arrière-plan,
+    avancement affiché), `veillectl components alternatives <slug> [MPN …]`, ou Telegram
+    (`search_alternatives`).
+  - **Consulter** : badge « ⇄ n » et filtre « Avec alternatives » de la liste, détail du composant, base
+    des composants (lecture seule), Telegram (`get_component_sheet`, `list_alternatives`,
+    `set_critical_parameters`).
+  - Au moins une critique est exigée (sinon toute référence de la catégorie passerait). Une recherche refusée
+    par Digi-Key est affichée dans le détail du composant et refaite après 30 jours (ou à la demande).
+  - Ce sont des **suggestions** à qualifier : correspondance des caractéristiques publiées par Digi-Key,
+    pas une équivalence validée (brochage, fiabilité, qualification).
 - **Livraison** : rattachée à une veille thématique (« Chapitre composants » dans son formulaire),
   la veille composants n'envoie rien elle-même : ses nouveaux avis partent en chapitre de l'e-mail
   de cette veille. Sinon, elle envoie son propre e-mail (HTML lisible sur mobile + PDF).
@@ -229,7 +255,9 @@ lundi 6h30 — job de la veille thématique rattachée
 
 Limites : la recherche web reste probabiliste (un avis peut être manqué : le statut Digi-Key sert
 de filet) ; les avis PCN de Digi-Key eux-mêmes ne sont pas lus (leur API exige une connexion
-interactive, OAuth « 3-legged ») ; Mouser et Nexar ne sont pas intégrés.
+interactive, OAuth « 3-legged ») ; Mouser et Nexar ne sont pas intégrés. Alternatives : seulement pour les
+références que Digi-Key connaît (une référence introuvable n'a pas de fiche), et les critiques se comparent
+à l'identique (une tolérance plus serrée ou une tension plus haute ne passe pas une critique cochée).
 
 ## Piloter depuis Telegram (MCP)
 
@@ -249,7 +277,7 @@ industriel, chaque lundi à 8h, pour moi@exemple.fr », « Quelles fins de vie o
 ce mois-ci ? », « Où en est l'analyse de la veille composants ? »…
 
 - **Transport stdio via `docker exec -i`** : aucun port réseau n'est ouvert.
-- **`trust: untrusted`** : les 14 outils de lecture s'exécutent directement ; les 17 outils de
+- **`trust: untrusted`** : les 16 outils de lecture s'exécutent directement ; les 19 outils de
   modification demandent ton **approbation dans Telegram**. `run_veille_now` et
   `send_test_email` envoient de vrais e-mails ; `archive_veille` et `reset_component_search`
   exigent en plus de répéter le slug.
@@ -395,6 +423,7 @@ docker exec veille-hermes veillectl create --kind composants --name "Composants 
     --schedule "0 23 * * 0" --recipients achats@exemple.fr --components-file /opt/data/bom.csv
 docker exec veille-hermes veillectl edit industrie-4-0 --include-components composants-carte-x
 docker exec veille-hermes veillectl components list|notices composants-carte-x [--type EOL]
+docker exec veille-hermes veillectl components alternatives composants-carte-x [MPN …]  # sinon : fins de vie
 docker exec veille-hermes veillectl catalog rebuild|stats     # base des composants partagée
 # étape finale du job d'une veille thématique (chapitre composants, PDF, e-mail)
 docker exec veille-hermes veillectl report publish <slug> /opt/data/veilles/<slug>/rapports/<D>-veille.md
@@ -449,6 +478,7 @@ veilles/<slug>/
     runs/             journaux des lancements manuels (.progress.json : avancement du dernier)
     components.json   veille composants : références, statuts Digi-Key et web, dates de vérification
     notices.json      veille composants : avis PCN / EOL détectés, sources, livraisons
+    specs.json        veille composants : fiche Digi-Key de chaque référence (catégorie, caractéristiques)
 imports/            nomenclatures déposées pour import (Telegram / CLI), analyses en cours de
                     l'interface (supprimées après 1 h) ; exclu des sauvegardes
 veilles/.archive/   veilles archivées, copies des remises à zéro (`<slug>-reinit-…`)

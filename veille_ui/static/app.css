@@ -109,6 +109,25 @@ tr.detail > td { background: var(--bg); }
 ul.notices { margin: .4rem 0; padding-left: 1.1rem; }
 ul.notices li { margin-bottom: .5rem; }
 ul.notices li.crit::marker { color: var(--bad); }
+/* Fiche composant : caractéristiques à cocher (une par ligne, cible tactile pleine largeur) et alternatives en
+   cartes : rien ne déborde à 390 px (valeurs longues coupées). */
+details.sheet { margin: .5rem 0; }
+ul.params { list-style: none; margin: .3rem 0; padding: 0; }
+ul.params li { border-bottom: 1px solid var(--line); }
+ul.params .p-row { display: flex; gap: .5rem; align-items: center; margin: 0; padding: .45rem .1rem;
+  font-weight: 400; min-height: 2.25rem; }
+ul.params input[type=checkbox] { display: inline-block; width: 1.15rem; height: 1.15rem; margin: 0; flex: none; accent-color: var(--accent); }
+ul.params .p-name { flex: 1 1 45%; min-width: 0; color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; }
+ul.params .p-val { flex: 1 1 55%; min-width: 0; overflow-wrap: anywhere; }
+ul.params li.crit .p-name { color: var(--text); font-weight: 600; }
+.comp-detail .actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: .5rem 0; }
+.alts { margin-top: .6rem; }
+ul.alt-list { list-style: none; margin: .4rem 0; padding: 0; display: grid; gap: .5rem; }
+ul.alt-list > li { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: .5rem .65rem;
+  overflow-wrap: anywhere; }
+.alt-head { display: flex; flex-wrap: wrap; gap: .25rem .5rem; align-items: baseline; }
+ul.diffs { margin: .25rem 0 0; padding-left: 1.1rem; }
+.badge.alt { color: var(--ok); }
 td.nowrap, td.c-link, .badge { white-space: nowrap; }
 h2.inline { display: inline; }
 details > summary h2 { margin: 0; }

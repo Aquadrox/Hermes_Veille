@@ -24,6 +24,7 @@
         <option value="critical">Fin de vie / dernière cde</option>
         <option value="notice">Avec avis</option>
         <option value="none">Sans avis</option>
+        <option value="alts">Avec alternatives</option>
         {% for t, label in NOTICE_TYPES.items() %}<option value="{{ t }}">{{ label[0] }}</option>{% endfor %}
       </select></th>
       <th><input type="search" data-col="4" placeholder="Échéance" aria-label="Filtrer par échéance" autocomplete="off"></th>
@@ -39,13 +40,13 @@
   {% for r in comp_rows %}
     {# au-delà de la limite : masquées dès le rendu (mise en page légère), app.js gère ensuite #}
     <tr class="comp{% if r.critical %} crit{% endif %}"{% if loop.index > COMP_ROWS_SHOWN %} hidden{% endif %}
-        data-types="{{ r.types|join(' ') }}"
+        data-types="{{ r.types|join(' ') }}"{% if r.alts %} data-alts{% endif %}
         data-detail="{% if all_veilles %}/composants/detail?key={{ r.key|urlencode }}{% else %}/veilles/{{ v.slug }}/components/{{ r.anchor }}{% endif %}"
-        data-q="{{ r.dk.status or '' }}{% if r.web %} {{ web_status_label(r.web) }}{% endif %}{% for n in r.notices %} {{ NOTICE_TYPES[n.type][0] }} {{ n.title }} {{ n.number }} {{ n.summary }}{% endfor %}">
+        data-q="{{ r.dk.status or '' }}{% if r.web %} {{ web_status_label(r.web) }}{% endif %}{% for n in r.notices %} {{ NOTICE_TYPES[n.type][0] }} {{ n.title }} {{ n.number }} {{ n.summary }}{% endfor %}{% if r.alts %} alternatives{% endif %}">
       <td class="c-mpn"><button type="button" class="link comp-toggle" aria-expanded="false" aria-controls="d-{{ r.anchor }}"><strong>{{ r.mpn }}</strong></button>{% if not r.tracked %} <span class="muted small">(retiré)</span>{% endif %}</td>
       <td class="opt">{{ r.manufacturer }}</td>
       <td class="opt">{{ r.status }}</td>
-      <td class="c-types">{% for t in r.types %}{{ badge(t) }} {% else %}<span class="muted">—</span>{% endfor %}</td>
+      <td class="c-types">{% for t in r.types %}{{ badge(t) }} {% else %}<span class="muted">—</span>{% endfor %}{% if r.alts %}<span class="badge alt" title="{{ r.alts }} alternative(s) suggérée(s)">⇄ {{ r.alts }}</span>{% endif %}</td>
       <td class="c-due nowrap">{% if r.deadline %}<strong>{{ r.deadline }}</strong>{% else %}—{% endif %}</td>
       <td class="opt nowrap">{{ r.found or "—" }}</td>
       {% if all_veilles %}<td class="opt" data-tags="{{ r.watches|join('|') }}">{{ watch_links(r.watches, active) }}</td>{% endif %}

@@ -61,7 +61,7 @@
     var rows = Array.prototype.map.call(table.querySelectorAll("tbody tr.comp"), function (tr) {
       var types = tr.getAttribute("data-types").split(" ").filter(Boolean);
       // codes (EOL, PCN, LTB…) en plus des libellés affichés : on cherche « eol » plus que « fin de vie »
-      var r = {tr: tr, types: types, crit: tr.classList.contains("crit"), cells: null,
+      var r = {tr: tr, types: types, crit: tr.classList.contains("crit"), alts: tr.hasAttribute("data-alts"), cells: null,
                detail: null, open: false, loaded: false,
                text: norm(tr.textContent + " " + types.join(" ") + " " + tr.getAttribute("data-q"))};
       tr.compRow = r;
@@ -87,7 +87,8 @@
         var ok = words.every(function (w) { return r.text.indexOf(w) !== -1; }) &&
           colFilters.every(function (f) { return match(r, f); }) &&
           (!type || (type === "critical" ? r.crit : type === "notice" ? r.types.length > 0 :
-                     type === "none" ? r.types.length === 0 : r.types.indexOf(type) !== -1));
+                     type === "none" ? r.types.length === 0 : type === "alts" ? r.alts :
+                     r.types.indexOf(type) !== -1));
         if (ok) matched++;
         var visible = ok && (showAll || matched <= limit);
         setHidden(r.tr, !visible);
@@ -101,6 +102,7 @@
     }
     // Saisie : appliquée après une courte pause (pas à chaque touche) ; liste déroulante : immédiat.
     function onInput(e) {
+      if (e.target.closest("tr.detail")) return;  // fiche d'un composant (cases à cocher) : pas un filtre
       clearTimeout(timer);
       if (e.target.tagName === "SELECT") apply();
       else timer = setTimeout(apply, 120);
@@ -116,7 +118,10 @@
       td.textContent = "Chargement…";
       fetch(r.tr.getAttribute("data-detail"), {headers: {"HX-Request": "true"}, credentials: "same-origin"})
         .then(function (res) { if (!res.ok) throw res.status; return res.text(); })
-        .then(function (html) { td.innerHTML = html; })  // fragment rendu (et échappé) par le serveur
+        .then(function (html) {
+          td.innerHTML = html;  // fragment rendu (et échappé) par le serveur
+          if (window.htmx) window.htmx.process(td);  // fiche : formulaires et boutons htmx du fragment
+        })
         .catch(function (status) {
           r.loaded = false;
           td.textContent = status === 401 ? "Session expirée : recharge la page."
@@ -374,8 +379,11 @@
     document.querySelectorAll("[data-recipients]").forEach(initRecipients);
   });
 
-  // Session expirée pendant une requête HTMX : retour à la page de connexion.
+  // Échec d'une requête HTMX : jeton invalide (403) ou autre (élément introuvable, fichier illisible) dit à
+  // l'utilisateur, plutôt qu'un bouton qui ne fait rien ; session expirée (401) : HX-Redirect vers la connexion.
   document.addEventListener("htmx:responseError", function (e) {
-    if (e.detail.xhr.status === 403) window.alert("Session expirée ou jeton invalide : recharge la page.");
+    var xhr = e.detail.xhr;
+    if (xhr.status === 403) window.alert("Session expirée ou jeton invalide : recharge la page.");
+    else if (xhr.status !== 401) window.alert("Action impossible (" + xhr.status + ") : " + (xhr.responseText || "").slice(0, 200));
   });
 })();

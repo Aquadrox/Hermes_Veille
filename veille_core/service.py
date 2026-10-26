@@ -52,6 +52,8 @@ SCAN_BUDGET_S = 900  # passage Digi-Key, toutes tranches confondues : la suite a
 SCAN_SLICE_S = guard.COMMAND_TIMEOUT - 4 * digikey.HTTP_TIMEOUT - 60  # 220 s
 SCAN_BUDGET_STOP = "budget de temps ou d'appels atteint : suite au prochain passage"
 SCAN_RESUME_S = 3600  # passage inachevé repris s'il a avancé depuis moins d'une heure (tranches d'un même tir)
+# Recherches d'alternatives par série (un appel Digi-Key chacune) : avec digikey.MAX_CALLS, sous le quota journalier.
+ALT_MAX_CALLS = 50
 
 
 class ServiceError(RuntimeError):
@@ -474,21 +476,47 @@ def run_now(slug: str, actor: str = "cli") -> str:
                   "analyse" if v.kind == "composants" else None)
 
 
+def _require_digikey() -> tuple[str, str]:
+    pair = digikey.credentials()
+    if not pair:
+        raise ServiceError("clés Digi-Key absentes : les saisir dans l'interface, page Sources")
+    return pair
+
+
+def _spawn_components(slug: str, args: list[str], actor: str, action: str, track: str) -> str:
+    """`veillectl components <args>` en arrière-plan (Digi-Key seul : ni LLM, ni e-mail), un lancement à la fois ;
+    renvoie le nom du journal."""
+    _components_veille(slug)
+    _require_digikey()
+    if running_pid(slug):
+        raise ServiceError("un lancement est déjà en cours")
+    app_dir = str(Path(__file__).resolve().parent.parent)
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (app_dir, os.environ.get("PYTHONPATH"))))}
+    cmd = [sys.executable, "-m", "veille_core", "components", *args]
+    return _start(slug, lambda log: hermes.spawn_detached(cmd, log, env), actor, action, track)
+
+
 def check_statuses_now(slug: str, actor: str = "cli") -> str:
     """Vérifie tout de suite le statut Digi-Key des composants, en arrière-plan.
 
     Déterministe : ni LLM (aucun coût en tokens), ni e-mail, ni recherche web ; le lot de la
     prochaine exécution planifiée n'est pas modifié. Renvoie le nom du journal.
     """
-    _components_veille(slug)
-    if not digikey.credentials():
-        raise ServiceError("clés Digi-Key absentes : les saisir dans l'interface, page Sources")
-    if running_pid(slug):
-        raise ServiceError("un lancement est déjà en cours")
-    app_dir = str(Path(__file__).resolve().parent.parent)
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (app_dir, os.environ.get("PYTHONPATH"))))}
-    cmd = [sys.executable, "-m", "veille_core", "components", "scan", slug, "--status-only"]
-    return _start(slug, lambda log: hermes.spawn_detached(cmd, log, env), actor, "components-check", "statuts")
+    return _spawn_components(slug, ["scan", slug, "--status-only"], actor, "components-check", "statuts")
+
+
+def alternatives_now(slug: str, mpns: list[str] | None = None, actor: str = "cli") -> str:
+    """Cherche tout de suite, en arrière-plan, les alternatives des références `mpns`, sinon des composants en fin
+    de vie qui l'attendent (`components.alternatives_due`, comme après un passage Digi-Key). Renvoie le journal.
+
+    Seuls les MPN suivis passent en argument (tels qu'enregistrés : `components.MPN_RE`, jamais une option)."""
+    picked = []
+    if mpns:
+        chosen, _ = comp.select(comp.load_components(_components_veille(slug).slug)["components"], mpns)
+        picked = list(dict.fromkeys(c["mpn"] for c in chosen))
+        if not picked:
+            raise ServiceError("aucune de ces références n'est suivie par cette veille")
+    return _spawn_components(slug, ["alternatives", slug, *picked], actor, "components-alternatives", "alternatives")
 
 
 def run_wait(slug: str, actor: str = "cli") -> str:
@@ -724,8 +752,8 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
         dk_progress = _dk_progress(info, done_before + len(results), total)
     with _locked():
         v = _components_veille(slug)
-        data, notices = comp.load_components(slug), comp.load_notices(slug)
-        new = []
+        data, notices, specs = comp.load_components(slug), comp.load_notices(slug), comp.load_specs(slug)
+        new, specs_before = [], dict(specs)
         for c in data["components"]:
             key = comp.key_of(c["mpn"], c["manufacturer"])
             r = results.get(key)
@@ -739,6 +767,8 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
                 if r["status"] != prev.get("status") and (prev.get("status") or ntype):
                     dk["changed_at"] = day
                 dk.update(status=r["status"], product_url=r["product_url"])
+                if "category" in r or "params" in r:  # fiche (specs.json), hors de components.json
+                    specs[key] = {k: r[k] for k in ("category", "params") if k in r}
                 c.pop("web_status", None)  # Digi-Key fait foi, revérifié à chaque passage
                 if ntype:
                     url = r["product_url"] or comp.normalize_url(
@@ -764,12 +794,27 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
         comp.save_components(slug, data)
         if new:
             comp.save_notices(slug, notices)
+        keys = {comp.key_of(c["mpn"], c["manufacturer"]) for c in data["components"]}
+        specs = {k: s for k, s in specs.items() if k in keys}  # références retirées : fiches oubliées
+        if specs != specs_before:
+            comp.save_specs(slug, specs)
         _index(slug, data["components"], notices)
         if info["configured"]:
             info.update(done=run["verified"], total=run["total"])
+    if info["configured"] and complete and not (info.get("error") or info.get("stopped")):
+        # Alternatives des composants en fin de vie, dans le temps restant de la tranche (la dernière, D1) ou du
+        # budget : celles qui restent attendent le passage suivant ou une recherche à la demande.
+        def alt_progress(c, i, n):
+            track.update(throttle=True, step="digikey", digikey={**dk_progress, "current": f"{c['mpn']} (alternatives)"})
+        info["alternatives"] = _alternatives(slug, client, comp.alternatives_due(data["components"], specs, notices, day),
+                                             specs, day, start + (slice_s if plan_batch else left),
+                                             alt_progress if track else None,
+                                             max_calls=min(ALT_MAX_CALLS, digikey.MAX_CALLS - run["calls"]))
     note = _dk_note(info)
+    alt = info.get("alternatives") or {}
     audit(actor, "components-scan", slug, f"Digi-Key {info['checked']} vérifié(s), {run['notices']} avis ; "
           + (f"lot web {len(lot)}" if complete else f"tranche : {info['done']}/{info['total']} vérifié(s)")
+          + (f" ; alternatives : {alternatives_note(alt)}" if alt.get("searched") or alt.get("error") else "")
           + (f" ; Digi-Key : {note[:200]}" if note else ""))
     if not complete:
         if track:
@@ -796,6 +841,118 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
                        "digikey_error": (c.get("dk") or {}).get("error"), **_fallback(c),
                        "known": known.get(comp.key_of(c["mpn"], c["manufacturer"]), [])[:20]}
                       for c in lot]}
+
+
+def _alternatives(slug: str, client: digikey.Client, targets: list[dict], specs: dict[str, dict], day: str,
+                  deadline: float | None = None, progress=None, max_calls: int = ALT_MAX_CALLS) -> dict:
+    """Recherche paramétrique Digi-Key des alternatives de `targets` (réseau, HORS verrou), puis enregistrement dans
+    `dk.alternatives` de chacune, par clé, dans la liste relue SOUS verrou (éditions concurrentes préservées).
+
+    Au plus `max_calls` recherches ; aucune ne commence après `deadline` (time.monotonic). Une requête refusée
+    (`digikey.RequestRefused`, HTTP 400) est enregistrée comme résultat daté, affiché, et la série continue :
+    une référence aux filtres refusés ne bloque pas les autres. Toute autre erreur (accès, quota, panne) arrête la
+    série : ce qui reste attend la suivante. Renvoie {"searched", "found" (avec au moins une alternative),
+    "pending"[, "error"]}."""
+    results, info = {}, {"searched": 0, "found": 0}
+    for i, c in enumerate(targets[:max(0, max_calls)]):
+        if deadline is not None and time.monotonic() > deadline:
+            break
+        if progress:
+            progress(c, i, len(targets))
+        key = comp.key_of(c["mpn"], c["manufacturer"])
+        filters = [(p["id"], p["vid"]) for p in comp.criteria(c, specs.get(key)) if p.get("vid")]
+        refused = ""
+        try:
+            products = client.similar(comp.leaf_category(specs.get(key)), filters)
+        except digikey.RequestRefused as exc:
+            products, refused = [], str(exc)[:300]
+            info["error"] = refused
+        except digikey.DigiKeyError as exc:
+            info["error"] = str(exc)
+            break
+        rec = comp.alternatives_record(c, specs.get(key), products, day, refused)
+        results[key] = rec
+        info["searched"] += 1
+        info["found"] += bool(rec["items"])
+    info["pending"] = len(targets) - info["searched"]
+    if results:
+        with _locked():
+            data = comp.load_components(slug)
+            for c in data["components"]:
+                rec = results.get(comp.key_of(c["mpn"], c["manufacturer"]))
+                if rec is not None and c.get("dk"):
+                    c["dk"]["alternatives"] = rec
+            comp.save_components(slug, data)
+            _index(slug, data["components"], comp.load_notices(slug))
+    return info
+
+
+def alternatives_note(info: dict) -> str:
+    text = f"{info['searched']} recherchée(s), {info['found']} avec alternatives"
+    if info.get("pending"):
+        text += f", {info['pending']} en attente"
+    return text + (f" ; {info['error']}" if info.get("error") else "")
+
+
+def components_alternatives(slug: str, mpns: list[str] | None = None, actor: str = "cli",
+                            client: digikey.Client | None = None, key: str | None = None, track: bool = False) -> dict:
+    """Recherche d'alternatives à la demande (interface, MCP, CLI), synchrone : la référence `key`, ou les
+    références `mpns` (tous leurs fabricants), même actives ou déjà recherchées ; sinon les composants en fin de
+    vie qui l'attendent (`components.alternatives_due`). `track` : lancement détaché suivi (CLI), seul écrivain de
+    son avancement. Renvoie le compte rendu de `_alternatives`, plus `targets` (MPN recherchés) et `skipped`
+    ([{"mpn", "reason"}] : non suivie, sans fiche Digi-Key, famille non concernée, aucune critique)."""
+    _components_veille(slug)
+    pair = None if client else _require_digikey()
+    day = comp.today()
+    data, specs = comp.load_components(slug), comp.load_specs(slug)
+    skipped = []
+    if key:
+        chosen = [c for c in data["components"] if comp.key_of(c["mpn"], c["manufacturer"]) == key]
+    elif mpns:
+        chosen, unknown = comp.select(data["components"], mpns)
+        skipped += [{"mpn": m, "reason": "référence non suivie par cette veille"} for m in unknown]
+    else:
+        chosen = comp.alternatives_due(data["components"], specs, comp.load_notices(slug), day)
+    targets = []
+    for c in chosen:
+        reason = comp.searchable(c, specs.get(comp.key_of(c["mpn"], c["manufacturer"])))
+        if reason:
+            skipped.append({"mpn": c["mpn"], "reason": reason})
+        else:
+            targets.append(c)
+    track = _tracker(slug, "alternatives") if track else None
+
+    def progress(c, i, n):
+        track.update(throttle=True, step="alternatives", alternatives={"done": i, "total": n, "current": c["mpn"]})
+    info = _alternatives(slug, client or digikey.Client(*pair), targets, specs, day,
+                         progress=progress if track else None)
+    if track:
+        track.update(step="done", result={"found": info["found"]},
+                     alternatives={"done": info["searched"], "total": len(targets),
+                                   **({"note": info["error"][:200]} if info.get("error") else {})})
+    audit(actor, "components-alternatives", slug, alternatives_note(info)[:300])
+    return {**info, "targets": [c["mpn"] for c in targets], "skipped": skipped}
+
+
+def set_critical_params(slug: str, key: str, wanted: list | None, actor: str = "cli") -> dict:
+    """Caractéristiques critiques de la référence `key` (identifiants ou libellés de sa fiche Digi-Key, voir
+    `components.critical_ids`) ; None : retour aux défauts de sa famille. Sous verrou. Les alternatives déjà
+    trouvées restent affichées, signalées si elles l'ont été avec d'autres critères (`components.alternatives_stale`)
+    jusqu'à la recherche suivante. Renvoie la fiche (`components.sheet`)."""
+    with _locked():
+        data = comp.load_components(_components_veille(slug).slug)
+        c = next((c for c in data["components"] if comp.key_of(c["mpn"], c["manufacturer"]) == key), None)
+        if c is None:
+            raise ServiceError("composant introuvable dans cette veille")
+        spec = comp.load_specs(slug).get(key)
+        if wanted is None:
+            c.pop("critical_params", None)
+        else:
+            c["critical_params"] = comp.critical_ids(c, spec, wanted)
+        comp.save_components(slug, data)
+    chosen = ", ".join(p["name"] for p in comp.criteria(c, spec))[:200] or "aucune"
+    audit(actor, "components-critical", slug, f"{c['mpn']} : {chosen if wanted is not None else 'défauts de la famille'}")
+    return comp.sheet(c, spec)
 
 
 def _dk_note(info: dict) -> str:
@@ -930,9 +1087,9 @@ def remove_components(slug: str, mpns: list[str], actor: str = "cli") -> int:
 
 
 def reset_components(slug: str, actor: str = "cli") -> Path:
-    """Remet la recherche à zéro : avis effacés, statuts (Digi-Key, web) et dates de recherche oubliés ; la
-    prochaine analyse revérifie tout et re-signale comme nouveaux les avis retrouvés. La liste des composants,
-    les rapports et les destinataires restent. Renvoie la copie préalable (archives : rien n'est perdu).
+    """Remet la recherche à zéro : avis effacés, statuts (Digi-Key, web), fiches, alternatives et dates de recherche
+    oubliés ; la prochaine analyse revérifie tout et re-signale comme nouveaux les avis retrouvés. La liste des
+    composants, leurs caractéristiques critiques, les rapports et les destinataires restent. Renvoie la copie préalable (archives : rien n'est perdu).
 
     Refusée pendant un lancement manuel (suivi). Une exécution planifiée n'est pas détectable : remise à zéro
     entre son scan et son finalize, les avis qu'elle trouve sont enregistrés et son lot sera recherché à nouveau.
@@ -948,12 +1105,13 @@ def reset_components(slug: str, actor: str = "cli") -> Path:
         dest = Path(tempfile.mkdtemp(prefix=f"{slug}-reinit-{dt.datetime.now():%Y%m%d-%H%M%S}-",
                                      dir=paths.archive_dir()))
         dest.chmod(0o755)  # comme les autres dossiers du volume (mkdtemp : 0700)
-        for name in ("components.json", "notices.json"):
+        for name in ("components.json", "notices.json", "specs.json"):
             if (v.dir / name).is_file():
                 shutil.copy2(v.dir / name, dest / name)
         data = {"components": comp.reset_state(data["components"]), "batch": []}
         comp.save_components(slug, data)
         comp.save_notices(slug, [])
+        comp.save_specs(slug, {})
         _index(slug, data["components"], [])  # ce qu'elle avait apporté à la base disparaît aussi
     audit(actor, "components-reset", slug, str(dest))
     return dest

@@ -56,6 +56,8 @@ FLASH = {
     "resumed": "Veille reprise.",
     "run": "Lancement démarré : son suivi s'affiche ci-dessous.",
     "checking": "Vérification des statuts Digi-Key démarrée : l'avancement s'affiche ci-dessous.",
+    "alternatives": "Recherche d'alternatives des composants en fin de vie démarrée : l'avancement s'affiche "
+                    "ci-dessous.",
     "reset": "Recherche réinitialisée (copie archivée) : «\u00a0Lancer l'analyse\u00a0» repart de zéro.",
     "archived": "Veille archivée.",
     "mail": "E-mail de test envoyé.",
@@ -144,6 +146,7 @@ templates.env.globals["WEB_STATUSES"] = components.WEB_STATUSES
 templates.env.globals["web_status_label"] = components.web_status_label
 templates.env.globals["CRITICAL"] = components.CRITICAL
 templates.env.globals["badge_class"] = components.badge_class
+templates.env.globals["component_sheet"] = components.sheet
 templates.env.globals["COMP_ROWS_SHOWN"] = COMP_ROWS_SHOWN
 templates.env.globals["FIELDS"] = bom_import.FIELDS
 templates.env.globals["LABELS"] = bom_import.LABELS
@@ -442,20 +445,58 @@ def create_app() -> FastAPI:
         runs = hermes.runs(v.job_id, 10) if v.job_id and hermes.get_job(v.job_id, service._safe_jobs()) else []
         return render(request, "partials/history.html", runs=runs)
 
-    @app.get("/veilles/{slug}/components/{anchor}", response_class=HTMLResponse)
-    def component_detail(request: Request, slug: str, anchor: str):
-        """Détail d'un composant, chargé au clic dans la liste (htmx)."""
+    def component_row(slug: str, anchor: str) -> dict | None:
+        """Ligne d'un composant de la veille (`components.group`), None si introuvable ; lève ComponentsError
+        sur un fichier illisible."""
         try:
             if not ANCHOR_RE.fullmatch(anchor) or store.load(slug).kind != "composants":
-                raise StoreError("introuvable")
-            row = next((r for r in component_rows(slug) if r["anchor"] == anchor), None)
+                return None
+        except StoreError:
+            return None
+        return next((r for r in component_rows(slug) if r["anchor"] == anchor), None)
+
+    def detail_response(request: Request, slug: str, anchor: str, status_code: int = 200, /, **ctx):
+        try:
+            row = component_row(slug, anchor)
         except components.ComponentsError as exc:
             return PlainTextResponse(str(exc), status_code=500)
-        except StoreError:
-            row = None
         if row is None:
             return PlainTextResponse("composant introuvable", status_code=404)
-        return render(request, "partials/component_detail.html", r=row)
+        return render(request, "partials/component_detail.html", status_code, r=row, slug=slug,
+                      spec=components.load_specs(slug).get(row["key"]),
+                      digikey_configured=credentials.status("digikey")["configured"], **ctx)
+
+    @app.get("/veilles/{slug}/components/{anchor}", response_class=HTMLResponse)
+    def component_detail(request: Request, slug: str, anchor: str):
+        """Détail d'un composant, chargé au clic dans la liste (app.js) : avis, fiche, alternatives."""
+        return detail_response(request, slug, anchor)
+
+    @app.post("/veilles/{slug}/components/{anchor}/{action}", response_class=HTMLResponse)
+    async def component_action(request: Request, slug: str, anchor: str, action: str):
+        """Fiche d'un composant (htmx) : ses caractéristiques critiques (`critical`, champ `op` = reset pour revenir
+        aux défauts de la famille), ou la recherche de ses alternatives (`alternatives` : un appel Digi-Key, pendant
+        la requête). Renvoie le détail à jour ; en 400 avec le motif d'un échec."""
+        if action not in ("critical", "alternatives"):
+            return PlainTextResponse("action inconnue", status_code=404)
+        form = await request.form()
+        try:
+            row = await run_in_threadpool(component_row, slug, anchor)
+        except components.ComponentsError as exc:
+            return PlainTextResponse(str(exc), status_code=500)
+        if row is None:
+            return PlainTextResponse("composant introuvable", status_code=404)
+        error = None
+        try:
+            if action == "critical":
+                wanted = None if form.get("op") == "reset" else form.getlist("param")
+                await run_in_threadpool(service.set_critical_params, slug, row["key"], wanted, ACTOR)
+            else:
+                r = await run_in_threadpool(lambda: service.components_alternatives(slug, actor=ACTOR, key=row["key"]))
+                error = "; ".join(s["reason"] for s in r["skipped"]) or None  # refus de Digi-Key : dans le bloc
+        except USER_ERRORS as exc:
+            error = str(exc)
+        return await run_in_threadpool(detail_response, request, slug, anchor, 400 if error else 200,
+                                       detail_error=error, sheet_open=action == "critical")
 
     @app.get("/veilles/{slug}/edit", response_class=HTMLResponse)
     def edit_form(request: Request, slug: str):
@@ -625,7 +666,10 @@ def create_app() -> FastAPI:
         row = next((r for r in rows if r["key"] == key), None)
         if row is None:
             return PlainTextResponse("composant introuvable", status_code=404)
-        return render(request, "partials/component_detail.html", r=row, active=active_watches())
+        active = active_watches()
+        # fiche : celle d'une veille active qui suit la référence (les fiches ne sont pas dans la base)
+        spec = next(filter(None, (components.load_specs(w).get(key) for w in row["watches"] if w in active)), None)
+        return render(request, "partials/component_detail.html", r=row, spec=spec, active=active)
 
     @app.get("/composants.xlsx")
     def catalog_export():
@@ -719,6 +763,7 @@ def create_app() -> FastAPI:
                "run": (service.run_now, "run"), "test-email": (service.send_test_email, "mail"),
                "archive": (service.archive, "archived"),
                "check-status": (service.check_statuses_now, "checking"),
+               "alternatives": (service.alternatives_now, "alternatives"),
                "reset-search": (service.reset_components, "reset")}
         if action not in ops:
             return PlainTextResponse("action inconnue", status_code=404)

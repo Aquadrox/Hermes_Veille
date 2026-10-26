@@ -19,6 +19,7 @@ Veille composants (PCN / fins de vie) :
   veillectl components import <slug> bom.xlsx [--dry-run] [--replace] [--mpn COL] [--manufacturer COL] …
   veillectl components scan <slug>                                  (étape 1 du job)
   veillectl components scan <slug> --status-only                    (statut Digi-Key seul, à la demande)
+  veillectl components alternatives <slug> [MPN …]                  (alternatives Digi-Key : ces MPN, sinon fins de vie)
   veillectl components progress <slug> MPN …                        (étape 3 du job, lancement suivi)
   veillectl components finalize <slug> <avis.json>                  (étape 5 du job)
   veillectl components reset <slug>                                 (recherche remise à zéro, copie archivée)
@@ -156,6 +157,11 @@ def _components(args) -> int:
             print("  clés Digi-Key absentes : les saisir dans l'interface, page Sources")
     elif args.action == "scan":
         print(json.dumps(service.components_scan(slug), ensure_ascii=False, indent=1))
+    elif args.action == "alternatives":
+        r = service.components_alternatives(slug, args.items or None, actor="cli", track=True)
+        print(f"✓ alternatives : {service.alternatives_note(r)}")
+        for s in r["skipped"]:
+            print(f"  {s['mpn']} : {s['reason']}")
     elif args.action == "progress":
         # Toujours un succès : un affichage ne doit jamais faire échouer le job.
         noted = service.components_progress(slug, args.items)
@@ -262,10 +268,10 @@ def main(argv: list[str] | None = None) -> int:
 
     p_comp = sub.add_parser("components", help="veille composants : PCN et fins de vie")
     p_comp.add_argument("action", choices=("list", "notices", "add", "remove", "import", "scan", "progress",
-                                           "finalize", "chapter", "reset"))
+                                           "finalize", "chapter", "reset", "alternatives"))
     p_comp.add_argument("slug")
-    p_comp.add_argument("items", nargs="*", help="add : lignes « MPN;Fabricant » ; remove, progress : MPN ; "
-                                                  "finalize : fichier JSON")
+    p_comp.add_argument("items", nargs="*", help="add : lignes « MPN;Fabricant » ; remove, progress, alternatives : "
+                                                  "MPN ; finalize : fichier JSON")
     p_comp.add_argument("--file", help="add : fichier « MPN ; Fabricant » (collage tableur accepté)")
     p_comp.add_argument("--type", choices=tuple(components.TYPES), help="notices : filtre par type")
     p_comp.add_argument("--for", dest="for_slug", help="chapter : veille qui reçoit le chapitre")

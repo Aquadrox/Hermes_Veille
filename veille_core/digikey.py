@@ -10,6 +10,10 @@ X-DIGIKEY-Account-Id (documentation v4) et ne reconnaît ni une référence de p
 référence sans sa ponctuation. Une référence introuvable part à la recherche web de l'agent, qui établit
 lui-même son statut (`components.WEB_STATUSES`).
 
+La fiche trouvée donne aussi la catégorie et les caractéristiques de la référence (`_specs`) : la fiche
+composant de l'interface, et les critères de la recherche d'alternatives (`similar`) — même requête par
+mot-clé, sans mot-clé, filtrée sur la sous-catégorie et les valeurs des caractéristiques critiques.
+
 Bibliothèque standard uniquement ; débit limité (l'offre gratuite plafonne à 120 requêtes
 par minute et environ 1000 par jour). Les secrets ne figurent jamais dans les erreurs.
 
@@ -41,6 +45,8 @@ BACKOFF = (5, 10, 20, 30, 45, 60)  # attentes (s) avant la 1re, 2e… reprise ; 
 JITTER = 0.2        # ± 20 % : des reprises qui ne tombent pas toutes à la même seconde
 RETRY_AFTER = 10    # HTTP 429 sans en-tête Retry-After exploitable (s)
 HTTP_TIMEOUT = 20   # s par requête (connexion, puis lecture)
+MAX_PARAMS = 40     # caractéristiques gardées par fiche (une résistance en a une quinzaine)
+MAX_DEPTH = 4       # niveaux de catégorie (« Resistors » › « Chip Resistor - Surface Mount »)
 
 # Pannes passagères : le réseau ou le serveur, pas la requête. HTTPError (sous-classe d'URLError) est traitée
 # avant. HTTPException : réponse tronquée (IncompleteRead) ou ligne d'état illisible, après une coupure.
@@ -54,6 +60,11 @@ STATUS_TYPES = {**{s: t for s, t in components.DK_LIFECYCLE.items() if t in comp
 
 class DigiKeyError(RuntimeError):
     pass
+
+
+class RequestRefused(DigiKeyError):
+    """Requête refusée telle quelle (HTTP 400, 422) : propre à CETTE requête (une recherche d'alternatives aux
+    filtres refusés), pas à l'accès ; une autre requête peut aboutir."""
 
 
 class TransientError(DigiKeyError):
@@ -79,7 +90,8 @@ def _http_error(exc: urllib.error.HTTPError, what: str) -> DigiKeyError:
     if exc.code == 429:
         retry = str((exc.headers or {}).get("Retry-After") or "").strip()
         return TransientError(f"{what} : HTTP 429", int(retry) if retry.isdigit() else RETRY_AFTER)
-    return (TransientError if exc.code >= 500 else DigiKeyError)(f"{what} : HTTP {exc.code}")
+    kind = TransientError if exc.code >= 500 else RequestRefused if exc.code in (400, 422) else DigiKeyError
+    return kind(f"{what} : HTTP {exc.code}")
 
 
 def credentials() -> tuple[str, str] | None:
@@ -163,19 +175,23 @@ class Client:
                 raise DigiKeyError(f"API Digi-Key injoignable ({type(exc).__name__})") from None
         raise DigiKeyError("API Digi-Key : jeton refusé deux fois")
 
+    def _search(self, body: dict, what: str) -> dict:
+        """Recherche par mot-clé ; `what` complète le message d'une erreur (référence, catégorie)."""
+        try:
+            return self._call(KEYWORD_PATH, body) or {}
+        except TransientError as exc:
+            raise TransientError(f"{exc} ({what})", exc.retry_after) from None
+        except DigiKeyError as exc:
+            raise type(exc)(f"{exc} ({what})") from None  # même nature (RequestRefused) : l'appelant en décide
+
     def status(self, mpn: str, manufacturer: str) -> dict:
-        """{'status', 'product_url'} ou {'error'} (référence introuvable, fabricant différent).
+        """{'status', 'product_url'[, 'category', 'params']} ou {'error'} (référence introuvable, fabricant différent).
 
         Recherche par mot-clé (fiches au MPN exact, puis résultats) : elle retrouve une référence de plusieurs
         fabricants et une référence saisie sans sa ponctuation (« 2N7002215 » pour « 2N7002,215 »). Fiche du
         fabricant suivi uniquement, au MPN identique de préférence.
         """
-        try:
-            res = self._call(KEYWORD_PATH, {"Keywords": mpn, "Limit": KEYWORD_LIMIT, "Offset": 0}) or {}
-        except TransientError as exc:
-            raise TransientError(f"{exc} (recherche de « {mpn} »)", exc.retry_after) from None
-        except DigiKeyError as exc:
-            raise DigiKeyError(f"{exc} (recherche de « {mpn} »)") from None
+        res = self._search({"Keywords": mpn, "Limit": KEYWORD_LIMIT, "Offset": 0}, f"recherche de « {mpn} »")
         key = components.loose_mpn(mpn)
         same_ref = [p for k in ("ExactMatches", "Products") if isinstance(res.get(k), list) for p in res[k]
                     if components.loose_mpn(_field(p, "ManufacturerProductNumber")) == key]
@@ -190,7 +206,48 @@ class Client:
         if not status and product.get("EndOfLife"):
             status = "Obsolete"
         url = components.normalize_url(product.get("ProductUrl") or "")
-        return {"status": status[:40] or "Inconnu", "product_url": url}
+        return {"status": status[:40] or "Inconnu", "product_url": url, **_specs(product)}
+
+    def similar(self, category_id: str, filters: list[tuple[int, str]]) -> list[dict]:
+        """Fiches de la sous-catégorie `category_id` dont les caractéristiques `filters` ([(ParameterId, ValueId)])
+        ont ces valeurs (recherche paramétrique, un appel) : {'mpn', 'manufacturer', 'status', 'product_url',
+        'description'[, 'category', 'params']}. Le statut n'est pas filtré ici (identifiants de statut de l'API non
+        documentés) : `components.rank_alternatives` ne garde que les fiches actives."""
+        body = {"Keywords": "", "Limit": KEYWORD_LIMIT, "Offset": 0, "FilterOptionsRequest": {
+            "CategoryFilter": [{"Id": category_id}],
+            "ParameterFilterRequest": {
+                "CategoryFilter": {"Id": category_id},
+                "ParameterFilters": [{"ParameterId": pid, "FilterValues": [{"Id": vid}]} for pid, vid in filters]}}}
+        res = self._search(body, f"alternatives, catégorie {category_id}")
+        return [{"mpn": _field(p, "ManufacturerProductNumber")[:64], "manufacturer": _field(p, "Manufacturer", "Name")[:80],
+                 "status": _field(p, "ProductStatus", "Status").strip()[:40],
+                 "product_url": components.normalize_url(p.get("ProductUrl") or ""),
+                 "description": " ".join(_field(p, "Description", "ProductDescription").split())[:200], **_specs(p)}
+                for p in (res.get("Products") if isinstance(res.get("Products"), list) else []) if isinstance(p, dict)]
+
+
+def _specs(product: dict) -> dict:
+    """Catégorie (du plus général au plus précis : [{'id', 'name'}]) et caractéristiques ([{'id', 'name', 'value',
+    'vid'}] : ParameterId, libellé, valeur affichée, ValueId) d'une fiche. Textes venus de l'API : bornés ici,
+    échappés au rendu. Clés absentes si la fiche n'en a pas."""
+    path, cat = [], product.get("Category")
+    while isinstance(cat, dict) and len(path) < MAX_DEPTH:
+        cid, name = _field(cat, "CategoryId"), " ".join(_field(cat, "Name").split())
+        if cid and name:
+            path.append({"id": cid[:20], "name": name[:80]})
+        kids = cat.get("ChildCategories")
+        cat = kids[0] if isinstance(kids, list) and kids else None
+    params = []
+    for p in product.get("Parameters") if isinstance(product.get("Parameters"), list) else []:
+        pid = p.get("ParameterId") if isinstance(p, dict) else None
+        if not isinstance(pid, int) or isinstance(pid, bool):
+            continue
+        name, value = (" ".join(_field(p, k).split()) for k in ("ParameterText", "ValueText"))
+        if name and value:
+            params.append({"id": pid, "name": name[:80], "value": value[:120], "vid": _field(p, "ValueId")[:40]})
+        if len(params) >= MAX_PARAMS:
+            break
+    return {**({"category": path} if path else {}), **({"params": params} if params else {})}
 
 
 def _field(product, *keys: str) -> str:

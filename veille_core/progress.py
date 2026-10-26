@@ -22,6 +22,7 @@ MIN_INTERVAL_S = 1.0  # boucle Digi-Key (≈ 0,6 s par référence) : une écrit
 STEPS = {  # étapes affichées, par type de lancement
     "analyse": (("digikey", "Statut Digi-Key"), ("web", "Recherche web"), ("finalize", "Rapport et envoi")),
     "statuts": (("digikey", "Statut Digi-Key"),),
+    "alternatives": (("alternatives", "Recherche d'alternatives"),),
 }
 PHASES = {"notices": "enregistrement des avis", "pdf": "rapport PDF", "mail": "envoi de l'e-mail"}
 CHIP_STATES = ("pending", "searching", "done")
@@ -100,8 +101,8 @@ def _minutes(since: str | None, until: str | None = None) -> int | None:
 
 def _step_detail(state: dict, step: str) -> tuple[str, int | None, int | None, str]:
     """(détail, valeur, maximum, composant en cours) de l'étape `step`."""
-    if step == "digikey":
-        dk = state.get("digikey") or {}
+    if step in ("digikey", "alternatives"):
+        dk = state.get(step) or {}
         if dk.get("skipped"):
             return "clés absentes, étape ignorée", None, None, ""
         done, total = dk.get("done", 0), dk.get("total", 0)
@@ -133,15 +134,17 @@ def view(state: dict, running: bool) -> dict:
         batch = [{**b, "state": "pending"} if b["state"] == "searching" else b for b in batch]
     result = state.get("result") or {}
     # Passage Digi-Key arrêté (erreur de l'API, budget de temps) : signalé, jamais affiché comme un succès.
-    warning = (state.get("digikey") or {}).get("note") or ""
+    warning = (state.get("digikey") or state.get("alternatives") or {}).get("note") or ""
     if finished:
         summary = "Terminé"
         if "new" in result:
             summary += (f" : {result['new']} nouvel(s) avis"
                         + (f", dont {result['critical']} fin(s) de vie / dernière(s) commande(s)"
                            if result.get("critical") else ""))
-        elif state.get("digikey"):
-            summary += f" : {_step_detail(state, 'digikey')[0]}"
+        elif ids and state.get(ids[0]):  # passage Digi-Key, recherche d'alternatives
+            summary += f" : {_step_detail(state, ids[0])[0]}"
+            if "found" in result:
+                summary += f", {result['found']} avec alternatives"
     elif current < 0:
         summary = "Démarrage…" if running else "Interrompu au démarrage"
     else:

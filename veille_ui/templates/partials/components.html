@@ -4,6 +4,10 @@
     <h2>Composants <span class="muted small">({{ comp_rows|length }} · {{ notice_total }} avis)</span></h2>
     {% if critical_count %}<span class="badge eol">⚠ {{ critical_count }} en fin de vie ou dernière commande</span>{% endif %}
     {% if comp_rows %}<a class="button" href="/veilles/{{ v.slug }}/components.xlsx" download>Exporter (Excel)</a>{% endif %}
+    {% if critical_count and digikey_configured %}
+    <form method="post" action="/veilles/{{ v.slug }}/alternatives" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button title="Recherche Digi-Key de références actives équivalentes (passifs et discrets), sans LLM ni e-mail"{% if row.running %} disabled{% endif %}>Alternatives des fins de vie</button></form>
+    {% endif %}
   </div>
   {% include "partials/comp_table.html" %}
   {% if not digikey_configured %}

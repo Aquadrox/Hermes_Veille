@@ -44,6 +44,7 @@ DAY_NAMES = {
     "sunday": 0, "monday": 1, "tuesday": 2, "wednesday": 3, "thursday": 4, "friday": 5, "saturday": 6,
 }
 MAX_TEXT = 20_000
+ALT_SYNC_MAX = 10  # recherches d'alternatives faites pendant l'appel ; au-delà, ou sans liste : en arrière-plan
 
 INSTRUCTIONS = """\
 Gestion des veilles technologiques automatisées (rapports PDF envoyés par e-mail).
@@ -68,6 +69,13 @@ Gestion des veilles technologiques automatisées (rapports PDF envoyés par e-ma
 - `reset_component_search` (veille composants) efface les avis et les statuts pour relancer l'analyse
   de zéro (copie archivée) ; il exige de répéter le slug : confirme avec l'utilisateur avant.
 - Heures exprimées à l'heure de Paris.
+- ALTERNATIVES (veille composants) : pour un passif ou un discret (résistance, condensateur, inductance,
+  ferrite, diode, transistor, quartz) en fin de vie, l'application cherche chez Digi-Key des références
+  ACTIVES de même catégorie et de mêmes caractéristiques critiques (après chaque passage Digi-Key, ou à la
+  demande avec `search_alternatives`). `get_component_sheet` donne la fiche (caractéristiques, critiques
+  marquées) et ses alternatives ; `list_alternatives` toutes les alternatives enregistrées ;
+  `set_critical_parameters` change les critiques d'une référence (sinon : défauts de sa famille). Ce sont
+  des SUGGESTIONS paramétriques à faire qualifier : présente-les toujours comme telles.
 - Veilles COMPOSANTS (`kind` = composants) : surveillance des avis PCN et des fins de vie (EOL,
   PDN, obsolescence, dernière commande LTB, NRND) d'une liste de références « MPN ; Fabricant ».
   `list_notices` donne les avis détectés (fins de vie en tête, avec leurs liens
@@ -291,6 +299,7 @@ def list_components(slug: str) -> list[dict]:
     v = _guard(service._components_veille, slug)
     comps = _guard(components.load_components, v.slug)["components"]
     worst = components.worst_by_key(_guard(components.load_notices, v.slug))
+    specs = components.load_specs(v.slug)
     out = []
     for c in comps:
         dk, w = c.get("dk") or {}, worst.get(components.key_of(c["mpn"], c["manufacturer"]))
@@ -300,8 +309,71 @@ def list_components(slug: str) -> list[dict]:
                     "digikey_checked_at": dk.get("checked_at"), "web_status": web.get("status"),
                     "web_status_url": web.get("url"), "web_status_datasheet": web.get("datasheet"),
                     "web_status_maker": web.get("maker"), "web_checked_at": c.get("web_checked_at"),
-                    "worst_notice": w["type"] if w else None})
+                    "worst_notice": w["type"] if w else None,
+                    "family": components.family(specs.get(components.key_of(c["mpn"], c["manufacturer"]))),
+                    "alternatives": len((components.alternatives(c) or {}).get("items") or [])})
     return out
+
+
+def _alternatives(sheet: dict) -> dict | None:
+    rec = sheet["alternatives"]
+    if rec is None:
+        return None
+    return {"searched_at": rec["searched_at"], "stale": sheet["stale"],
+            "criteria": [f"{x.get('name')} = {x.get('value')}" for x in rec["criteria"] if isinstance(x, dict)],
+            "items": rec["items"], **({"error": rec["error"]} if rec.get("error") else {})}
+
+
+def _tracked(slug: str, mpn: str, manufacturer: str | None) -> tuple[dict, dict | None]:
+    """(référence suivie de ce MPN, sa fiche) ; erreur d'outil si inconnue ou ambiguë."""
+    v = _guard(service._components_veille, slug)
+    c = _guard(components.find, _guard(components.load_components, v.slug)["components"], mpn, manufacturer or "")
+    return c, components.load_specs(v.slug).get(components.key_of(c["mpn"], c["manufacturer"]))
+
+
+def get_component_sheet(slug: str, mpn: str, manufacturer: str | None = None) -> dict:
+    """Fiche d'une référence d'une veille composants (d'après Digi-Key) : famille, catégorie, caractéristiques
+    (`critical` : critère de la recherche d'alternatives ; `critical_source` : choix de l'utilisateur ou défauts
+    de la famille) et dernière recherche d'alternatives (date, critères, `stale` : faite avec d'autres critères
+    que les actuels, alternatives classées par score avec leurs différences). `manufacturer` départage un MPN
+    suivi chez plusieurs fabricants."""
+    c, spec = _tracked(slug, mpn, manufacturer)
+    sh = components.sheet(c, spec)
+    return {"mpn": c["mpn"], "manufacturer": c["manufacturer"], "family": sh["family"], "category": sh["category"],
+            "alternatives_possible": not sh["unsearchable"], "reason": sh["unsearchable"] or None,
+            "critical_source": "utilisateur" if sh["custom"] else "défauts de la famille",
+            "parameters": [{"id": p["id"], "name": p["name"], "value": p["value"], "critical": p["critical"]}
+                           for p in sh["params"]],
+            "alternatives": _alternatives(sh)}
+
+
+def list_alternatives(slug: str | None = None, mpn: str | None = None, limit: int = 50) -> list[dict]:
+    """Alternatives enregistrées (suggestions Digi-Key paramétriques, à qualifier), composants en FIN DE VIE
+    en tête : référence, avis le plus critique, date et critères de la recherche, alternatives (MPN, fabricant,
+    statut, score, différences, lien). `slug` omis : toutes les veilles composants ; `mpn` : cette référence."""
+    slugs = [slug] if slug else [v.slug for v in store.list_all() if v.kind == "composants"]
+    return _alternative_rows(slugs, {components.norm_mpn(mpn)} if mpn else None)[: max(1, min(limit, 500))]
+
+
+def _alternative_rows(slugs: list[str], mpns: set[str] | None = None) -> list[dict]:
+    """Alternatives enregistrées des références de ces veilles (MPN normalisés `mpns` seulement, si donnés), fins de
+    vie en tête."""
+    rows = []
+    for s in slugs:
+        v = _guard(service._components_veille, s)
+        worst = components.worst_by_key(_guard(components.load_notices, v.slug))
+        specs = None  # lues seulement si une référence a des alternatives
+        for c in _guard(components.load_components, v.slug)["components"]:
+            if (mpns is not None and components.norm_mpn(c["mpn"]) not in mpns) or components.alternatives(c) is None:
+                continue
+            key = components.key_of(c["mpn"], c["manufacturer"])
+            specs = components.load_specs(v.slug) if specs is None else specs
+            sh = components.sheet(c, specs.get(key))
+            w = worst.get(key)
+            rows.append({"veille": s, "mpn": c["mpn"], "manufacturer": c["manufacturer"], "family": sh["family"],
+                         "worst_notice": w["type"] if w else None, **_alternatives(sh)})
+    rows.sort(key=lambda r: (components.severity(r["worst_notice"]) if r["worst_notice"] else 99, r["mpn"]))
+    return rows
 
 
 def list_notices(slug: str | None = None, type: NoticeType | None = None, since: str | None = None,
@@ -570,6 +642,33 @@ def check_component_statuses(slug: str) -> dict:
             "hint": "quelques minutes pour 300 références (get_run_log : `progress.summary`) ; puis list_notices"}
 
 
+def search_alternatives(slug: str, mpns: list[str] | None = None) -> dict:
+    """Veille composants : cherche chez Digi-Key (sans LLM, sans e-mail) des alternatives ACTIVES aux références
+    `mpns` (même actives ou déjà recherchées), sinon à tous les composants en fin de vie qui l'attendent. Au plus
+    10 MPN : recherche faite pendant l'appel, résultats renvoyés ; au-delà, ou sans liste : en arrière-plan
+    (`get_run_log`, puis `list_alternatives`). Seuls les passifs et les discrets ayant une fiche Digi-Key sont
+    concernés (`skipped` donne le motif des autres)."""
+    if mpns and len(mpns) <= ALT_SYNC_MAX:
+        r = _guard(service.components_alternatives, slug, mpns, actor=_actor())
+        wanted = {components.norm_mpn(m) for m in r["targets"]}
+        return {"slug": slug, **r, "alternatives": _alternative_rows([slug], wanted) if wanted else []}
+    log = _guard(service.alternatives_now, slug, mpns, actor=_actor())
+    return {"slug": slug, "started": True, "log": log,
+            "hint": "get_run_log pour suivre (progress.summary), puis list_alternatives"}
+
+
+def set_critical_parameters(slug: str, mpn: str, parameters: list[str | int] | None,
+                            manufacturer: str | None = None) -> dict:
+    """Caractéristiques critiques d'une référence : celles que ses alternatives doivent avoir à l'identique
+    (libellés ou identifiants donnés par `get_component_sheet`). null : retour aux défauts de sa famille (valeur,
+    boîtier, montage, tenue principale) ; il en faut au moins une pour chercher. Relancer ensuite
+    `search_alternatives` pour cette référence. Renvoie la fiche mise à jour."""
+    c, _ = _tracked(slug, mpn, manufacturer)
+    _guard(service.set_critical_params, slug, components.key_of(c["mpn"], c["manufacturer"]), parameters,
+           actor=_actor())
+    return get_component_sheet(slug, c["mpn"], c["manufacturer"])
+
+
 def send_test_email(slug: str) -> dict:
     """Envoie un court e-mail de test à tous les destinataires de la veille (vérifie le canal)."""
     out = _guard(service.send_test_email, slug, actor=_actor())
@@ -599,13 +698,14 @@ def reset_component_search(slug: str, confirm_slug: str) -> dict:
 
 READ_TOOLS = [list_veilles, get_veille, get_brief, list_brief_templates, list_reports, read_report,
               get_run_log, run_history, preview_schedule, get_costs, health, list_components, list_notices,
-              preview_component_import]
+              preview_component_import, get_component_sheet, list_alternatives]
 WRITE_TOOLS = [(create_veille, WRITE), (update_veille, WRITE), (set_recipients, WRITE),
                (add_recipients, WRITE), (remove_recipients, WRITE), (update_brief, WRITE),
                (edit_brief, WRITE), (add_components, WRITE), (remove_components, WRITE),
                (import_components, DESTROY),  # mode replace : la liste existante est remplacée
                (pause_veille, WRITE), (resume_veille, WRITE),
-               (check_component_statuses, WRITE), (run_veille_now, SEND), (send_test_email, SEND),
+               (check_component_statuses, WRITE), (search_alternatives, WRITE), (set_critical_parameters, WRITE),
+               (run_veille_now, SEND), (send_test_email, SEND),
                (archive_veille, DESTROY), (reset_component_search, DESTROY)]
 
 
