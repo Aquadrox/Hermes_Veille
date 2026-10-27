@@ -22,6 +22,7 @@ from urllib.parse import quote_plus
 
 from . import (
     catalog,
+    claude_research,
     contacts,
     credentials,
     db,
@@ -125,6 +126,11 @@ def _pdf(data: dict | None, base: PdfOptions | None = None) -> PdfOptions:
     if pdf.accent and not (pdf.accent.startswith("#") and len(pdf.accent) in (4, 7)):
         raise StoreError("couleur d'accent invalide (format #rrggbb)")
     return pdf
+
+
+def _check_claude(kind: str, enabled) -> None:
+    if enabled and kind != "veille":
+        raise StoreError("recherche déléguée à Claude : veilles thématiques seulement (pas une veille composants)")
 
 
 def _create_job(v: Veille, paused: bool = False) -> str:
@@ -258,7 +264,7 @@ def create_veille(*, name: str, subject: str, schedule_expr: str, recipients: li
                   model: str | None = None, provider: str | None = None,
                   paused: bool = False, kind: str = "veille", components: list[dict] | None = None,
                   include_components: str | None = None, batch_size: int | None = None,
-                  actor: str = "cli") -> Veille:
+                  claude_research: bool = False, actor: str = "cli") -> Veille:
     name = (name or "").strip()
     if not name:
         raise StoreError("le nom est obligatoire")
@@ -267,11 +273,13 @@ def create_veille(*, name: str, subject: str, schedule_expr: str, recipients: li
         raise StoreError(f"type de veille inconnu : {kind!r}")
     if not recipients:
         raise StoreError("au moins un destinataire est requis")
+    _check_claude(kind, claude_research)
     with _locked():
         if store.veille_dir(slug).exists():
             raise StoreError(f"une veille « {slug} » existe déjà")
         v = Veille(slug=slug, name=name, subject=(subject or "").strip(), kind=kind,
-                   model=model or None, provider=provider or None, pdf=_pdf(pdf))
+                   model=model or None, provider=provider or None, pdf=_pdf(pdf),
+                   claude_research=bool(claude_research))
         _apply_schedule(v, schedule_expr)
         if batch_size is not None:
             v.batch_size = _batch_size(batch_size)
@@ -303,7 +311,8 @@ def update_veille(slug: str, *, name: str | None = None, subject: str | None = N
                   brief: str | None = None, pdf: dict | None = None,
                   model: str | None = None, provider: str | None = None,
                   components: list[dict] | None = None, include_components: str | None = None,
-                  batch_size: int | None = None, actor: str = "cli") -> Veille:
+                  batch_size: int | None = None, claude_research: bool | None = None,
+                  actor: str = "cli") -> Veille:
     with _locked():
         v = store.load(slug)
         # Avant toute écriture : jobs.json illisible ≠ job absent (échouer plutôt que doublonner).
@@ -355,6 +364,10 @@ def update_veille(slug: str, *, name: str | None = None, subject: str | None = N
             changes.append("taille du lot")
         if include_components is not None and _set_link(v, include_components):
             changes.append("chapitre composants")
+        if claude_research is not None and bool(claude_research) != v.claude_research:
+            _check_claude(v.kind, claude_research)
+            v.claude_research = bool(claude_research)
+            changes.append("recherche Claude " + ("activée" if v.claude_research else "désactivée"))
         store.save(v)
         render.write(v)
         job = hermes.get_job(v.job_id, jobs)
@@ -599,6 +612,24 @@ def send_test_email(slug: str, actor: str = "cli") -> str:
 # --------------------------------------------------------------------------
 # Veille composants (PCN / fins de vie)
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Recherche déléguée à Claude (pont de l'hôte, voir claude_research.py)
+# --------------------------------------------------------------------------
+def research_start(slug: str, question: str | None = None, origin: str = "cli", actor: str = "cli") -> dict:
+    """Recherche Claude à la demande (option de la veille activée ou non) ; résultat à relever ensuite."""
+    try:
+        return claude_research.start(slug, origin, question, actor)
+    except claude_research.BridgeError as exc:
+        raise ServiceError(str(exc)) from None
+
+
+def research_wait(slug: str, rec: dict, seconds: float) -> dict:
+    try:
+        return claude_research.wait(slug, rec, seconds)
+    except claude_research.BridgeError as exc:
+        raise ServiceError(str(exc)) from None
+
+
 def _batch_size(value) -> int:
     try:
         n = int(value)

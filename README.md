@@ -285,7 +285,7 @@ industriel, chaque lundi à 8h, pour moi@exemple.fr », « Quelles fins de vie o
 ce mois-ci ? », « Où en est l'analyse de la veille composants ? »…
 
 - **Transport stdio via `docker exec -i`** : aucun port réseau n'est ouvert.
-- **`trust: untrusted`** : les 16 outils de lecture s'exécutent directement ; les 19 outils de
+- **`trust: untrusted`** : les 18 outils de lecture s'exécutent directement ; les 20 outils de
   modification demandent ton **approbation dans Telegram**. `run_veille_now` et
   `send_test_email` envoient de vrais e-mails ; `archive_veille` et `reset_component_search`
   exigent en plus de répéter le slug.
@@ -385,6 +385,63 @@ l'agent avec ce moteur.
   `[seed-veille] recherche web : moteur par défaut de Hermes`. Chaque changement de moteur est daté dans
   `veilles/.web-backend` (coût, ci-dessous).
 
+## Recherche déléguée à Claude Code (option par veille)
+
+Option d'une veille thématique, **désactivée par défaut** : la recherche web est confiée à **Claude Code**,
+installé et connecté sur l'**hôte**. L'agent Hermes tourne normalement (modèle, garde-fou, rédaction, PDF,
+e-mail) ; seule son étape RECHERCHE change :
+
+1. il lance `veillectl research claude <slug>` (seule commande ajoutée à sa liste blanche, et seulement si
+   l'option est activée) ;
+2. la commande construit le prompt **elle-même**, à partir du brief, de la période couverte et des URL du
+   rapport précédent (l'agent n'y ajoute rien), et le dépose auprès du **pont de l'hôte** ;
+3. le pont lance `claude -p` avec les seuls outils **WebSearch et WebFetch**, dans un dossier vide, sans
+   réglages utilisateur (ni hooks, ni plugins, ni MCP) : Claude ne peut ni lire de fichier ni lancer de
+   commande sur l'hôte, même détourné par une page lue ;
+4. Claude renvoie un **JSON** structuré (`items` : thème, titre, résumé, URL, date, source, chiffres clés,
+   confiance, page lue ou non ; `coverage` : couverture de chaque thème du brief ; `notes`) ;
+5. l'agent rédige le rapport à partir de ce JSON (contenu externe, encadré comme non fiable), vérifie les
+   faits clés avec `web_extract` et complète les thèmes sans résultat avec `web_search`.
+
+La recherche dure plusieurs minutes (4 à 5 minutes sur la veille industrie 4.0), plus que le délai d'un appel
+d'outil de Hermes : la commande attend 5 minutes au plus, puis répond « EN COURS » et l'agent la relance.
+Si le pont ne répond pas ou que Claude échoue, l'agent cherche lui-même (`web_search`, comme sans l'option).
+
+**Chaque réponse est conservée pour analyse** dans `veilles/<slug>/recherches/AAAAMMJJ-HHMMSS-claude.json` :
+prompt, réponse complète, durée, nombre de tours, coût équivalent API rapporté par Claude Code. Avec un
+abonnement Claude, ce coût n'est pas facturé : il mesure la consommation du **quota du compte**, partagé avec
+l'usage interactif de Claude Code (environ 1,4 $ équivalent et 50 tours pour une recherche hebdomadaire).
+
+**Installation (hôte, une fois)** — Claude Code installé et connecté (`claude auth status`) :
+
+```bash
+sudo ./scripts/install-claude-bridge.sh            # service systemd veille-claude-bridge, vérifications
+sudo ./scripts/install-claude-bridge.sh --test     # … et une courte recherche réelle
+./scripts/install-claude-bridge.sh --check         # état (hôte et conteneur) ; make claude-bridge-check
+sudo MAX_PER_DAY=40 TIMEOUT=1800 MODEL=sonnet ./scripts/install-claude-bridge.sh   # bornes et modèle
+sudo CLAUDE_USER=exploitant ./scripts/install-claude-bridge.sh                        # autre compte connecté
+```
+
+Le pont (`scripts/claude-bridge.py`, bibliothèque standard) écoute sur une **socket Unix** du dossier de
+données (`<VEILLE_DATA_DIR>/claude-bridge/bridge.sock`, `/opt/data/claude-bridge/bridge.sock` dans le
+conteneur), lisible par l'utilisateur hermes du conteneur seulement : **aucun port** n'est ouvert, et les
+identifiants de Claude restent sur l'hôte. Bornes : un `claude` à la fois, 20 recherches par jour, 20 minutes
+par recherche (réglables à l'installation). Résultats du pont gardés 30 jours dans
+`/var/lib/veille-claude-bridge`. Après un déplacement du dossier de données (`make move-data`), relancer
+l'installation : la socket suit le nouveau chemin.
+
+**Activer l'option** : interface (Modifier → « Recherche » → « Déléguer la recherche web à Claude Code »),
+Telegram (« Active la recherche Claude pour la veille industrie-4-0 » : `update_veille`,
+`claude_research=true`) ou `veillectl edit <slug> --claude-research on`.
+
+**À la demande**, option activée ou non, sans rapport ni e-mail : bouton « Rechercher avec Claude maintenant »
+de la page de la veille, outils MCP `start_claude_research` (avec une `question` précise, facultative) puis
+`get_claude_research` / `list_claude_research`, ou `veillectl research ask <slug> --question "…" --wait`.
+
+Les sessions interactives du Hermes du conteneur ne sont pas gardées : un agent détourné y pourrait déposer
+des recherches sur la socket. Elles restent bornées par le plafond quotidien du pont et par les seuls outils
+WebSearch et WebFetch de Claude.
+
 ## Consommation et coût
 
 DeepSeek renvoie, à chaque appel, le nombre de tokens consommés : entrée, dont lue en cache,
@@ -433,6 +490,11 @@ docker exec veille-hermes veillectl edit industrie-4-0 --include-components comp
 docker exec veille-hermes veillectl components list|notices composants-carte-x [--type EOL]
 docker exec veille-hermes veillectl components alternatives composants-carte-x [MPN …]  # sinon : fins de vie
 docker exec veille-hermes veillectl catalog rebuild|stats     # base des composants partagée
+# recherche déléguée à Claude Code (pont de l'hôte)
+docker exec veille-hermes veillectl edit industrie-4-0 --claude-research on
+docker exec veille-hermes veillectl research ask industrie-4-0 --question "jumeaux numériques" --wait
+docker exec veille-hermes veillectl research list|show industrie-4-0 [AAAAMMJJ-HHMMSS]
+docker exec veille-hermes veillectl research status
 # étape finale du job d'une veille thématique (chapitre composants, PDF, e-mail)
 docker exec veille-hermes veillectl report publish <slug> /opt/data/veilles/<slug>/rapports/<D>-veille.md
 ```
@@ -616,7 +678,7 @@ veille-hermes/
 ├── docker/                       # hook d'amorçage, service s6 de l'interface, veillectl,
 │                                 #   plugins Hermes veille-guard (garde-fou de l'agent) et
 │                                 #   deepseek-search-fetch (recherche web, vendorisé)
-├── deploy/systemd/               # units de la surveillance (sur l'hôte)
+├── deploy/systemd/               # units de l'hôte : surveillance, pont Claude Code
 ├── scripts/                      # déploiement, tests (smoke, intégration), watchdog, MCP, versions
 ├── tests/                        # pytest (faux binaire hermes pour le cœur et l'interface)
 ├── VERSION                       # numéro de version (source unique)

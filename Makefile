@@ -12,7 +12,8 @@ PYTHON     ?= python3
 .DEFAULT_GOAL := help
 
 .PHONY: help env build up down restart logs ps veilles run-now shell verify smoke integration test lint \
-        bump version mcp-install mcp-check release update backup move-data ui-password tunnel watchdog-install watchdog-check
+        bump version mcp-install mcp-check release update backup move-data ui-password tunnel watchdog-install watchdog-check \
+        claude-bridge-install claude-bridge-check
 
 help: ## Affiche cette aide
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -94,6 +95,12 @@ mcp-install: ## Branche le serveur MCP sur le Hermes de l'hôte (Telegram), trus
 
 mcp-check: ## Liste les outils exposés par le serveur MCP du conteneur
 	@docker exec -u hermes $(CONTAINER) veille-mcp --check
+
+claude-bridge-install: ## Installe sur l'hôte le pont Claude Code (recherche déléguée, option par veille)
+	sudo ./scripts/install-claude-bridge.sh
+
+claude-bridge-check: ## État du pont Claude Code (hôte et conteneur)
+	./scripts/install-claude-bridge.sh --check
 
 tunnel: ## Rappelle la commande de tunnel SSH vers l'interface
 	@echo "Depuis ton poste :  ssh -N -L 8088:127.0.0.1:8088 <utilisateur>@<serveur>"

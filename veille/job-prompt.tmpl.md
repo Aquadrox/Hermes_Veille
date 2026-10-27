@@ -21,7 +21,7 @@ RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 
 3. PÉRIODE COUVERTE : ${period_desc}. Détermine les dates exactes de cette période (et, pour une période hebdomadaire, le numéro de semaine ISO).
 
-4. RECHERCHE : web_search / web_extract sur la période couverte, selon les thèmes du brief. Vérifie chaque source (date exacte, lien précis vers l'article), recoupe les faits clés.
+${research}
 
 5. RÉDIGE le corps du rapport en Markdown enrichi, EXACTEMENT selon les conventions du brief (blocs `::: {.keyfigures}` avec `.fig`, `::: {.card}` avec badges, `::: {.callout}`, `::: {.timeline}`, `::: {.glossary}`, `::: {.sources}`, tableaux pipe, et UN `<div class="chart-slot"></div>`). Rédige en FRANÇAIS. Écris-le dans `${dir}/rapports/D-veille.md` (D : voir RÉPERTOIRES).
 

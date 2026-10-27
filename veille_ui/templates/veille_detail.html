@@ -14,6 +14,7 @@
     <div><dt>Seuil d'alerte (chien de garde)</dt><dd>{{ (v.max_age_hours / 24)|round(1) }} jours sans rapport</dd></div>
     <div><dt>Job Hermes</dt><dd><code>{{ v.job_id or "—" }}</code></dd></div>
     {% if v.components %}<div><dt>Chapitre composants</dt><dd><a href="/veilles/{{ v.components }}">{{ v.components }}</a></dd></div>{% endif %}
+    {% if v.kind == "veille" %}<div><dt>Recherche web</dt><dd>{{ "déléguée à Claude Code (pont de l'hôte)" if v.claude_research else "Hermes" }}</dd></div>{% endif %}
   </dl>
   {% if st.last_error %}<p class="err small">Dernière erreur : {{ st.last_error }}</p>{% endif %}
 </section>
@@ -40,6 +41,35 @@
   {% if reports|length > 30 %}<p class="small muted">30 plus récents affichés sur {{ reports|length }}.</p>{% endif %}
   {% else %}<p class="muted">Aucun rapport pour l'instant.</p>{% endif %}
 </section>
+
+{% if v.kind == "veille" %}
+<section class="card" id="recherches">
+  <h2>Recherches Claude{% if research %} <span class="muted small">({{ research|length }} plus récentes)</span>{% endif %}</h2>
+  {% if research %}
+  <div class="table-wrap">
+  <table class="list">
+    <thead><tr><th>Date</th><th>Origine</th><th>État</th><th>Informations</th><th>Coût équivalent API</th><th>Détail</th></tr></thead>
+    <tbody>
+    {% for r in research %}
+      <tr>
+        <td data-label="Date" class="nowrap"><a href="/veilles/{{ v.slug }}/recherches/{{ r.stamp }}.json" target="_blank" rel="noopener">{{ r.requested_at|dt }}</a></td>
+        <td data-label="Origine">{{ {"job": "exécution", "mcp": "MCP", "cli": "CLI", "ui": "interface"}.get(r.origin, r.origin) }}</td>
+        <td data-label="État"><span class="badge {{ {'done': 'ok', 'pending': 'paused'}.get(r.state, 'bad') }}">{{ {"done": "terminée", "pending": "en cours"}.get(r.state, "échec") }}</span></td>
+        <td data-label="Informations">{{ r.items if r.state == "done" else "—" }}{% if r.web_searches %} <span class="muted small">· {{ r.web_searches }} recherche(s) web</span>{% endif %}</td>
+        <td data-label="Coût">{{ r.cost_usd|usd if r.cost_usd is not none else "—" }}</td>
+        <td data-label="Détail" class="small">{{ r.error or r.question or "" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}<p class="muted">Aucune recherche Claude pour l'instant.</p>{% endif %}
+  <form method="post" action="/veilles/{{ v.slug }}/research" class="inline" data-confirm="Lancer une recherche Claude maintenant (quota du compte Claude de l'hôte, sans rapport ni e-mail) ?"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Rechercher avec Claude maintenant</button></form>
+  <p class="small muted">Réponses complètes (prompt, informations sourcées, coût) conservées dans
+    <code>recherches/</code> du dossier de la veille. Avec un abonnement Claude, le coût équivalent API n'est pas
+    facturé : il mesure la consommation du quota.</p>
+</section>
+{% endif %}
 
 {% if logs %}
 <section class="card">

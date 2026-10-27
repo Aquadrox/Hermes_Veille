@@ -37,8 +37,9 @@ discover_plugins()
 ids = {"task_id": f"cron:{job}:probe", "session_id": "20260101_000000_probe", "turn_id": "probe"}
 refused = resolve_pre_tool_block("terminal", {"command": "cat /opt/data/.env"}, **ids)
 allowed = resolve_pre_tool_block("terminal", {"command": f"ls -t {rapports}/"}, **ids)
-# Première commande `veillectl` du type de la veille (scan pour une veille composants), D : un horodatage.
-name, doc, _ = guard.VEILLECTL[guard.session(task_id=ids["task_id"]).kind][0]
+# Première commande `veillectl` permise à la veille (scan pour une veille composants), D : un horodatage.
+probed = guard.session(task_id=ids["task_id"])
+name, doc, _ = guard.commands(probed.kind, probed.claude)[0]
 own = " ".join(filter(None, ("veillectl", name, Path(rapports).parent.name,
                              doc.format(r=rapports).replace("/D-", "/2026-01-01-00h00-"))))
 command = resolve_pre_tool_block("terminal", {"command": own, "timeout": COMMAND_TIMEOUT}, **ids)

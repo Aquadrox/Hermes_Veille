@@ -10,6 +10,13 @@
   veillectl reconcile | migrate | bootstrap
   veillectl report publish <slug> <rapport.md>                      (dernière étape du job : PDF + e-mail)
 
+Recherche déléguée à Claude Code sur l'hôte (pont : scripts/install-claude-bridge.sh) :
+  veillectl edit <slug> --claude-research on|off                    (option de la veille, désactivée par défaut)
+  veillectl research claude <slug>                                  (étape RECHERCHE du job, option activée)
+  veillectl research ask <slug> [--question Q] [--wait]             (à la demande, option activée ou non)
+  veillectl research list|show <slug> [AAAAMMJJ-HHMMSS]             (recherches conservées pour analyse)
+  veillectl research status                                         (état du pont)
+
 Veille composants (PCN / fins de vie) :
   veillectl create --kind composants --name N --schedule "0 23 * * 0" --recipients a@x [--components-file bom.csv]
   veillectl edit <slug> [--components-file F] [--include-components <slug-composants>|""] [--batch-size N]
@@ -35,7 +42,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import bom_import, catalog, components, db, envfile, hermes, schedule, service, store, version
+from . import bom_import, catalog, claude_research, components, db, envfile, hermes, schedule, service, store, version
 
 
 def _print_overview() -> int:
@@ -216,6 +223,50 @@ def _costs(slug: str | None, days: int) -> int:
     return 0
 
 
+def _on_off(value: str | None) -> bool | None:
+    return None if value is None else value == "on"
+
+
+def _research(args) -> int:
+    if args.action == "status":
+        st = claude_research.status()
+        if not st["reachable"]:
+            print(f"✗ {st['error']}")
+            return 1
+        print(f"✓ pont Claude joignable — {st.get('today')}/{st.get('max_per_day')} recherche(s) aujourd'hui, "
+              f"{st.get('running')} en cours, {st.get('queued')} en attente, {st.get('timeout_s')} s max"
+              + (f", modèle {st['model']}" if st.get("model") else ""))
+        return 0
+    if not args.slug:
+        raise store.StoreError("slug de la veille manquant")
+    if args.action == "claude":  # étape du job : la sortie est lue par l'agent (claude_research.agent_text)
+        try:
+            rec = claude_research.for_job(args.slug)
+        except claude_research.BridgeError as exc:
+            print(f"ÉCHEC de la recherche Claude : {exc}. Fais la recherche toi-même avec web_search / web_extract, "
+                  "selon les thèmes du brief.")
+            return 1
+        print(claude_research.agent_text(rec))
+        return 1 if rec.get("state") == "error" else 0
+    if args.action == "ask":
+        rec = service.research_start(args.slug, args.question, origin="cli")
+        print(f"✓ recherche Claude {rec['stamp']} déposée auprès du pont")
+        if not args.wait:
+            print(f"  résultat : veillectl research show {args.slug} {rec['stamp']}")
+            return 0
+        rec = service.research_wait(args.slug, rec, claude_research.REUSE_S)
+    elif args.action == "list":
+        for r in claude_research.list_research(args.slug):
+            cost = "—" if r["cost_usd"] is None else f"{r['cost_usd']:.2f} $"
+            print(f"{r['stamp']}  {r['origin']:<4} {r['state']:<8} {r['items']:>3} info.  {cost:>8}  "
+                  f"{r['question'] or ''}{r['error'] or ''}"[:200])
+        return 0
+    else:
+        rec = claude_research.current(args.slug, args.stamp)
+    print(json.dumps({k: v for k, v in rec.items() if k != "prompt"}, ensure_ascii=False, indent=1))
+    return 1 if rec.get("state") == "error" else 0
+
+
 def _brief_from(args) -> str | None:
     if getattr(args, "brief_file", None):
         with open(args.brief_file, encoding="utf-8") as fh:
@@ -253,6 +304,8 @@ def main(argv: list[str] | None = None) -> int:
     p_create.add_argument("--components-file", help="composants : « MPN ; Fabricant » par ligne")
     p_create.add_argument("--include-components", help="veille : slug de la veille composants en chapitre")
     p_create.add_argument("--batch-size", type=int)
+    p_create.add_argument("--claude-research", choices=("on", "off"), default="off",
+                          help="recherche déléguée à Claude Code sur l'hôte")
 
     p_edit = sub.add_parser("edit")
     p_edit.add_argument("slug")
@@ -265,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     p_edit.add_argument("--components-file")
     p_edit.add_argument("--include-components", help='slug, ou "" pour retirer le chapitre')
     p_edit.add_argument("--batch-size", type=int)
+    p_edit.add_argument("--claude-research", choices=("on", "off"), help="recherche déléguée à Claude Code sur l'hôte")
 
     p_comp = sub.add_parser("components", help="veille composants : PCN et fins de vie")
     p_comp.add_argument("action", choices=("list", "notices", "add", "remove", "import", "scan", "progress",
@@ -292,6 +346,13 @@ def main(argv: list[str] | None = None) -> int:
     p_report.add_argument("action", choices=("publish",))
     p_report.add_argument("slug")
     p_report.add_argument("md", help="rapports/AAAA-MM-JJ-HHhMM-veille.md (à côté : -charts.json, -mail.json)")
+
+    p_res = sub.add_parser("research", help="recherche déléguée à Claude Code sur l'hôte")
+    p_res.add_argument("action", choices=("claude", "ask", "list", "show", "status"))
+    p_res.add_argument("slug", nargs="?")
+    p_res.add_argument("stamp", nargs="?", help="show : recherche AAAAMMJJ-HHMMSS (défaut : la plus récente)")
+    p_res.add_argument("--question", help="ask : question précise, dans le périmètre du brief")
+    p_res.add_argument("--wait", action="store_true", help="ask : attendre le résultat")
 
     p_costs = sub.add_parser("costs", help="consommation de tokens et coût des exécutions")
     p_costs.add_argument("slug", nargs="?")
@@ -321,6 +382,8 @@ def main(argv: list[str] | None = None) -> int:
             return _costs(args.slug, args.days)
         if args.cmd == "components":
             return _components(args)
+        if args.cmd == "research":
+            return _research(args)
         if args.cmd == "catalog":
             st = service.rebuild_catalog() if args.action == "rebuild" else catalog.stats()
             if "database" in st:
@@ -338,7 +401,8 @@ def main(argv: list[str] | None = None) -> int:
                 schedule_expr=args.schedule, recipients=store.parse_recipients(args.recipients),
                 brief=_brief_from(args), model=args.model, paused=args.paused, kind=args.kind,
                 components=_components_file(args.components_file),
-                include_components=args.include_components, batch_size=args.batch_size)
+                include_components=args.include_components, batch_size=args.batch_size,
+                claude_research=args.claude_research == "on")
             print(f"✓ veille créée : {v.slug} (job {v.job_id}) — {schedule.describe(v.schedule)}")
         elif args.cmd == "edit":
             v = service.update_veille(
@@ -346,7 +410,8 @@ def main(argv: list[str] | None = None) -> int:
                 recipients=store.parse_recipients(args.recipients) if args.recipients else None,
                 brief=_brief_from(args), model=args.model,
                 components=_components_file(args.components_file),
-                include_components=args.include_components, batch_size=args.batch_size)
+                include_components=args.include_components, batch_size=args.batch_size,
+                claude_research=_on_off(args.claude_research))
             print(f"✓ veille modifiée : {v.slug}")
         elif args.cmd == "pause":
             service.pause(args.slug)

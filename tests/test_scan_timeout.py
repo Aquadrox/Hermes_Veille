@@ -431,22 +431,25 @@ def documented_calls(prompt: str, rapports: str) -> list[dict]:
     return calls
 
 
-@pytest.mark.parametrize("kind", ["composants", "veille"])
-def test_prompt_contract_is_exactly_what_the_guard_permits(tools, kind):  # noqa: F811
+@pytest.mark.parametrize("kind, claude", [("composants", False), ("veille", False), ("veille", True)])
+def test_prompt_contract_is_exactly_what_the_guard_permits(tools, kind, claude):  # noqa: F811
     v = service.create_veille(name=f"Veille {kind}", subject="s", schedule_expr="0 8 * * 1",
                               recipients=["a@example.org"], brief="# b\n", kind=kind,
-                              components=bom(3) if kind == "composants" else None)
+                              components=bom(3) if kind == "composants" else None, claude_research=claude)
     s = run_of(v)
     calls = documented_calls(render.render(v), str(v.dir / "rapports"))
     for call in calls:  # tout ce qui est écrit est permis…
         assert guard.check("terminal", call, s) is None, call
-    # … et tout ce qui est permis est écrit : chaque commande du garde-fou pour ce type de veille, aucune autre
+    # … et tout ce qui est permis est écrit : chaque commande du garde-fou pour cette veille, aucune autre
     documented = {" ".join(c["command"].split()[1:3]) for c in calls if c["command"].startswith("veillectl ")}
-    assert documented == {name for name, _, _ in guard.VEILLECTL[kind]}
+    assert documented == {name for name, _, _ in guard.commands(kind, claude)}
+    assert ("research claude" in documented) is claude
     assert {c["command"].split()[0] for c in calls} == {"date", "ls", "veillectl"}
-    for other_kind, commands in guard.VEILLECTL.items():
-        for name, _, _ in commands if other_kind != kind else ():
-            assert guard.check("terminal", {"command": f"veillectl {name} {v.slug}"}, s)
+    allowed = {name for name, _, _ in guard.commands(kind, claude)}
+    for commands in guard.VEILLECTL.values():
+        for name, _, _ in commands:
+            if name not in allowed:
+                assert guard.check("terminal", {"command": f"veillectl {name} {v.slug}"}, s)
 
 
 # --------------------------------------------------------------------------
