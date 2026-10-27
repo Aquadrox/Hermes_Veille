@@ -187,7 +187,8 @@ class Client:
             raise type(exc)(f"{exc} ({what})") from None  # même nature (RequestRefused) : l'appelant en décide
 
     def status(self, mpn: str, manufacturer: str) -> dict:
-        """{'status', 'product_url'[, 'category', 'params']} ou {'error'} (référence introuvable, fabricant différent).
+        """{'status', 'product_url'[, 'category', 'params']} ou {'error'[, 'near']} (référence introuvable, fabricant
+        différent ; `near` : références proches, voir `_near`).
 
         Recherche par mot-clé (fiches au MPN exact, puis résultats) : elle retrouve une référence de plusieurs
         fabricants et une référence saisie sans sa ponctuation (« 2N7002215 » pour « 2N7002,215 »). Fiche du
@@ -195,13 +196,15 @@ class Client:
         """
         res = self._search({"Keywords": mpn, "Limit": KEYWORD_LIMIT, "Offset": 0}, f"recherche de « {mpn} »")
         key = components.loose_mpn(mpn)
-        same_ref = [p for k in ("ExactMatches", "Products") if isinstance(res.get(k), list) for p in res[k]
-                    if components.loose_mpn(_field(p, "ManufacturerProductNumber")) == key]
+        found = [p for k in ("ExactMatches", "Products") for p in _list(res.get(k)) if isinstance(p, dict)]
+        same_ref = [p for p in found if components.loose_mpn(_field(p, "ManufacturerProductNumber")) == key]
         mine = [p for p in same_ref if components.same_manufacturer(_field(p, "Manufacturer", "Name"), manufacturer)]
         if not mine:
             others = ", ".join(dict.fromkeys(_field(p, "Manufacturer", "Name") for p in same_ref))
+            near = _near(found, key, manufacturer)
             return {"error": f"fabricant différent chez Digi-Key ({others[:80]})" if others
-                    else "introuvable chez Digi-Key"}
+                    else "référence exacte introuvable chez Digi-Key" if near else "introuvable chez Digi-Key",
+                    **({"near": near} if near else {})}
         exact = components.norm_mpn(mpn)
         product = next((p for p in mine if components.norm_mpn(_field(p, "ManufacturerProductNumber")) == exact), mine[0])
         status = _field(product, "ProductStatus", "Status").strip()
@@ -243,6 +246,30 @@ class Client:
                  "product_url": components.normalize_url(p.get("ProductUrl") or ""),
                  "description": " ".join(_field(p, "Description", "ProductDescription").split())[:200], **_specs(p)}
                 for p in _products(res)]
+
+
+def _near(found: list[dict], key: str, manufacturer: str) -> list[dict]:
+    """Références proches d'une référence absente (`key` : MPN sans séparateurs) parmi les fiches trouvées :
+    variantes du même fabricant au MPN prolongé (« DS28E01P-100+T », « FT232RL-REEL »), puis fiches d'autres
+    fabricants qui la citent parmi leurs autres noms (`OtherNames` : « APA102-2020 » d'un produit SparkFun).
+    Indices pour l'utilisateur et l'agent, jamais un statut : une variante peut être une carte d'évaluation, un
+    alias le kit d'un revendeur."""
+    out, seen = [], set()
+    for kind in components.NEAR_KINDS:
+        for p in found:
+            mpn, mfr = _field(p, "ManufacturerProductNumber")[:64], _field(p, "Manufacturer", "Name")[:80]
+            loose = components.loose_mpn(mpn)
+            if not mpn or loose == key or (mpn, mfr) in seen:
+                continue
+            if kind == "variante":
+                ok = loose.startswith(key) and components.same_manufacturer(mfr, manufacturer)
+            else:
+                ok = any(components.loose_mpn(n) == key for n in _list(p.get("OtherNames")) if isinstance(n, str))
+            if ok:
+                seen.add((mpn, mfr))
+                out.append({"mpn": mpn, "manufacturer": mfr, "status": _field(p, "ProductStatus", "Status").strip()[:40],
+                            "url": components.normalize_url(p.get("ProductUrl") or ""), "kind": kind})
+    return out[:components.MAX_NEAR]
 
 
 def _list(value) -> list:

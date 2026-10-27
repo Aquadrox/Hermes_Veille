@@ -290,7 +290,7 @@ def test_ui_shows_web_status_detail_search_and_excel(ui, searched):  # noqa: F81
     from test_components import _sheet
     rows = {r[0]: r for r in _sheet(service.components_xlsx(searched.slug)).iter_rows(values_only=True)}
     assert rows["NE555P"][7] == "introuvable chez Digi-Key" and rows["NE555P"][9] == "Actif"
-    assert rows["NE555P"][12] == "https://www.ti.com/p/ne555p"  # lien : la fiche trouvée sur le web
+    assert rows["NE555P"][13] == "https://www.ti.com/p/ne555p"  # lien : la fiche trouvée sur le web
 
 
 def test_mcp_reset_requires_the_slug_twice(searched):

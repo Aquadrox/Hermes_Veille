@@ -388,7 +388,9 @@ def test_scan_with_digikey_statuses(watch):
     assert cs["LM317T"]["dk"]["changed_at"] == cs["LM317T"]["dk"]["checked_at"]
     assert "changed_at" not in cs["STM32F103C8T6"]["dk"]  # première lecture « Active » : pas un changement
     assert cs["NE555P"]["dk"]["error"] == "introuvable chez Digi-Key"
-    assert out["batch"][0]["known"] == ["Statut Digi-Key : Last Time Buy"]
+    # inconnue de Digi-Key (aucun statut) en tête du lot web
+    assert [b["mpn"] for b in out["batch"]] == ["NE555P", "LM317T"] and out["batch"][0]["digikey_near"] == []
+    assert out["batch"][1]["known"] == ["Statut Digi-Key : Last Time Buy"]
     # relance le même jour : aucune nouvelle requête, aucun doublon
     again = FakeClient({})
     service.components_scan(watch.slug, client=again)
@@ -1118,14 +1120,14 @@ def test_xlsx_full_list_critical_first_and_safe_cells(watch, tools):
     ws = _sheet(data)
     rows = list(ws.iter_rows(values_only=True))
     assert rows[0][:4] == ("Composant", "Fabricant", "Critique", "Avis")  # plus de réf. interne
-    assert len(rows[0]) == 14 and rows[0][-1] == "Suivi"  # « Veilles » : export de la base seulement
+    assert len(rows[0]) == 15 and rows[0][-1] == "Suivi"  # « Veilles » : export de la base seulement
     assert [r[0] for r in rows[1:]] == ["LM317T", "NE555P", "STM32F103C8T6"]
     lm, ne, stm = rows[1:]
-    assert lm[2] == "Oui" and lm[7] == "Last Time Buy" and lm[13] is None
-    assert ne[2] is None and ne[13] == "retiré" and rows[0][9] == "Statut web" and lm[9] is None
+    assert lm[2] == "Oui" and lm[7] == "Last Time Buy" and lm[14] is None
+    assert ne[2] is None and ne[14] == "retiré" and rows[0][9] == "Statut web" and lm[9] is None
     assert stm[4] == '=HYPERLINK("http://evil/x","clic")' and stm[5] == as_read(2027, 3, 31)
     assert ws.cell(4, 5).data_type == "s" and "<f>" not in _sheet_xml(data)  # texte, jamais formule
-    assert ws.cell(4, 13).hyperlink.target == "https://st.com/pcn/1"
+    assert ws.cell(4, 14).hyperlink.target == "https://st.com/pcn/1"
     assert ws.cell(2, 1).fill.fgColor.rgb.endswith("FEF2F2") and ws.freeze_panes == "A2" and ws.auto_filter.ref
     assert ws.page_setup.orientation == "landscape" and ws.sheet_properties.pageSetUpPr.fitToPage
 
