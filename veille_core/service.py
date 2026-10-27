@@ -978,7 +978,7 @@ def _fallback(c: dict) -> dict:
         return {}
     web = c.get("web_status") or {}
     return {"alldatasheet": comp.alldatasheet_url(c["mpn"]), "web_status": web.get("status"),
-            "maker": web.get("maker"), "digikey_near": comp.near(c)}
+            "maker": web.get("maker"), "digikey_near": comp.near(c)[:comp.NEAR_FOR_AGENT]}
 
 
 def components_progress(slug: str, mpns: list[str]) -> bool:

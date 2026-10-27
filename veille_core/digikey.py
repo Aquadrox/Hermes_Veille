@@ -250,8 +250,9 @@ class Client:
 
 def _near(found: list[dict], key: str, manufacturer: str) -> list[dict]:
     """Références proches d'une référence absente (`key` : MPN sans séparateurs) parmi les fiches trouvées :
-    variantes du même fabricant au MPN prolongé (« DS28E01P-100+T », « FT232RL-REEL »), puis fiches d'autres
-    fabricants qui la citent parmi leurs autres noms (`OtherNames` : « APA102-2020 » d'un produit SparkFun).
+    variantes du même fabricant au MPN prolongé (« DS28E01P-100+T », « FT232RL-REEL ») ou qui la citent parmi
+    leurs autres noms, puis alias : fiches d'AUTRES fabricants qui la citent (`OtherNames` : « APA102-2020 » d'un
+    produit SparkFun).
     Indices pour l'utilisateur et l'agent, jamais un statut : une variante peut être une carte d'évaluation, un
     alias le kit d'un revendeur."""
     out, seen = [], set()
@@ -261,10 +262,9 @@ def _near(found: list[dict], key: str, manufacturer: str) -> list[dict]:
             loose = components.loose_mpn(mpn)
             if not mpn or loose == key or (mpn, mfr) in seen:
                 continue
-            if kind == "variante":
-                ok = loose.startswith(key) and components.same_manufacturer(mfr, manufacturer)
-            else:
-                ok = any(components.loose_mpn(n) == key for n in _list(p.get("OtherNames")) if isinstance(n, str))
+            named = any(components.loose_mpn(n) == key for n in _list(p.get("OtherNames")) if isinstance(n, str))
+            mine = components.same_manufacturer(mfr, manufacturer)
+            ok = mine and (loose.startswith(key) or named) if kind == "variante" else named and not mine
             if ok:
                 seen.add((mpn, mfr))
                 out.append({"mpn": mpn, "manufacturer": mfr, "status": _field(p, "ProductStatus", "Status").strip()[:40],

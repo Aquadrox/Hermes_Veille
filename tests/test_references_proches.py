@@ -21,6 +21,10 @@ def test_manufacturer_names_without_generic_words():
     assert not comp.same_manufacturer("ON", "Infineon Technologies")  # nom court : identique seulement
     assert not comp.same_manufacturer("Semiconductor Corp", "Toshiba Semiconductor")  # rien de distinctif
     assert not comp.same_manufacturer("NXP Semiconductors", "Nexperia USA Inc.")
+    # sans les mots génériques : égalité seulement, jamais un nom à cheval sur deux mots d'un autre fabricant
+    for a, b in (("Diodes Incorporated", "SMC Diode Solutions"), ("Linear Technology", "Linear Integrated Systems, Inc."),
+                 ("Micron Technology Inc.", "TDK-Micronas GmbH")):
+        assert not comp.same_manufacturer(a, b), (a, b)
 
 
 def test_status_keeps_variants_then_aliases_never_as_the_reference():
@@ -40,6 +44,16 @@ def test_status_keeps_variants_then_aliases_never_as_the_reference():
     # fabricant écrit autrement chez Digi-Key : la référence elle-même est trouvée
     nxp = Fake(TOKEN, found(product(mpn="PCF8523T", mfr="NXP USA Inc.", status="Obsolete")))
     assert nxp.client().status("PCF8523T", "NXP Semiconductors")["status"] == "Obsolete"
+    # référence générique (JEDEC) : la fiche d'un autre fabricant n'est jamais LA référence suivie
+    jedec = Fake(TOKEN, found(product(mpn="1N4007", mfr="SMC Diode Solutions", status="Obsolete"),
+                              product(mpn="1N4007-T", mfr="Diodes Incorporated", status="Active"), key="Products"))
+    out = jedec.client().status("1N4007", "Diodes Incorporated")
+    assert "status" not in out and out["error"].startswith("fabricant différent")
+    assert [(x["mpn"], x["kind"]) for x in out["near"]] == [("1N4007-T", "variante")]
+    # le même fabricant qui la cite parmi ses autres noms : variante, pas alias (un alias ne fait jamais foi)
+    same = Fake(TOKEN, found({**product(mpn="BC847B,215", mfr="Nexperia USA Inc."), "OtherNames": ["BC847BX"]},
+                             key="Products"))
+    assert same.client().status("BC847BX", "Nexperia")["near"][0]["kind"] == "variante"
     many = [product(mpn=f"{DS}-{i}", mfr=ad) for i in range(15)]
     assert len(Fake(TOKEN, found(*many, key="Products")).client().status(DS, "Analog Devices")["near"]) == comp.MAX_NEAR
 
@@ -66,9 +80,24 @@ def test_scan_stores_near_refs_first_in_the_web_lot_and_forgets_them_once_found(
         c["dk"]["checked_at"] = "2020-01-01"
     data["scan"] = {}
     comp.save_components(watch.slug, data)
+    service.components_scan(watch.slug, client=FakeClient({"NE555P": {"error": "introuvable chez Digi-Key"}}))
+    ne = next(c for c in comp.load_components(watch.slug)["components"] if c["mpn"] == "NE555P")
+    assert "near" not in ne["dk"]  # plus aucune référence proche : les anciennes ne restent pas
+    data = comp.load_components(watch.slug)
+    for c in data["components"]:
+        c["dk"]["checked_at"] = "2020-01-01"
+    data["scan"] = {}
+    comp.save_components(watch.slug, data)
     service.components_scan(watch.slug, client=FakeClient({"NE555P": {"status": "Active", "product_url": None}}))
     ne = next(c for c in comp.load_components(watch.slug)["components"] if c["mpn"] == "NE555P")
     assert "near" not in ne["dk"] and ne["dk"]["status"] == "Active"
+
+
+def test_agent_gets_a_bounded_number_of_near_references(watch):  # noqa: F811
+    many = [{**NEAR[0], "mpn": f"NE555P-{i}"} for i in range(comp.MAX_NEAR)]
+    out = service.components_scan(watch.slug, client=FakeClient({"NE555P": {"error": "x", "near": many}}))
+    assert len(out["batch"][0]["digikey_near"]) == comp.NEAR_FOR_AGENT
+    assert len(comp.near(comp.load_components(watch.slug)["components"][2])) == comp.MAX_NEAR  # tout gardé
 
 
 def test_batch_puts_unknown_never_searched_first():

@@ -107,13 +107,13 @@ _MFR_GENERIC = re.compile(r"\b(?:inc|incorporated|corp|corporation|co|ltd|llc|ag
 
 def same_manufacturer(a: str, b: str) -> bool:
     """« Texas Instruments » ~ « Texas Instruments Inc. », « NXP Semiconductors » ~ « NXP USA Inc. ». Un nom
-    court (« TI », « ON ») doit être identique : « ON » n'est pas contenu dans « Infineon »."""
-    def core(name):
-        return norm_mfr(_MFR_GENERIC.sub(" ", (name or "").lower()))
-    for na, nb in (sorted((norm_mfr(a), norm_mfr(b)), key=len), sorted((core(a), core(b)), key=len)):
-        if na and (na == nb or (len(na) >= 4 and na in nb)):
-            return True
-    return False
+    court (« TI », « ON ») doit être identique : « ON » n'est pas contenu dans « Infineon ». Sans les mots
+    génériques, égalité seulement : « Diodes Incorporated » (« diodes ») n'est pas « SMC Diode Solutions »."""
+    na, nb = sorted((norm_mfr(a), norm_mfr(b)), key=len)
+    if na and (na == nb or (len(na) >= 4 and na in nb)):
+        return True
+    ca, cb = (norm_mfr(_MFR_GENERIC.sub(" ", (x or "").lower())) for x in (a, b))
+    return bool(ca) and ca == cb
 
 
 def validate_entry(mpn, manufacturer) -> tuple[dict | None, str]:
@@ -587,15 +587,18 @@ def scan_coverage(scan: dict | None) -> dict | None:
 
 
 MAX_NEAR = 10  # références proches gardées pour une référence que Digi-Key ne connaît pas
-NEAR_KINDS = {"variante": "variante", "alias": "alias"}
+NEAR_KINDS = ("variante", "alias")
+NEAR_FOR_AGENT = 5  # références proches données à l'agent par référence (sortie du scan bornée : 40 × 5)
 
 
 def near(c: dict) -> list[dict]:
     """Références proches d'une référence inconnue de Digi-Key (`dk.near`, voir `digikey.Client.status`) :
-    {"mpn", "manufacturer", "status", "url", "kind"} ; entrées mal formées ignorées (fichier retouché)."""
+    {"mpn", "manufacturer", "status", "url", "kind"} ; entrées mal formées ignorées, lien revalidé (fichier
+    retouché)."""
     items = (c.get("dk") or {}).get("near")
-    return [x for x in items if isinstance(x, dict) and isinstance(x.get("mpn"), str) and x["mpn"]
-            and x.get("kind") in NEAR_KINDS][:MAX_NEAR] if isinstance(items, list) else []
+    return [{**x, "url": normalize_url(x.get("url") or "")} for x in items if isinstance(x, dict)
+            and isinstance(x.get("mpn"), str) and x["mpn"] and x.get("kind") in NEAR_KINDS][:MAX_NEAR] \
+        if isinstance(items, list) else []
 
 
 def near_text(c: dict) -> str:
@@ -1356,7 +1359,7 @@ def to_xlsx(components: list[dict], notices: list[dict], sources: dict[str, list
 
     wb = Workbook()
     rows = group(notices, components, include_quiet=True)
-    main, close = [], []
+    main, near_rows = [], []
     for r in rows:
         dk, link = r["dk"], r["link"]
         main.append(((r["mpn"], r["manufacturer"], "Oui" if r["critical"] else "",
@@ -1366,11 +1369,11 @@ def to_xlsx(components: list[dict], notices: list[dict], sources: dict[str, list
                       " ; ".join(f"{a['mpn']} ({a.get('manufacturer') or '?'})" for a in _alt_items(r["alt"])),
                       near_text(r), normalize_url(link["url"]) if link else None, "" if r["tracked"] else "retiré")
                      + ((", ".join(sources.get(r["key"], ())),) if sources is not None else ()), r["critical"]))
-        close += [((r["mpn"], r["manufacturer"], x["mpn"], x.get("manufacturer"), x["kind"], x.get("status"),
+        near_rows += [((r["mpn"], r["manufacturer"], x["mpn"], x.get("manufacturer"), x["kind"], x.get("status"),
                     normalize_url(x.get("url") or "")), False) for x in near(r)]
     wb.active.title = "Composants"
     _xlsx_sheet(wb.active, _XLSX_COLUMNS + ((("Veilles", 40),) if sources is not None else ()), main)
-    _xlsx_sheet(wb.create_sheet("Références proches"), _XLSX_NEAR_COLUMNS, close)
+    _xlsx_sheet(wb.create_sheet("Références proches"), _XLSX_NEAR_COLUMNS, near_rows)
     out = BytesIO()
     wb.save(out)
     return out.getvalue()
