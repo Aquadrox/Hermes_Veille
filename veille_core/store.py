@@ -7,6 +7,7 @@
         job-prompt.md    prompt RENDU depuis le gabarit (ne pas éditer à la main)
         rapports/        AAAA-MM-JJ-HHhMM-veille.{md,pdf}, -charts.json, -mail.json (avant la v0.3.2 : AAAA-MM-JJ-veille)
         runs/            journaux des lancements manuels (.progress.json : avancement du dernier)
+        recherches/      recherches déléguées à Claude : AAAAMMJJ-HHMMSS-claude.json (prompt, réponse, coût)
         components.json  veille composants : références suivies (voir components.py)
         notices.json     veille composants : avis PCN / EOL détectés
 
@@ -62,6 +63,7 @@ class Veille:
     kind: str = "veille"              # « composants » : surveillance PCN / fins de vie
     components: str | None = None     # veille : slug de la veille composants incluse en chapitre
     batch_size: int = 40              # composants : recherches web par exécution (lot tournant)
+    claude_research: bool = False     # veille : recherche déléguée à Claude Code sur l'hôte (claude_research.py)
     created_at: str = ""
     updated_at: str = ""
 
@@ -294,6 +296,10 @@ def report_path(slug: str, name: str) -> Path:
     if not path.is_file():
         raise StoreError("rapport introuvable")
     return path
+
+
+def research_dir(slug: str) -> Path:
+    return veille_dir(slug) / "recherches"
 
 
 def runs_dir(slug: str) -> Path:

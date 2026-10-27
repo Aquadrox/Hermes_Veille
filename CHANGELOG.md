@@ -7,6 +7,37 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.9.0] — 2026-10-27
+
+Recherche d'une veille déléguée à Claude Code, installé sur l'hôte : option par veille, désactivée par défaut.
+
+### Ajouté
+
+- **Option `claude_research`** (veilles thématiques) : à l'étape RECHERCHE, l'agent lance
+  `veillectl research claude <slug>`. La commande construit le prompt à partir du brief, de la période et des URL
+  du rapport précédent, le dépose auprès du pont de l'hôte et attend par tranches de 5 minutes (« EN COURS » :
+  l'agent relance). Claude Code renvoie un JSON sourcé (informations par thème, couverture des thèmes, notes) ;
+  l'agent rédige à partir de lui, vérifie les faits clés avec `web_extract` et cherche lui-même si le pont échoue.
+- **Pont de l'hôte** `scripts/claude-bridge.py` (service systemd `veille-claude-bridge`, installé par
+  `scripts/install-claude-bridge.sh`, `make claude-bridge-install` / `claude-bridge-check`) : socket Unix dans
+  `/run/veille-claude-bridge` (dossier au service, monté en lecture seule sur `/opt/claude-bridge`), aucun port ouvert ; `claude -p` avec les seuls outils WebSearch et WebFetch, dans un dossier
+  vide, sans réglages utilisateur ni MCP ; un `claude` à la fois, plafond quotidien, durée maximale.
+- **Recherches conservées** dans `veilles/<slug>/recherches/` : prompt, réponse, durée, tours, coût équivalent API.
+- **À la demande** : outils MCP `start_claude_research` (question facultative), `get_claude_research`,
+  `list_claude_research` ; `update_veille` / `create_veille` (`claude_research`) ; `health.claude_bridge`.
+  CLI `veillectl research ask|list|show|status`, `--claude-research on|off` sur `create` et `edit`.
+- **Interface** : case « Déléguer la recherche web à Claude Code », section « Recherches Claude » de la veille
+  (bouton de lancement, réponses JSON), état du pont dans la page Santé.
+
+### Sécurité
+
+- `veillectl research claude` n'entre dans la liste blanche du garde-fou que pour une veille qui a l'option, sans
+  argument et avec le timeout maximal ; sa sortie est encadrée comme contenu externe non fiable.
+- Socket du pont hors du dossier de données (modifiable par le conteneur) : un lien symbolique substitué à la
+  socket ou à son dossier aurait détourné le `chown` du service ou de l'installation, exécutés en root. Le pont
+  vérifie que le dossier est à lui et modifiable par lui seul, crée la socket en 0660 (umask) et n'en change le
+  groupe que sans suivre de lien ; l'installation ne crée ni ne modifie plus aucun dossier.
+
 ## [0.8.3] — 2026-10-27
 
 Références « introuvables chez Digi-Key » : 32 références d'une nomenclature réelle sans aucune information.

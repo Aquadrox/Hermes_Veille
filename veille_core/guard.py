@@ -7,8 +7,8 @@ appel d'outil d'une exécution planifiée, par listes blanches (tout le reste es
 - outils : recherche web, lecture et écriture de fichiers, terminal ;
 - fichiers : lecture du brief, du prompt et des rapports de SA veille ; écriture des seuls
   fichiers de sortie horodatés de son dossier rapports/ ;
-- terminal : `date`, `ls` de ses rapports et les commandes `veillectl` de SON type de veille (VEILLECTL), pour
-  SON slug, sans aucun caractère spécial du shell (ni guillemet, ni `$`, `;`, `|`, `&`, `<`, `>`, `*`…), au premier
+- terminal : `date`, `ls` de ses rapports et les commandes `veillectl` de SON type de veille (VEILLECTL ; la
+  recherche déléguée à Claude seulement si la veille l'a activée), pour SON slug, sans aucun caractère spécial du shell (ni guillemet, ni `$`, `;`, `|`, `&`, `<`, `>`, `*`…), au premier
   plan et en COMMAND_TIMEOUT secondes au plus.
 
 Chaque refus dit ce qui est permis, pour que l'agent se corrige du premier coup. Il compte : au
@@ -84,6 +84,7 @@ class Session:
     slug: str | None  # None : job cron qui n'est pas celui d'une veille
     dir: Path | None = None
     kind: str = "veille"  # store.KINDS : commandes `veillectl` permises (VEILLECTL)
+    claude: bool = False  # option claude_research de la veille : `veillectl research claude` permise
 
     @property
     def rapports(self) -> Path | None:
@@ -100,7 +101,7 @@ def session(task_id: str = "", session_id: str = "", cron: bool = False) -> Sess
         return Session(None) if cron else None
     for v in store.list_all():
         if v.job_id == m.group(1):
-            return Session(v.slug, Path(os.path.realpath(v.dir)), v.kind)
+            return Session(v.slug, Path(os.path.realpath(v.dir)), v.kind, v.claude_research)
     return Session(None)
 
 
@@ -164,8 +165,19 @@ VEILLECTL = {
         ("components progress", "<MPN> …", lambda args, s: bool(args) and not any(a.startswith("-") for a in args)),
         ("components finalize", "{r}/D-pcn.json", _one_output("-pcn.json")),
     ),
-    "veille": (("report publish", "{r}/D-veille.md", _one_output("-veille.md")),),
+    "veille": (
+        ("research claude", "", lambda args, s: not args),
+        ("report publish", "{r}/D-veille.md", _one_output("-veille.md")),
+    ),
 }
+CLAUDE_ONLY = {"research claude"}  # permises (et écrites dans le prompt) seulement avec l'option claude_research
+# Commandes longues : sans le timeout maximal, Hermes les arrête au bout de 180 s, avant la fin de leur tranche.
+LONG = {"components scan": "de sa tranche", "research claude": "de son attente (la recherche se poursuit)"}
+
+
+def commands(kind: str, claude: bool = False) -> tuple:
+    """Commandes `veillectl` d'une veille de ce type (VEILLECTL), selon son option de recherche Claude."""
+    return tuple(c for c in VEILLECTL.get(kind, ()) if claude or c[0] not in CLAUDE_ONLY)
 
 
 def _command(command, s: Session, timeout: float = 0) -> str | None:
@@ -180,17 +192,17 @@ def _command(command, s: Session, timeout: float = 0) -> str | None:
         return None
     if w[0] == "ls" and w[1:] and all(_LS_FLAGS_RE.fullmatch(x) for x in w[1:-1]) and _real(w[-1]) == s.rapports:
         return None
-    commands = VEILLECTL.get(s.kind, ())
+    allowed = commands(s.kind, s.claude)
     if w[0] == "veillectl" and len(w) >= 4 and w[3] == s.slug:
         action = " ".join(w[1:3])
-        if any(name == action and valid(w[4:], s) for name, _, valid in commands):
-            if action == "components scan" and timeout < COMMAND_TIMEOUT:
-                return (f"timeout {COMMAND_TIMEOUT} obligatoire pour veillectl components scan : en deçà, Hermes "
-                        "arrête la commande avant la fin de sa tranche (au bout de 180 s sans timeout). Appel exact : "
-                        f'{{"command": "veillectl components scan {s.slug}", "timeout": {COMMAND_TIMEOUT}}}')
+        if any(name == action and valid(w[4:], s) for name, _, valid in allowed):
+            if action in LONG and timeout < COMMAND_TIMEOUT:
+                return (f"timeout {COMMAND_TIMEOUT} obligatoire pour veillectl {action} : en deçà, Hermes "
+                        f"arrête la commande avant la fin {LONG[action]} (au bout de 180 s sans timeout). Appel exact : "
+                        f'{{"command": "veillectl {action} {s.slug}", "timeout": {COMMAND_TIMEOUT}}}')
             return None
     return (f"commande non autorisée. Seules sont permises : date, ls {s.rapports}/, et pour la veille "
-            f"{s.slug} : {', '.join(f'veillectl {name}' for name, _, _ in commands)} "
+            f"{s.slug} : {', '.join(f'veillectl {name}' for name, _, _ in allowed)} "
             "(appels exacts : section OUTILS AUTORISÉS du prompt)")
 
 
@@ -315,14 +327,14 @@ def mark(tool: str, args: dict, result, s: Session | None) -> str | None:
     return wrap(result)
 
 
-def prompt_tools(kind: str, dir_: Path, slug: str) -> str:
+def prompt_tools(kind: str, dir_: Path, slug: str, claude: bool = False) -> str:
     """Contrat exact des outils, placé dans les deux gabarits de prompt (rappel : `check` l'applique ; commandes
     `veillectl` tirées de VEILLECTL, comme lui) : l'agent n'a rien à essayer."""
     r = f"{dir_}/rapports"
     writes = f"`{r}/D-pcn.json`" if kind == "composants" else f"`{r}/D-veille.md`, `D-charts.json` et `D-mail.json`"
-    commands = (" ".join(filter(None, ("veillectl", name, slug, doc.format(r=r))))
-                for name, doc, _ in VEILLECTL.get(kind, ()))
-    calls = "\n".join(f'  {{"command": "{c}", "timeout": {COMMAND_TIMEOUT}}}' for c in commands)
+    lines = (" ".join(filter(None, ("veillectl", name, slug, doc.format(r=r))))
+             for name, doc, _ in commands(kind, claude))
+    calls = "\n".join(f'  {{"command": "{c}", "timeout": {COMMAND_TIMEOUT}}}' for c in lines)
     return (
         "OUTILS AUTORISÉS — contrat exact, vérifié avant chaque appel : tout autre appel est refusé, et au "
         f"{MAX_REFUSALS}e refus l'exécution est arrêtée en échec. N'essaie rien d'autre.\n"

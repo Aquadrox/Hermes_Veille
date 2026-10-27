@@ -31,6 +31,15 @@ services:
         target: /opt/data
         bind:
           create_host_path: false
+      # Socket du pont Claude Code de l'hôte (recherche déléguée, option par veille : scripts/install-claude-bridge.sh).
+      # Dossier au service systemd, modifiable par lui seul, en LECTURE SEULE ici : jamais dans le dossier de
+      # données, que le conteneur peut modifier. Pont non installé : dossier vide (créé par Docker), sans effet.
+      - type: bind
+        source: /run/veille-claude-bridge
+        target: /opt/claude-bridge
+        read_only: true
+        bind:
+          create_host_path: true
     ports:
       # ⚠️ TOUJOURS préfixé par 127.0.0.1 (vérifié par la CI) : accès par tunnel SSH
       #   ssh -N -L 8088:127.0.0.1:8088 <utilisateur>@<serveur>

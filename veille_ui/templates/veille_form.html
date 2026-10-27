@@ -62,6 +62,17 @@
       </select></label>
   </section>
   {% endif %}
+  {% if not composants %}
+  <section class="card">
+    <h2>Recherche</h2>
+    <label class="inline-choice"><input type="checkbox" name="claude_research"{% if values.claude_research %} checked{% endif %}>
+      Déléguer la recherche web à Claude Code</label>
+    <p class="small muted">L'agent rédige toujours le rapport, à partir des informations sourcées que Claude Code,
+      installé sur l'hôte, renvoie en JSON (conservées dans la page de la veille). Nécessite le pont de l'hôte
+      (<code>sudo ./scripts/install-claude-bridge.sh</code>, état : page Santé) ; sans réponse du pont, l'agent
+      cherche lui-même. Consomme le quota du compte Claude de l'hôte.</p>
+  </section>
+  {% endif %}
 
   <section class="card">
     <h2>Fréquence</h2>

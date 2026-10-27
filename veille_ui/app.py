@@ -22,6 +22,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from veille_core import (
     bom_import,
     catalog,
+    claude_research,
     components,
     credentials,
     deepseek,
@@ -55,6 +56,8 @@ FLASH = {
     "paused": "Veille mise en pause.",
     "resumed": "Veille reprise.",
     "run": "Lancement démarré : son suivi s'affiche ci-dessous.",
+    "research": "Recherche Claude déposée auprès du pont de l'hôte : quelques minutes, puis son résultat "
+                "apparaît dans « Recherches Claude » (recharger la page).",
     "checking": "Vérification des statuts Digi-Key démarrée : l'avancement s'affiche ci-dessous.",
     "alternatives": "Recherche d'alternatives des composants en fin de vie démarrée : l'avancement s'affiche "
                     "ci-dessous.",
@@ -171,7 +174,7 @@ def form_defaults(v: store.Veille | None = None, template: str = "vierge", kind:
                 "cron_expr": "", "pdf_title": "", "pdf_header": "", "pdf_footer": "Document interne",
                 "pdf_audience": "achats, méthodes & ingénierie" if composants else "direction & ingénierie",
                 "pdf_accent": "#0f766e", "model": "", "components": "", "include_components": "",
-                "batch_size": store.Veille.batch_size}
+                "batch_size": store.Veille.batch_size, "claude_research": False}
     freq = schedule.from_cron(v.schedule)
     comps = components.load_components(v.slug)["components"] if v.kind == "composants" else []
     return {"name": v.name, "slug": v.slug, "subject": v.subject, "kind": v.kind,
@@ -180,7 +183,7 @@ def form_defaults(v: store.Veille | None = None, template: str = "vierge", kind:
             "pdf_title": v.pdf.title, "pdf_header": v.pdf.header, "pdf_footer": v.pdf.footer,
             "pdf_audience": v.pdf.audience, "pdf_accent": v.pdf.accent, "model": v.model or "",
             "components": components.format_components(comps), "include_components": v.components or "",
-            "batch_size": v.batch_size}
+            "batch_size": v.batch_size, "claude_research": v.claude_research}
 
 
 def freq_from_form(form) -> dict:
@@ -203,7 +206,8 @@ def values_from_form(form) -> dict:
             "pdf_footer": form.get("pdf_footer", ""), "pdf_audience": form.get("pdf_audience", ""),
             "pdf_accent": form.get("pdf_accent", "#0f766e"), "model": form.get("model", "").strip(),
             "components": form.get("components", ""), "include_components": form.get("include_components", ""),
-            "batch_size": form.get("batch_size", "") or store.Veille.batch_size}
+            "batch_size": form.get("batch_size", "") or store.Veille.batch_size,
+            "claude_research": form.get("claude_research") == "on"}
 
 
 def kind_fields(values: dict) -> dict:
@@ -211,7 +215,7 @@ def kind_fields(values: dict) -> dict:
     if values["kind"] == "composants":
         return {"components": components.parse_components(values["components"]),
                 "batch_size": values["batch_size"]}
-    return {"include_components": values["include_components"]}
+    return {"include_components": values["include_components"], "claude_research": values["claude_research"]}
 
 
 def schedule_ctx(freq: dict) -> dict:
@@ -413,7 +417,16 @@ def create_app() -> FastAPI:
         nxt = schedule.next_runs(v.schedule, 3)
         return {"row": row, "v": v, "reports": store.list_reports(slug), "logs": logs,
                 "next_runs": nxt, "next_peak": bool(nxt) and pricing.is_peak(nxt[0]),
-                "costs": service.costs(slug), **components_ctx(v)}
+                "costs": service.costs(slug), "research": research_rows(v), **components_ctx(v)}
+
+    def research_rows(v: store.Veille) -> list[dict]:
+        """Recherches Claude de la veille ; la plus récente relevée auprès du pont si elle est en cours."""
+        if v.kind != "veille":
+            return []
+        rows = claude_research.list_research(v.slug, 10)
+        if rows and rows[0]["state"] == "pending":
+            rows[0] = claude_research.summary(claude_research.current(v.slug, rows[0]["stamp"]))
+        return rows
 
     def component_rows(slug: str) -> list[dict]:
         """Tous les composants (et ceux retirés qui ont des avis), une ligne chacun."""
@@ -435,6 +448,16 @@ def create_app() -> FastAPI:
         except StoreError:
             return render(request, "error.html", 404, error="Veille introuvable.")
         return render(request, "veille_detail.html", **ctx)
+
+    @app.get("/veilles/{slug}/recherches/{stamp}.json")
+    def research_file(slug: str, stamp: str):
+        """Recherche Claude conservée (prompt, réponse, coût), affichée telle quelle : JSON, jamais rendu en HTML."""
+        try:
+            store.check_slug(slug)
+            rec = claude_research.load(slug, stamp)
+        except StoreError:
+            return PlainTextResponse("recherche introuvable", status_code=404)
+        return Response(json.dumps(rec, ensure_ascii=False, indent=1), media_type="application/json")
 
     @app.get("/veilles/{slug}/history", response_class=HTMLResponse)
     def history(request: Request, slug: str):
@@ -750,11 +773,12 @@ def create_app() -> FastAPI:
     # -------------------------------------------------------------- santé
     @app.get("/health", response_class=HTMLResponse)
     def health(request: Request):
-        # Comptes Brevo et DeepSeek interrogés en parallèle (deux appels réseau, chacun jusqu'à 10 s).
-        with ThreadPoolExecutor(2) as pool:
+        # Comptes Brevo et DeepSeek et pont Claude interrogés en parallèle (appels réseau, chacun jusqu'à 10 s).
+        with ThreadPoolExecutor(3) as pool:
             brevo, balance = pool.submit(brevo_account), pool.submit(deepseek.balance)
+            bridge = pool.submit(claude_research.status)
             return render(request, "health.html", rows=service.overview(), brevo=brevo.result(),
-                          deepseek=balance.result(), costs=service.costs_overview(),
+                          deepseek=balance.result(), claude=bridge.result(), costs=service.costs_overview(),
                           catalog=service.catalog_stats(), audit=service.read_audit(40))
 
     # -------------------------------------------------------------- actions
@@ -766,7 +790,8 @@ def create_app() -> FastAPI:
                "archive": (service.archive, "archived"),
                "check-status": (service.check_statuses_now, "checking"),
                "alternatives": (service.alternatives_now, "alternatives"),
-               "reset-search": (service.reset_components, "reset")}
+               "reset-search": (service.reset_components, "reset"),
+               "research": (lambda s, actor: service.research_start(s, origin="ui", actor=actor), "research")}
         if action not in ops:
             return PlainTextResponse("action inconnue", status_code=404)
         func, code = ops[action]

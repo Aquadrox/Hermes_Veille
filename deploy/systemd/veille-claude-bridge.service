@@ -1,0 +1,39 @@
+[Unit]
+Description=Pont Claude Code des veilles (recherche déléguée, socket Unix)
+Documentation=https://github.com/Aquadrox/Hermes_Veille
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Chemins, utilisateur et binaire réécrits par install-claude-bridge.sh pour pointer sur le dépôt installé, le
+# groupe de l'utilisateur hermes du conteneur (celui du dossier de données) et le compte où Claude Code est connecté.
+ExecStart=/usr/bin/python3 /root/veille-hermes/scripts/claude-bridge.py --socket /run/veille-claude-bridge/bridge.sock --group 10000 --claude /root/.local/bin/claude
+User=root
+Environment=HOME=/root
+# Bornes du pont (voir scripts/claude-bridge.py) : un seul claude à la fois, 20 recherches par jour, 20 min chacune.
+Environment=CLAUDE_BRIDGE_CONCURRENCY=1
+Environment=CLAUDE_BRIDGE_MAX_PER_DAY=20
+Environment=CLAUDE_BRIDGE_TIMEOUT=1200
+# Modèle de Claude Code (vide : celui du compte).
+Environment=CLAUDE_BRIDGE_MODEL=
+StateDirectory=veille-claude-bridge
+StateDirectoryMode=0700
+# Dossier de la socket : au service, modifiable par lui seul (le pont le vérifie), monté en lecture seule dans le
+# conteneur (docker-compose.yml). Conservé à l'arrêt : le montage du conteneur reste sur le même dossier.
+RuntimeDirectory=veille-claude-bridge
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+Restart=on-failure
+RestartSec=10
+# Durcissement : claude n'a que WebSearch et WebFetch (aucun outil fichier ni shell), mais le processus
+# lui-même n'a pas besoin du reste du système.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

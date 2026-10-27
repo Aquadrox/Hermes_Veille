@@ -7,6 +7,7 @@ l'utilisateur (boutons d'approbation dans Telegram).
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 from typing import Any, Literal
 
@@ -16,6 +17,7 @@ from mcp.types import ToolAnnotations
 
 from veille_core import (
     bom_import,
+    claude_research,
     components,
     deepseek,
     guard,
@@ -89,6 +91,12 @@ Gestion des veilles technologiques automatisées (rapports PDF envoyés par e-ma
   avant `import_components` (mode add par défaut ; replace remplace toute la liste).
 - Clés d'API des distributeurs (Digi-Key) : JAMAIS par la conversation. Elles se saisissent dans
   l'interface web, page « Sources » ; `health` indique seulement si elles sont configurées.
+- RECHERCHE CLAUDE : une veille thématique peut déléguer sa recherche web à Claude Code, installé sur l'hôte
+  (option `claude_research` de `update_veille`, désactivée par défaut) ; l'agent rédige toujours le rapport à
+  partir du JSON sourcé que Claude renvoie. `start_claude_research` lance une recherche à la demande (option
+  activée ou non, `question` facultative) : plusieurs minutes, puis `get_claude_research` pour le résultat
+  (`state` pending tant qu'elle tourne). `list_claude_research` : recherches conservées (coût, nombre
+  d'informations). `health.claude_bridge` dit si le pont de l'hôte répond.
 - Coûts : `get_costs` donne les tokens et le coût en USD de chaque exécution, recherche web
   comprise (`web_requests` / `web_usd` : requêtes DeepSeek Search & Fetch, 0,75 $ les 1 000, majorant).
   DeepSeek facture le double en heures pleines (lun–ven 01h–04h et 06h–10h UTC, tokens seulement) ;
@@ -201,6 +209,7 @@ def get_veille(slug: str) -> dict:
         "last_error": st.get("last_error"),
         "job_id": v.job_id,
         "model": v.model,
+        "claude_research": v.claude_research,
         "pdf": {"title": v.pdf.title, "header": v.pdf.header, "footer": v.pdf.footer,
                 "audience": v.pdf.audience, "accent": v.pdf.accent},
         "alert_after_days": round(v.max_age_hours / 24, 1),
@@ -465,6 +474,7 @@ def health() -> dict:
             "sources": [{"name": s["name"], "configured": s["configured"], "from_env": s["env"]}
                         for s in service.sources_status()],
             "cost_month_usd": service.costs_overview()["total_month_usd"],
+            "claude_bridge": claude_research.status(),
             "audit": service.read_audit(15)}
 
 
@@ -477,7 +487,7 @@ def create_veille(name: str, subject: str, recipients: list[str], frequency: Fre
                   template: str = "vierge", brief: str | None = None, slug: str | None = None,
                   paused: bool = False, pdf_title: str | None = None, pdf_footer: str | None = None,
                   model: str | None = None, kind: Kind = "veille", components_list: list[str] | None = None,
-                  include_components: str | None = None) -> dict:
+                  include_components: str | None = None, claude_research: bool = False) -> dict:
     """Crée une veille. Le brief vient de `brief` (Markdown complet) ou du modèle `template`
     (les champs <NOM DE LA VEILLE> et <DOMAINE> du modèle « vierge » sont remplis avec `name`
     et `subject` ; complète ensuite la section « Couverture » avec `edit_brief`).
@@ -485,7 +495,8 @@ def create_veille(name: str, subject: str, recipients: list[str], frequency: Fre
     `kind="composants"` : veille PCN / fins de vie ; `components_list` = lignes « MPN ; Fabricant »
     (le modèle de brief « composants » est appliqué). `include_components` : slug
     d'une veille composants dont les avis seront ajoutés en chapitre de l'e-mail de cette veille.
-    `paused=True` crée la veille sans la planifier."""
+    `paused=True` crée la veille sans la planifier. `claude_research=True` (veille thématique) : recherche web
+    déléguée à Claude Code sur l'hôte."""
     if kind == "composants" and frequency is None and cron is None and time is None and day_of_week is None:
         expr = service.COMPONENTS_SCHEDULE
     else:
@@ -504,7 +515,7 @@ def create_veille(name: str, subject: str, recipients: list[str], frequency: Fre
     v = _guard(service.create_veille, name=name, subject=subject, schedule_expr=expr,
                recipients=addresses, brief=brief, pdf=pdf, slug=slug, model=model,
                paused=paused, kind=kind, components=parsed if kind == "composants" else None,
-               include_components=include_components, actor=_actor())
+               include_components=include_components, claude_research=claude_research, actor=_actor())
     return get_veille(v.slug)
 
 
@@ -514,18 +525,20 @@ def update_veille(slug: str, name: str | None = None, subject: str | None = None
                   cron: str | None = None, pdf_title: str | None = None, pdf_header: str | None = None,
                   pdf_footer: str | None = None, pdf_audience: str | None = None,
                   model: str | None = None, include_components: str | None = None,
-                  batch_size: int | None = None) -> dict:
+                  batch_size: int | None = None, claude_research: bool | None = None) -> dict:
     """Modifie une veille : seuls les champs fournis changent. Pour la fréquence, fournir
     `frequency` (et `time`, `day_of_week` ou `day_of_month` selon le cas) ou `cron`.
     `include_components` : slug d'une veille composants à inclure en chapitre ("" pour retirer).
-    `batch_size` (veille composants) : nombre de recherches web par exécution."""
+    `batch_size` (veille composants) : nombre de recherches web par exécution.
+    `claude_research` (veille thématique) : True délègue la recherche web des exécutions à Claude Code sur l'hôte
+    (pont à installer : scripts/install-claude-bridge.sh), False revient à la recherche de Hermes."""
     _guard(store.load, slug)
     expr = _guard(_schedule_expr, frequency, time, day_of_week, day_of_month, cron)
     pdf = {k: val for k, val in (("title", pdf_title), ("header", pdf_header), ("footer", pdf_footer),
                                  ("audience", pdf_audience)) if val is not None}
     _guard(service.update_veille, slug, name=name, subject=subject, schedule_expr=expr,
            pdf=pdf or None, model=model, include_components=include_components,
-           batch_size=batch_size, actor=_actor())
+           batch_size=batch_size, claude_research=claude_research, actor=_actor())
     return get_veille(slug)
 
 
@@ -669,6 +682,46 @@ def set_critical_parameters(slug: str, mpn: str, parameters: list[str | int] | N
     return get_component_sheet(slug, c["mpn"], c["manufacturer"])
 
 
+def _research(rec: dict, max_items: int) -> dict:
+    out = claude_research.summary(rec)
+    resp = rec.get("response") if isinstance(rec.get("response"), dict) else None
+    if rec.get("state") == "done":
+        found = claude_research.items(rec)
+        data = ({"items": found[:max_items], "coverage": resp.get("coverage") or [], "notes": resp.get("notes") or ""}
+                if resp else {"text": rec.get("text") or ""})
+        # Contenu venu du web (résumés, titres, notes) : encadré comme non fiable, comme les rapports.
+        out.update(window=rec.get("window"), truncated=len(found) > max_items,
+                   response=guard.wrap(json.dumps(data, ensure_ascii=False, indent=1)))
+    elif rec.get("state") == "pending":
+        out["hint"] = "recherche en cours (plusieurs minutes) : rappeler get_claude_research plus tard"
+    return out
+
+
+def list_claude_research(slug: str, limit: int = 20) -> list[dict]:
+    """Recherches déléguées à Claude d'une veille, de la plus récente à la plus ancienne : origine (job, mcp, cli,
+    ui), état (pending, done, error), question, nombre d'informations, coût équivalent API, erreur."""
+    _guard(store.load, slug)
+    return claude_research.list_research(slug, max(1, min(limit, 100)))
+
+
+def get_claude_research(slug: str, stamp: str | None = None, max_items: int = 60) -> dict:
+    """Résultat d'une recherche Claude (la plus récente si `stamp`, AAAAMMJJ-HHMMSS, est omis) : informations
+    sourcées (theme, title, summary, url, date, source, confidence, verified), couverture des thèmes du brief et
+    notes ; `state` pending tant qu'elle tourne (son état est relevé auprès du pont à chaque appel)."""
+    rec = _guard(claude_research.current, slug, stamp)
+    return _research(rec, max(1, min(max_items, 60)))
+
+
+def start_claude_research(slug: str, question: str | None = None) -> dict:
+    """Lance TOUT DE SUITE une recherche web déléguée à Claude Code (pont de l'hôte) pour une veille thématique,
+    à partir de son brief et de son dernier rapport, sans rédiger de rapport ni envoyer d'e-mail ; que l'option
+    `claude_research` de la veille soit activée ou non. `question` (facultative) concentre la recherche sur un point
+    précis. Plusieurs minutes et du quota Claude : relever le résultat avec `get_claude_research`."""
+    rec = _guard(service.research_start, slug, question, origin="mcp", actor=_actor())
+    return {"slug": slug, "stamp": rec["stamp"], "state": rec["state"], "window": rec["window"],
+            "hint": "get_claude_research(slug, stamp) dans quelques minutes"}
+
+
 def send_test_email(slug: str) -> dict:
     """Envoie un court e-mail de test à tous les destinataires de la veille (vérifie le canal)."""
     out = _guard(service.send_test_email, slug, actor=_actor())
@@ -698,14 +751,15 @@ def reset_component_search(slug: str, confirm_slug: str) -> dict:
 
 READ_TOOLS = [list_veilles, get_veille, get_brief, list_brief_templates, list_reports, read_report,
               get_run_log, run_history, preview_schedule, get_costs, health, list_components, list_notices,
-              preview_component_import, get_component_sheet, list_alternatives]
+              preview_component_import, get_component_sheet, list_alternatives, list_claude_research,
+              get_claude_research]
 WRITE_TOOLS = [(create_veille, WRITE), (update_veille, WRITE), (set_recipients, WRITE),
                (add_recipients, WRITE), (remove_recipients, WRITE), (update_brief, WRITE),
                (edit_brief, WRITE), (add_components, WRITE), (remove_components, WRITE),
                (import_components, DESTROY),  # mode replace : la liste existante est remplacée
                (pause_veille, WRITE), (resume_veille, WRITE),
                (check_component_statuses, WRITE), (search_alternatives, WRITE), (set_critical_parameters, WRITE),
-               (run_veille_now, SEND), (send_test_email, SEND),
+               (run_veille_now, SEND), (send_test_email, SEND), (start_claude_research, SEND),
                (archive_veille, DESTROY), (reset_component_search, DESTROY)]
 
 
