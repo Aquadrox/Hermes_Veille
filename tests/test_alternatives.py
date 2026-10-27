@@ -52,9 +52,9 @@ class AltClient(FakeClient):
         super().__init__(answers)
         self.similar_answers, self.error, self.searches = similar or {}, error, []
 
-    def similar(self, category_id, filters):
+    def similar(self, category_id, filters, at_least=()):
         self.calls += 1
-        self.searches.append((category_id, sorted(filters)))
+        self.searches.append((category_id, sorted(filters)) + ((sorted(at_least),) if at_least else ()))
         if self.error:
             raise self.error
         return self.similar_answers.get(category_id, [])
@@ -187,7 +187,7 @@ def test_rank_alternatives_filters_scores_and_bounds():
 
 def test_alternatives_due_freshness_and_stale_criteria():
     day = "2026-10-26"
-    rec = {"searched_at": day, "criteria": [{"id": 1}, {"id": 5}], "items": []}
+    rec = {"searched_at": day, "method": comp.ALT_METHOD, "criteria": [{"id": 1}, {"id": 5}], "items": []}
 
     def c(mpn, **kw):
         x = comp_with(mpn=mpn)
@@ -299,7 +299,7 @@ def test_alternatives_apply_by_key_keeps_concurrent_edits(bom):
     service.components_scan(bom.slug, client=AltClient(LTB))
 
     class Editing(AltClient):
-        def similar(self, category_id, filters):
+        def similar(self, category_id, filters, at_least=()):
             service.remove_components(bom.slug, ["GRM188R71H104KA93D"])  # l'interface modifie la liste
             return [res("RMCF0603FT10K0")]
     out = service.components_alternatives(bom.slug, ["RC0603FR-0710KL"], client=Editing({}))
@@ -340,7 +340,8 @@ def test_set_critical_params_changes_the_next_search(bom):
                                                     comp.load_specs(bom.slug), comp.load_notices(bom.slug),
                                                     comp.today())] == ["RC0603FR-0710KL"]
     service.components_alternatives(bom.slug, client=client)
-    assert client.searches[-1] == ("52", [(1, "10 kohms"), (2, "±1%"), (3, "0.1w, 1/10w")])
+    # puissance : une tenue, demandée supérieure ou égale (valeur de la référence), et non à l'identique
+    assert client.searches[-1] == ("52", [(1, "10 kohms"), (2, "±1%")], [(3, "0.1W, 1/10W")])
     sp = comp.load_specs(bom.slug)[key]
     assert not comp.sheet(stored(bom.slug, "RC0603FR-0710KL"), sp)["stale"]
     assert service.set_critical_params(bom.slug, key, []) and comp.criteria(stored(bom.slug, "RC0603FR-0710KL"), sp) == []
@@ -570,7 +571,7 @@ def test_refused_request_is_recorded_and_does_not_block_the_others(bom, ui):
         "params": [prm(1, "Capacitance", "0.1 µF"), prm(5, "Package / Case", "0603 (1608 Metric)")]}}
 
     class Refusing(AltClient):
-        def similar(self, category_id, filters):
+        def similar(self, category_id, filters, at_least=()):
             self.calls += 1
             self.searches.append(category_id)
             if category_id == "52":
@@ -685,7 +686,7 @@ def test_report_mail_and_xlsx_show_alternatives_of_end_of_life(bom, tools):  # n
     md = next((bom.dir / "rapports").glob("*-veille.md")).read_text()
     # tableau : nombre d'alternatives ; détail : critères, alternatives liées, 3 écarts au plus (le reste compté)
     assert f"[**RC0603FR\\-0710KL**](#{comp.anchor(comp.key_of('RC0603FR-0710KL', 'YAGEO'))}) ⇄ 2 |" in md
-    assert "**Alternatives actives Digi-Key** (recherche du" in md and "Resistance = 10 kOhms" in md
+    assert "**Alternatives actives Digi-Key** (recherche du" in md and "Resistance \\= 10 kOhms" in md
     assert "- [**RMCF0603FT10K0**](https://www.digikey.com/p/RMCF0603FT10K0) — YAGEO · 100 % identique" in md
     assert "Autres caractéristiques identiques" in md
     assert "Écarts : Tolerance : ±1\\% → ±5\\% ; " in md and "Thin Film ; …" in md and "Temperature Coefficient" not in md
@@ -770,3 +771,140 @@ def test_report_alternatives_odd_records():
     c["dk"]["alternatives"] = {**rec, "items": ["x", None, {"mpn": None}]}
     assert comp.alternatives_gap(c, spec()) == "aucune référence active équivalente chez Digi-Key (recherche du 2026-10-26)"
     assert comp.criteria({"critical_params": [[1], "x", 1]}, spec())[0]["name"] == "Resistance"  # retouché : pas d'erreur
+
+
+# --------------------------------------------------------------------------
+# Recherche : tenues supérieures ou égales, fiches actives, seconde source (constaté le 27/10/2026 : 2N2222A,
+# BC548B, SI2301BDS… sans alternative, car Ic, Vce, Id exigés identiques ne laissaient que leurs variantes obsolètes)
+# --------------------------------------------------------------------------
+BJT_CAT = [{"id": "13", "name": "Discrete Semiconductor Products"}, {"id": "276", "name": "Single Bipolar Transistors"}]
+Q2222 = [prm(74, "Transistor Type", "NPN", "380569"), prm(2101, "Current - Collector (Ic) (Max)", "600 mA", "600 mA"),
+         prm(2103, "Voltage - Collector Emitter Breakdown (Max)", "40 V", "40 V"), prm(2109, "Power - Max", "500 mW", "500 mW"),
+         prm(69, "Mounting Type", "Through Hole", "411897"), prm(16, "Package / Case", "TO-18-3 Metal Can", "413049")]
+
+
+def bjt(mpn, mfr="Microchip Technology", status="Active", ic="600 mA", vce="40 V", power="500 mW"):
+    vals = {2101: ic, 2103: vce, 2109: power}
+    return {"mpn": mpn, "manufacturer": mfr, "status": status, "product_url": f"https://www.digikey.com/p/{mpn}",
+            "description": "TRANS NPN", "category": BJT_CAT,
+            "params": [{**p, "value": vals[p["id"]], "vid": vals[p["id"]]} if p["id"] in vals else p for p in Q2222]}
+
+
+def test_ratings_read_and_compared_at_least():
+    assert comp.rating("600 mA") == {"": (pytest.approx(0.6), "A")} and comp.rating("32A (Tc)") == {"(Tc)": (32.0, "A")}
+    assert comp.rating("0.1W, 1/10W") == {"": (0.1, "W")} and comp.rating("1.2 V ~ 37 V") is None
+    # tenue double (MOSFET) : chaque condition de la référence doit être tenue
+    assert comp.rating("4.5A (Ta), 32A (Tc)") == {"(Ta)": (4.5, "A"), "(Tc)": (32.0, "A")}
+    assert not comp.at_least("5A (Ta), 10A (Tc)", "4.5A (Ta), 32A (Tc)")  # 10 A en Tc pour 32 A
+    assert not comp.at_least("4.5A (Ta)", "4.5A (Ta), 32A (Tc)")  # Tc inconnue
+    assert comp.at_least("8A (Ta), 40A (Tc)", "32A (Tc)") and comp.at_least("5A (Ta), 40A (Tc)", "4.5A (Ta), 32A (Tc)")
+    assert comp.at_least("800 mA", "600 mA") and comp.at_least("0.6 A", "600 mA") and comp.at_least("1A", "600 mA")
+    assert not comp.at_least("500 mA", "600 mA") and not comp.at_least("600 mV", "600 mA")  # autre unité
+    assert not comp.at_least("40A (Ta)", "32A (Tc)") and comp.at_least("40A (Tc)", "32A (Tc)")  # autre condition
+    assert comp.at_least("Tout  texte", "tout texte") and not comp.at_least("1 A ~ 2 A", "1 A")  # illisible : identique
+    sp = {"category": BJT_CAT, "params": Q2222}
+    assert comp.search_filters(comp_with(), sp) == (
+        [(74, "380569"), (69, "411897"), (16, "413049")],
+        [(2101, "600 mA"), (2103, "40 V")])  # puissance : pas critique par défaut
+    assert comp.criterion({"name": "Current - Collector (Ic) (Max)", "value": "600 mA"}) == (
+        "Current - Collector (Ic) (Max) ≥ 600 mA")
+    assert comp.criterion({"name": "Resistance", "value": "10 kOhms"}) == "Resistance = 10 kOhms"
+    assert comp.criterion({"name": ["retouché"], "value": 1}) == "['retouché'] = 1"  # jamais d'erreur
+    triac = [prm(1, "Voltage - Off State", "400 V"), prm(2, "Current - On State (It (RMS)) (Max)", "600 mA"),
+             prm(3, "Voltage - Gate Trigger (Vgt) (Max)", "2 V"), prm(69, "Mounting Type", "Through Hole")]
+    assert [p["name"] for p in comp.criteria(comp_with(), {"params": triac})] == [
+        "Voltage - Off State", "Current - On State (It (RMS)) (Max)", "Mounting Type"]
+
+
+def test_similar_asks_active_parts_then_ratings_at_least():
+    offered = {"ParametricFilters": [
+        {"ParameterId": 2101, "FilterValues": [{"ValueId": v, "ValueName": v} for v in ("100 mA", "600 mA", "800 mA", "1 A")]},
+        {"ParameterId": 2103, "FilterValues": [{"ValueId": "30 V", "ValueName": "30 V"}, {"ValueId": "50 V", "ValueName": "50 V"},
+                                               "x", {"ValueId": 7, "ValueName": "60 V"}]}]}
+    alt = {**product(mpn="2N2222A", mfr="Microchip Technology", status="Active")}
+    f = Fake(TOKEN, {"Products": [], "FilterOptions": offered}, {"Products": [alt]})
+    out = f.client().similar("276", [(74, "380569")], [(2101, "600 mA"), (2103, "40 V")])
+    first, second = (json.loads(r.data)["FilterOptionsRequest"] for r in f.requests[1:])
+    assert first["StatusFilter"] == [{"Id": digikey.ACTIVE_STATUS}] == second["StatusFilter"]
+    assert first["ParameterFilterRequest"]["ParameterFilters"] == [{"ParameterId": 74, "FilterValues": [{"Id": "380569"}]}]
+    assert second["ParameterFilterRequest"]["ParameterFilters"] == [
+        {"ParameterId": 74, "FilterValues": [{"Id": "380569"}]},
+        {"ParameterId": 2101, "FilterValues": [{"Id": "600 mA"}, {"Id": "800 mA"}, {"Id": "1 A"}]},
+        {"ParameterId": 2103, "FilterValues": [{"Id": "50 V"}]}]  # identifiant non textuel ignoré
+    assert [p["mpn"] for p in out] == ["2N2222A"]
+    # les plus proches d'abord, jusqu'à couvrir KEYWORD_LIMIT fiches : 600 mA (30) + 800 mA (30), pas 1 A ni 2 A
+    near = {"ParametricFilters": [{"ParameterId": 2101, "FilterValues": [
+        {"ValueId": v, "ValueName": v, "ProductCount": n} for v, n in (("2 A", 5), ("1 A", 40), ("600 mA", 30),
+                                                                      ("800 mA", 30), ("100 mA", 900))]}]}
+    five = {"Products": [alt] * comp.MAX_ALTERNATIVES}
+    f = Fake(TOKEN, {"FilterOptions": near}, five)
+    assert len(f.client().similar("276", [], [(2101, "600 mA")])) == comp.MAX_ALTERNATIVES and len(f.requests) == 3
+
+    def sent(r):
+        return json.loads(r.data)["FilterOptionsRequest"]["ParameterFilterRequest"]["ParameterFilters"]
+    assert sent(f.requests[2]) == [{"ParameterId": 2101, "FilterValues": [{"Id": "600 mA"}, {"Id": "800 mA"}]}]
+    # trop peu de fiches (comptes non croisés) : toutes les valeurs suffisantes, en un troisième appel
+    f = Fake(TOKEN, {"FilterOptions": near}, {"Products": [alt]}, five)
+    assert len(f.client().similar("276", [], [(2101, "600 mA")])) == comp.MAX_ALTERNATIVES
+    assert [v["Id"] for v in sent(f.requests[3])[0]["FilterValues"]] == ["600 mA", "800 mA", "1 A", "2 A"]
+    # toutes déjà demandées : pas de troisième appel
+    f = Fake(TOKEN, {"FilterOptions": offered}, {"Products": []})
+    assert f.client().similar("276", [], [(2101, "600 mA")]) == [] and len(f.requests) == 3
+    # aucune valeur suffisante proposée : rien, sans second appel ; réponse mal formée : rien non plus
+    f = Fake(TOKEN, {"Products": [alt], "FilterOptions": offered})
+    assert f.client().similar("276", [], [(2103, "100 V")]) == [] and len(f.requests) == 2
+    for odd in ("x", {"ParametricFilters": [{"ParameterId": 2103, "FilterValues": 5}, {"ParameterId": [1]}, 7]}):
+        assert Fake(TOKEN, {"FilterOptions": odd}).client().similar("276", [], [(2103, "40 V")]) == []
+    # sans tenue critique : un seul appel, comme avant
+    f = Fake(TOKEN, {"Products": [alt]})
+    assert len(f.client().similar("276", [(74, "380569")])) == 1 and len(f.requests) == 2
+
+
+def test_rank_accepts_better_ratings_and_second_source():
+    c = {"mpn": "2N2222A", "manufacturer": "STMicroelectronics", "dk": {"status": "Obsolete"}}
+    sp = {"category": BJT_CAT, "params": Q2222}
+    crit = comp.criteria(c, sp)
+    out = comp.rank_alternatives(c, sp, [
+        bjt("2N2222A", mfr="STMicroelectronics"),          # la référence elle-même
+        bjt("2N2222A", ic="800 mA", vce="50 V"),          # même MPN, autre fabricant : seconde source, mieux
+        bjt("2N2222A PBFREE", mfr="Central Semiconductor Corp"),  # tenues identiques
+        bjt("2N2907", ic="500 mA"),                       # courant insuffisant
+        bjt("2N3700", ic="1 A", vce="80 V", power="400 mW")], crit)
+    assert [(a["mpn"], a["manufacturer"]) for a in out] == [
+        ("2N2222A PBFREE", "Central Semiconductor Corp"), ("2N2222A", "Microchip Technology"), ("2N3700", "Microchip Technology")]
+    assert out[0]["diffs"] == [] and out[1]["score"] == 100  # tenues supérieures : pas une perte de score
+    assert out[1]["diffs"][0] == {"name": "Current - Collector (Ic) (Max)", "ref": "600 mA", "alt": "800 mA"}
+    assert out[2]["score"] == 0 and out[2]["diffs"][-1]["name"] == "Power - Max"
+    assert all(set(a) == {"mpn", "manufacturer", "status", "url", "description", "score", "diffs"} for a in out)
+
+
+def test_search_of_an_older_method_is_redone(bom):
+    service.components_scan(bom.slug, client=AltClient(LTB))
+    day, data = comp.today(), comp.load_components(bom.slug)
+    args = (comp.load_specs(bom.slug), comp.load_notices(bom.slug), day)
+    assert comp.alternatives_due(data["components"], *args) == []  # recherche du jour, méthode actuelle
+    stored(bom.slug, "RC0603FR-0710KL")
+    for c in data["components"]:
+        if c["mpn"] == "RC0603FR-0710KL":
+            c["dk"]["alternatives"].pop("method")  # enregistrée par la 0.8.0/0.8.1
+    assert [c["mpn"] for c in comp.alternatives_due(data["components"], *args)] == ["RC0603FR-0710KL"]
+
+
+def test_alternatives_budget_counts_digikey_calls(bom):
+    class TwoCalls(AltClient):
+        def similar(self, category_id, filters, at_least=()):
+            self.calls += 2
+            return []
+    targets = [comp_with(mpn=f"R{i}") for i in range(10)]
+    specs = {comp.key_of(c["mpn"], "YAGEO"): spec() for c in targets}
+    client = TwoCalls({})
+    info = service._alternatives(bom.slug, client, targets, specs, comp.today(), max_calls=6)
+    assert info["searched"] == 3 and info["pending"] == 7 and client.calls == 6
+
+
+def test_mcp_criteria_say_at_least_for_ratings():
+    from veille_mcp import server
+    rec = {"searched_at": "2026-10-27", "criteria": [{"id": 2101, "name": "Current - Collector (Ic) (Max)", "value": "600 mA"},
+                                                    {"id": 16, "name": "Package / Case", "value": "TO-18"}], "items": []}
+    assert server._alternatives({"alternatives": rec, "stale": False})["criteria"] == [
+        "Current - Collector (Ic) (Max) ≥ 600 mA", "Package / Case = TO-18"]

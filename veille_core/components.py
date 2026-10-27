@@ -612,7 +612,19 @@ DEFAULT_CRITICAL = frozenset({
     "FET Type", "Drain to Source Voltage (Vdss)", "Current - Continuous Drain (Id) @ 25°C",
     "Transistor Type", "Voltage - Collector Emitter Breakdown (Max)", "Current - Collector (Ic) (Max)",
     "Frequency", "Load Capacitance",
+    "Voltage - Off State", "Current - On State (It (RMS)) (Max)",
 })
+# Tenues (tension, courant, puissance) : une alternative qui fait mieux convient. Critiques, elles sont cherchées
+# supérieures ou égales à celles de la référence (`at_least`), et non identiques : une 2N2222A (600 mA) se remplace
+# par une 800 mA, alors que l'égalité stricte ne trouvait que les variantes, obsolètes, de la référence elle-même.
+AT_LEAST = frozenset({
+    "Voltage - Rated", "Voltage - DC Reverse (Vr) (Max)", "Current - Average Rectified (Io)",
+    "Drain to Source Voltage (Vdss)", "Current - Continuous Drain (Id) @ 25°C",
+    "Voltage - Collector Emitter Breakdown (Max)", "Current - Collector (Ic) (Max)",
+    "Voltage - Off State", "Current - On State (It (RMS)) (Max)",
+    "Power - Max", "Power (Watts)", "Current Rating (Amps)",
+})
+ALT_METHOD = 2  # version de la recherche : un enregistrement d'une autre version est refait (`alternatives_due`)
 MAX_ALTERNATIVES = 5
 MAX_DIFFS = 8          # différences affichées par alternative
 REPORT_DIFFS = 3       # dont dans le rapport PDF (toutes dans l'interface)
@@ -718,31 +730,86 @@ def _same(a: dict, b: dict | None) -> bool:
     return " ".join(a["value"].split()).lower() == " ".join(b["value"].split()).lower()
 
 
+_SI = {"p": 1e-12, "n": 1e-9, "µ": 1e-6, "u": 1e-6, "m": 1e-3, "": 1.0, "k": 1e3, "M": 1e6}
+_RATING = re.compile(r"(\d+(?:\.\d+)?) ?([pnµumkM]?)([A-Za-z]+) ?(\(\w+\))?")
+
+
+def rating(text) -> dict[str, tuple[float, str]] | None:
+    """Tenue lue chez Digi-Key, par condition : « 600 mA » -> {"": (0.6, "A")} ; « 4.5A (Ta), 32A (Tc) » ->
+    {"(Ta)": (4.5, "A"), "(Tc)": (32.0, "A")} ; une autre écriture de la même valeur (« 0.1W, 1/10W ») est
+    ignorée. None : illisible (plage, texte)."""
+    out = {}
+    for i, part in enumerate(str(text or "").split(",")):
+        m = _RATING.fullmatch(" ".join(part.split()))
+        if m and (m.group(4) or "") not in out:
+            out[m.group(4) or ""] = (float(m.group(1)) * _SI[m.group(2)], m.group(3))
+        elif i == 0:
+            return None
+    return out
+
+
+def at_least(value, ref) -> bool:
+    """Tenue `value` suffisante pour remplacer `ref` : pour chaque condition de `ref` (« (Tc) », « (Ta) »), même
+    unité et valeur supérieure ou égale ; illisible : identique seulement."""
+    a, b = rating(value), rating(ref)
+    if a and b:
+        return all(c in a and a[c][1] == unit and a[c][0] >= v * (1 - 1e-9) for c, (v, unit) in b.items())
+    return " ".join(str(value or "").split()).lower() == " ".join(str(ref or "").split()).lower()
+
+
+def _meets(p: dict, b: dict | None) -> bool:
+    """Critique `p` de la référence satisfaite par la caractéristique `b` d'une alternative."""
+    return b is not None and (at_least(b["value"], p["value"]) if p["name"] in AT_LEAST else _same(p, b))
+
+
+def search_filters(c: dict, spec: dict | None) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+    """Filtres de `digikey.Client.similar` : valeurs exigées [(ParameterId, ValueId)] et tenues minimales
+    [(ParameterId, valeur de la référence)]."""
+    crit = criteria(c, spec)
+    return ([(p["id"], p["vid"]) for p in crit if p["name"] not in AT_LEAST and p.get("vid")],
+            [(p["id"], p["value"]) for p in crit if p["name"] in AT_LEAST])
+
+
+def criterion(x: dict) -> str:
+    """Critère d'une recherche, lisible : « Resistance = 10 kOhms », « Current - Collector (Ic) (Max) ≥ 600 mA »."""
+    name = x.get("name")
+    return f"{name} {'≥' if isinstance(name, str) and name in AT_LEAST else '='} {x.get('value')}"
+
+
+def _diffs(ref: list[dict], vals: dict[int, dict]) -> list[dict]:
+    """Caractéristiques `ref` de la référence dont l'alternative (`vals`, par identifiant) a une autre valeur."""
+    return [{"name": p["name"], "ref": p["value"], "alt": vals[p["id"]]["value"] if p["id"] in vals else "—"}
+            for p in ref if not _same(p, vals.get(p["id"]))]
+
+
 def rank_alternatives(c: dict, spec: dict | None, products: list[dict], crit: list[dict]) -> list[dict]:
     """Fiches renvoyées par `digikey.Client.similar` -> MAX_ALTERNATIVES alternatives : fiches ACTIVES d'une autre
-    référence, aux mêmes valeurs critiques (revérifiées : un filtre ignoré par l'API ne passe pas), classées par
-    score (part des autres caractéristiques identiques) ; chacune avec ses différences avec la référence."""
+    référence (la même chez un autre fabricant : seconde source), aux mêmes valeurs critiques, tenues supérieures ou
+    égales (revérifiées : un filtre ignoré par l'API ne passe pas), classées par score (part des autres
+    caractéristiques identiques), puis tenues identiques d'abord ; chacune avec ses différences avec la référence
+    (tenues supérieures en tête)."""
     crit_ids = {p["id"] for p in crit}
     others = [p for p in params(spec) if p["id"] not in crit_ids and _valued(p)]
     own, seen, out = loose_mpn(c["mpn"]), set(), []
     for prod in products:
         mpn, mfr = _text(prod.get("mpn"), "label"), _text(prod.get("manufacturer"), "label")
         key = key_of(mpn, mfr)
-        if (not mpn or loose_mpn(mpn) == own or key in seen
+        if (not mpn or (loose_mpn(mpn) == own and same_manufacturer(mfr, c["manufacturer"])) or key in seen
                 or DK_LIFECYCLE.get(str(prod.get("status") or "").lower()) != "ACTIVE"):
             continue
         vals = {p["id"]: p for p in params(prod)}
-        if not all(_same(p, vals.get(p["id"])) for p in crit):
+        if not all(_meets(p, vals.get(p["id"])) for p in crit):
             continue
         seen.add(key)
-        diffs = [{"name": p["name"], "ref": p["value"], "alt": vals[p["id"]]["value"] if p["id"] in vals else "—"}
-                 for p in others if not _same(p, vals.get(p["id"]))]
+        better, diffs = _diffs(crit, vals), _diffs(others, vals)
         out.append({"mpn": mpn, "manufacturer": mfr, "status": _text(prod.get("status"), "label"),
                     "url": normalize_url(prod.get("product_url") or "") if prod.get("product_url") else None,
                     "description": _text(prod.get("description"), "title"),
                     "score": round(100 * (len(others) - len(diffs)) / len(others)) if others else 100,
-                    "diffs": diffs[:MAX_DIFFS]})
-    out.sort(key=lambda a: (-a["score"], a["mpn"]))
+                    "diffs": (better + diffs)[:MAX_DIFFS], "better": len(better)})
+    out.sort(key=lambda a: (-a["score"], a["better"], a["mpn"]))
+    for a in out:
+        del a["better"]
     return out[:MAX_ALTERNATIVES]
 
 
@@ -750,7 +817,7 @@ def alternatives_record(c: dict, spec: dict | None, products: list[dict], day: s
     """Résultat d'une recherche, enregistré dans `dk.alternatives` : date, critères appliqués, alternatives ; ou
     le refus de Digi-Key (`error`), daté lui aussi : la référence repasse après les autres, et le refus s'affiche."""
     crit = criteria(c, spec)
-    return {"searched_at": day, "criteria": [{"id": p["id"], "name": p["name"], "value": p["value"]} for p in crit],
+    return {"searched_at": day, "method": ALT_METHOD, "criteria": [{"id": p["id"], "name": p["name"], "value": p["value"]} for p in crit],
             "items": [] if error else rank_alternatives(c, spec, products, crit), **({"error": error} if error else {})}
 
 
@@ -794,7 +861,7 @@ def select(components: list[dict], mpns: list[str]) -> tuple[list[dict], list[st
 def alternatives_due(components: list[dict], specs: dict[str, dict], notices: list[dict], day: str) -> list[dict]:
     """Références dont chercher les alternatives sans qu'on le demande : en fin de vie ou en dernière commande,
     d'une famille concernée, sans recherche récente (ALT_MAX_AGE_DAYS) ou recherchées avec d'autres critères.
-    Jamais recherchées d'abord, puis les plus anciennes."""
+    Jamais recherchées d'abord, puis les plus anciennes ; une recherche d'une autre méthode (ALT_METHOD) est refaite."""
     worst = worst_by_key(notices)
     limit = (dt.date.fromisoformat(day) - dt.timedelta(days=ALT_MAX_AGE_DAYS)).isoformat()
     due = []
@@ -804,7 +871,8 @@ def alternatives_due(components: list[dict], specs: dict[str, dict], notices: li
         if not w or w["type"] not in CRITICAL or searchable(c, spec):
             continue
         rec = alternatives(c)
-        if rec is None or rec["searched_at"] < limit or alternatives_stale(c, spec):
+        if (rec is None or rec["searched_at"] < limit or rec.get("method") != ALT_METHOD
+                or alternatives_stale(c, spec)):
             due.append(c)
     return sorted(due, key=lambda c: (alternatives(c) or {}).get("searched_at") or "")
 
@@ -1022,10 +1090,9 @@ def _md_alternatives(r: dict, gap: str) -> list[str]:
     rec, items = r["alt"], _alt_items(r["alt"])
     if not items:
         return ["", f"*Alternatives : {md_escape(gap)}.*"] if gap else []
-    crit = " · ".join(f"{md_escape(p.get('name'))} = {md_escape(p.get('value'))}"
-                      for p in rec["criteria"] if isinstance(p, dict))
+    crit = " · ".join(md_escape(criterion(p)) for p in rec["criteria"] if isinstance(p, dict))
     out = ["", f"**Alternatives actives Digi-Key** (recherche du {md_escape(rec['searched_at'])}"
-               f"{f' ; à l’identique : {crit}' if crit else ''} ; à qualifier avant tout remplacement)", ""]
+               f"{f' ; critères : {crit}' if crit else ''} ; à qualifier avant tout remplacement)", ""]
     for a in items:
         url, mpn = normalize_url(a.get("url") or ""), f"**{md_escape(a.get('mpn'))}**"
         line = f"- {f'[{mpn}]({_md_url(url)})' if url else mpn} — {md_escape(a.get('manufacturer'))}"

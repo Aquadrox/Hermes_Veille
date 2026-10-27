@@ -215,12 +215,14 @@ lundi 6h30 — job de la veille thématique rattachée
   concernés : un équivalent paramétrique y serait trompeur.
   - **Critiques** : par défaut, celles de la famille (valeur nominale, boîtier, montage, tension d'un
     condensateur, Vds et Id d'un MOSFET…). Dans la fiche du composant (« Fiche composant »), coche celles
-    que toute alternative doit avoir à l'identique : ton choix remplace les défauts (« Revenir aux
+    que toute alternative doit avoir à l'identique — ou **supérieures ou égales** pour une tenue (tension,
+    courant, puissance : Ic, Vce, Vdss, Id, Vr, Io, tension d'un condensateur…, 0.8.2) ; une même
+    référence chez un autre fabricant (seconde source) est acceptée. Ton choix remplace les défauts (« Revenir aux
     défauts » pour l'annuler) et survit à une réinitialisation de la recherche. Une recherche faite avec
     d'autres critères est signalée jusqu'à la suivante.
   - **Quand** : après chaque passage Digi-Key, pour les fins de vie sans recherche depuis 30 jours (ou
-    recherchées avec d'autres critères), dans le temps restant de la tranche et 50 recherches au plus
-    (quota de l'offre gratuite). **À la demande** : « Rechercher des alternatives » dans le détail d'un
+    recherchées avec d'autres critères, ou par une version précédente), dans le temps restant de la tranche
+    et 100 appels Digi-Key au plus (un à trois par recherche ; quota de l'offre gratuite). **À la demande** : « Rechercher des alternatives » dans le détail d'un
     composant (même actif), « Alternatives des fins de vie » au-dessus de la liste (en arrière-plan,
     avancement affiché), `veillectl components alternatives <slug> [MPN …]`, ou Telegram
     (`search_alternatives`).
@@ -258,8 +260,10 @@ lundi 6h30 — job de la veille thématique rattachée
 Limites : la recherche web reste probabiliste (un avis peut être manqué : le statut Digi-Key sert
 de filet) ; les avis PCN de Digi-Key eux-mêmes ne sont pas lus (leur API exige une connexion
 interactive, OAuth « 3-legged ») ; Mouser et Nexar ne sont pas intégrés. Alternatives : seulement pour les
-références que Digi-Key connaît (une référence introuvable n'a pas de fiche), et les critiques se comparent
-à l'identique (une tolérance plus serrée ou une tension plus haute ne passe pas une critique cochée).
+références que Digi-Key connaît (une référence introuvable n'a pas de fiche) ; seules les tenues (tension,
+courant, puissance) se comparent en « supérieure ou égale », les autres critiques à l'identique (une tolérance
+plus serrée ou un boîtier voisin — TO-92 « Long Body » / standard — ne passe pas une critique cochée : la
+décocher élargit la recherche).
 
 ## Piloter depuis Telegram (MCP)
 

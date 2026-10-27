@@ -43,7 +43,7 @@
     {% if sh.category %}<p class="small muted">Digi-Key : {{ sh.category }}</p>{% endif %}
     {% if editable and sh.family %}
     <form hx-post="/veilles/{{ slug }}/components/{{ r.anchor }}/critical" hx-target="#cd-{{ r.anchor }}" hx-swap="outerHTML">
-      <p class="small muted">Coche les caractéristiques que toute alternative doit avoir à l'identique.</p>
+      <p class="small muted">Coche les caractéristiques que toute alternative doit avoir à l'identique (tensions, courants et puissances : égaux ou supérieurs).</p>
       <ul class="params">
         {% for p in sh.params %}<li><label class="p-row"><input type="checkbox" name="param" value="{{ p.id }}"{% if p.critical %} checked{% endif %}{% if not p.valued %} disabled{% endif %}><span class="p-name">{{ p.name }}</span><span class="p-val">{{ p.value }}</span></label></li>{% endfor %}
       </ul>
@@ -62,7 +62,7 @@
   <div class="alts">
     <p><strong>Alternatives</strong>
       {% if rec %}<span class="muted small">· recherchées le {{ rec.searched_at }} ·
-        {% if rec.criteria %}critères : {% for x in rec.criteria %}{{ x.name }} = {{ x.value }}{{ " ; " if not loop.last }}{% endfor %}{% else %}même catégorie seulement{% endif %}</span>{% endif %}</p>
+        {% if rec.criteria %}critères : {% for x in rec.criteria %}{{ criterion(x) }}{{ " ; " if not loop.last }}{% endfor %}{% else %}même catégorie seulement{% endif %}</span>{% endif %}</p>
     {% if editable and sh.stale %}<p class="small warn">Critères modifiés depuis cette recherche : relance-la pour les appliquer.</p>{% endif %}
     {% if rec and rec.error %}<p class="small err">Recherche refusée par Digi-Key : {{ rec.error }}</p>
     {% elif rec and rec['items'] %}

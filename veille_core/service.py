@@ -52,8 +52,9 @@ SCAN_BUDGET_S = 900  # passage Digi-Key, toutes tranches confondues : la suite a
 SCAN_SLICE_S = guard.COMMAND_TIMEOUT - 4 * digikey.HTTP_TIMEOUT - 60  # 220 s
 SCAN_BUDGET_STOP = "budget de temps ou d'appels atteint : suite au prochain passage"
 SCAN_RESUME_S = 3600  # passage inachevé repris s'il a avancé depuis moins d'une heure (tranches d'un même tir)
-# Recherches d'alternatives par série (un appel Digi-Key chacune) : avec digikey.MAX_CALLS, sous le quota journalier.
-ALT_MAX_CALLS = 50
+# Appels Digi-Key des recherches d'alternatives d'une série (un à trois par recherche, voir digikey.Client.similar) :
+# avec digikey.MAX_CALLS, sous le quota journalier.
+ALT_MAX_CALLS = 100
 
 
 class ServiceError(RuntimeError):
@@ -848,22 +849,22 @@ def _alternatives(slug: str, client: digikey.Client, targets: list[dict], specs:
     """Recherche paramétrique Digi-Key des alternatives de `targets` (réseau, HORS verrou), puis enregistrement dans
     `dk.alternatives` de chacune, par clé, dans la liste relue SOUS verrou (éditions concurrentes préservées).
 
-    Au plus `max_calls` recherches ; aucune ne commence après `deadline` (time.monotonic). Une requête refusée
+    Aucune recherche ne commence après `max_calls` appels Digi-Key (une en fait un à trois) ni après `deadline`
+    (time.monotonic). Une requête refusée
     (`digikey.RequestRefused`, HTTP 400) est enregistrée comme résultat daté, affiché, et la série continue :
     une référence aux filtres refusés ne bloque pas les autres. Toute autre erreur (accès, quota, panne) arrête la
     série : ce qui reste attend la suivante. Renvoie {"searched", "found" (avec au moins une alternative),
     "pending"[, "error"]}."""
-    results, info = {}, {"searched": 0, "found": 0}
-    for i, c in enumerate(targets[:max(0, max_calls)]):
-        if deadline is not None and time.monotonic() > deadline:
+    results, info, calls = {}, {"searched": 0, "found": 0}, client.calls
+    for i, c in enumerate(targets):
+        if client.calls - calls >= max_calls or (deadline is not None and time.monotonic() > deadline):
             break
         if progress:
             progress(c, i, len(targets))
         key = comp.key_of(c["mpn"], c["manufacturer"])
-        filters = [(p["id"], p["vid"]) for p in comp.criteria(c, specs.get(key)) if p.get("vid")]
         refused = ""
         try:
-            products = client.similar(comp.leaf_category(specs.get(key)), filters)
+            products = client.similar(comp.leaf_category(specs.get(key)), *comp.search_filters(c, specs.get(key)))
         except digikey.RequestRefused as exc:
             products, refused = [], str(exc)[:300]
             info["error"] = refused

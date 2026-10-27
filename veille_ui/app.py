@@ -147,6 +147,7 @@ templates.env.globals["web_status_label"] = components.web_status_label
 templates.env.globals["CRITICAL"] = components.CRITICAL
 templates.env.globals["badge_class"] = components.badge_class
 templates.env.globals["component_sheet"] = components.sheet
+templates.env.globals["criterion"] = components.criterion
 templates.env.globals["COMP_ROWS_SHOWN"] = COMP_ROWS_SHOWN
 templates.env.globals["FIELDS"] = bom_import.FIELDS
 templates.env.globals["LABELS"] = bom_import.LABELS

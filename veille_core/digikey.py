@@ -47,6 +47,8 @@ RETRY_AFTER = 10    # HTTP 429 sans en-tête Retry-After exploitable (s)
 HTTP_TIMEOUT = 20   # s par requête (connexion, puis lecture)
 MAX_PARAMS = 40     # caractéristiques gardées par fiche (une résistance en a une quinzaine)
 MAX_DEPTH = 4       # niveaux de catégorie (« Resistors » › « Chip Resistor - Surface Mount »)
+ACTIVE_STATUS = 0   # identifiant du statut « Active » (FilterOptions.Status d'une recherche)
+MAX_VALUES = 100    # valeurs d'une tenue minimale envoyées au plus (une caractéristique en propose une soixantaine)
 
 # Pannes passagères : le réseau ou le serveur, pas la requête. HTTPError (sous-classe d'URLError) est traitée
 # avant. HTTPException : réponse tronquée (IncompleteRead) ou ligne d'état illisible, après une coupure.
@@ -208,22 +210,68 @@ class Client:
         url = components.normalize_url(product.get("ProductUrl") or "")
         return {"status": status[:40] or "Inconnu", "product_url": url, **_specs(product)}
 
-    def similar(self, category_id: str, filters: list[tuple[int, str]]) -> list[dict]:
-        """Fiches de la sous-catégorie `category_id` dont les caractéristiques `filters` ([(ParameterId, ValueId)])
-        ont ces valeurs (recherche paramétrique, un appel) : {'mpn', 'manufacturer', 'status', 'product_url',
-        'description'[, 'category', 'params']}. Le statut n'est pas filtré ici (identifiants de statut de l'API non
-        documentés) : `components.rank_alternatives` ne garde que les fiches actives."""
-        body = {"Keywords": "", "Limit": KEYWORD_LIMIT, "Offset": 0, "FilterOptionsRequest": {
-            "CategoryFilter": [{"Id": category_id}],
-            "ParameterFilterRequest": {
-                "CategoryFilter": {"Id": category_id},
-                "ParameterFilters": [{"ParameterId": pid, "FilterValues": [{"Id": vid}]} for pid, vid in filters]}}}
-        res = self._search(body, f"alternatives, catégorie {category_id}")
+    def similar(self, category_id: str, filters: list[tuple[int, str]],
+                at_least: list[tuple[int, str]] = ()) -> list[dict]:
+        """Fiches ACTIVES de la sous-catégorie `category_id` dont les caractéristiques `filters` ([(ParameterId,
+        ValueId)]) ont ces valeurs (recherche paramétrique) : {'mpn', 'manufacturer', 'status', 'product_url',
+        'description'[, 'category', 'params']}.
+
+        `at_least` ([(ParameterId, valeur de la référence)]) : tenues supérieures ou égales (`components.at_least`),
+        prises parmi les valeurs que Digi-Key propose pour les autres filtres (FilterOptions du premier appel), les
+        plus proches de la référence d'abord, jusqu'à couvrir KEYWORD_LIMIT fiches (les fiches renvoyées ne sont
+        pas classées : une 1N4004 ne doit pas évincer les 1N4001), puis demandées ensemble (second appel) ; moins
+        de MAX_ALTERNATIVES fiches (comptes par caractéristique, pas croisés) : toutes les valeurs suffisantes
+        (troisième appel). Aucune valeur suffisante : rien, sans second appel."""
+        what = f"alternatives, catégorie {category_id}"
+        exact = [(pid, [vid]) for pid, vid in filters]
+        res = self._search(_parametric(category_id, exact), what)
+        if at_least:
+            options = res.get("FilterOptions")
+            options = options.get("ParametricFilters") if isinstance(options, dict) else None
+            offered = {pf["ParameterId"]: pf.get("FilterValues") for pf in options if isinstance(pf, dict)
+                       and isinstance(pf.get("ParameterId"), int)} if isinstance(options, list) else {}
+            enough = [[v for v in _list(offered.get(pid)) if isinstance(v, dict) and isinstance(v.get("ValueId"), str)
+                       and v["ValueId"] and components.at_least(v.get("ValueName"), ref)] for pid, ref in at_least]
+            if not all(enough):
+                return []
+            ranked = [(pid, *_ranked(vals)) for (pid, _), vals in zip(at_least, enough, strict=True)]
+            res = self._search(_parametric(category_id, exact + [(pid, ids[:n]) for pid, ids, n in ranked]), what)
+            if any(n < len(ids) for _, ids, n in ranked) and len(_products(res)) < components.MAX_ALTERNATIVES:
+                res = self._search(_parametric(category_id, exact + [(pid, ids) for pid, ids, _ in ranked]), what)
         return [{"mpn": _field(p, "ManufacturerProductNumber")[:64], "manufacturer": _field(p, "Manufacturer", "Name")[:80],
                  "status": _field(p, "ProductStatus", "Status").strip()[:40],
                  "product_url": components.normalize_url(p.get("ProductUrl") or ""),
                  "description": " ".join(_field(p, "Description", "ProductDescription").split())[:200], **_specs(p)}
-                for p in (res.get("Products") if isinstance(res.get("Products"), list) else []) if isinstance(p, dict)]
+                for p in _products(res)]
+
+
+def _list(value) -> list:
+    return value if isinstance(value, list) else []
+
+
+def _products(res: dict) -> list[dict]:
+    return [p for p in _list(res.get("Products") if isinstance(res, dict) else None) if isinstance(p, dict)]
+
+
+def _ranked(values: list[dict]) -> tuple[list[str], int]:
+    """Identifiants des valeurs admises (FilterValues) par valeur croissante, MAX_VALUES au plus, et combien des
+    premières couvrent KEYWORD_LIMIT fiches (ProductCount ; absent : toutes)."""
+    values = sorted(values, key=lambda v: min((x for x, _ in (components.rating(v.get("ValueName")) or {}).values()),
+                                              default=0.0))[:MAX_VALUES]
+    total = 0
+    for n, v in enumerate(values, 1):
+        total += v["ProductCount"] if isinstance(v.get("ProductCount"), int) else 0
+        if total >= KEYWORD_LIMIT:
+            return [v["ValueId"] for v in values], n
+    return [v["ValueId"] for v in values], len(values)
+
+
+def _parametric(category_id: str, filters: list[tuple[int, list[str]]]) -> dict:
+    """Corps d'une recherche paramétrique : sous-catégorie, fiches actives, valeurs admises par caractéristique."""
+    return {"Keywords": "", "Limit": KEYWORD_LIMIT, "Offset": 0, "FilterOptionsRequest": {
+        "CategoryFilter": [{"Id": category_id}], "StatusFilter": [{"Id": ACTIVE_STATUS}],
+        "ParameterFilterRequest": {"CategoryFilter": {"Id": category_id}, "ParameterFilters": [
+            {"ParameterId": pid, "FilterValues": [{"Id": v} for v in vids]} for pid, vids in filters]}}}
 
 
 def _specs(product: dict) -> dict:
