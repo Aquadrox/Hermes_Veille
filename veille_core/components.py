@@ -685,7 +685,7 @@ def criteria(c: dict, spec: dict | None) -> list[dict]:
     chosen = c.get("critical_params")
     if chosen is None:
         return [p for p in params(spec) if _valued(p) and p["name"] in DEFAULT_CRITICAL]
-    ids = set(chosen) if isinstance(chosen, list) else set()
+    ids = {x for x in chosen if isinstance(x, int)} if isinstance(chosen, list) else set()
     return [p for p in params(spec) if _valued(p) and p["id"] in ids]
 
 
@@ -809,10 +809,15 @@ def alternatives_due(components: list[dict], specs: dict[str, dict], notices: li
     return sorted(due, key=lambda c: (alternatives(c) or {}).get("searched_at") or "")
 
 
+def _alt_items(rec: dict | None) -> list[dict]:
+    """Alternatives affichables d'une recherche (une entrée sans MPN, fichier retouché, est ignorée)."""
+    return [a for a in rec["items"] if isinstance(a, dict) and a.get("mpn") and isinstance(a["mpn"], str)] if rec else []
+
+
 def alternatives_gap(c: dict, spec: dict | None) -> str:
     """Pourquoi aucune alternative n'est proposée pour cette référence (rapport, e-mail), vide s'il y en a."""
     rec = alternatives(c)
-    if rec and rec["items"]:
+    if _alt_items(rec):
         return ""
     if rec:
         return (f"recherche refusée par Digi-Key le {rec['searched_at']}" if rec.get("error")
@@ -1012,10 +1017,6 @@ def _md_table(rows: list[dict]) -> list[str]:
     return [*out, ":::"]
 
 
-def _alt_items(rec: dict | None) -> list[dict]:
-    return [a for a in rec["items"] if isinstance(a, dict)] if rec else []
-
-
 def _md_alternatives(r: dict, gap: str) -> list[str]:
     """Alternatives d'un composant sous son détail (REPORT_DIFFS écarts chacune), ou le motif de leur absence."""
     rec, items = r["alt"], _alt_items(r["alt"])
@@ -1027,14 +1028,15 @@ def _md_alternatives(r: dict, gap: str) -> list[str]:
                f"{f' ; à l’identique : {crit}' if crit else ''} ; à qualifier avant tout remplacement)", ""]
     for a in items:
         url, mpn = normalize_url(a.get("url") or ""), f"**{md_escape(a.get('mpn'))}**"
-        line = (f"- {f'[{mpn}]({_md_url(url)})' if url else mpn} — {md_escape(a.get('manufacturer'))}"
-                f" · {md_escape(a.get('score'))} % identique")
+        line = f"- {f'[{mpn}]({_md_url(url)})' if url else mpn} — {md_escape(a.get('manufacturer'))}"
+        if isinstance(a.get("score"), int):
+            line += f" · {a['score']} % identique"
         if a.get("description"):
             line += f" · {md_escape(a['description'])}"
         diffs = [d for d in a.get("diffs") or [] if isinstance(d, dict)]
         gaps = " ; ".join(f"{md_escape(d.get('name'))} : {md_escape(d.get('ref'))} → {md_escape(d.get('alt'))}"
                           for d in diffs[:REPORT_DIFFS])
-        more = f" (+{len(diffs) - REPORT_DIFFS})" if len(diffs) > REPORT_DIFFS else ""
+        more = " ; …" if len(diffs) > REPORT_DIFFS else ""
         out += [line + "\\", f"  {f'Écarts : {gaps}{more}' if gaps else 'Autres caractéristiques identiques'}"]
     return out
 
@@ -1240,7 +1242,7 @@ def to_xlsx(components: list[dict], notices: list[dict], sources: dict[str, list
                   ", ".join(TYPES[t][0] for t in r["types"]), r["worst"]["title"] if r["worst"] else "",
                   r["deadline"], r["found"], dk.get("status") or dk.get("error"), dk.get("checked_at"),
                   web_status_label(r["web"]), r["web_checked_at"],
-                  " ; ".join(f"{a.get('mpn')} ({a.get('manufacturer')})" for a in _alt_items(r["alt"])), url,
+                  " ; ".join(f"{a['mpn']} ({a.get('manufacturer') or '?'})" for a in _alt_items(r["alt"])), url,
                   "" if r["tracked"] else "retiré") + ((", ".join(sources.get(r["key"], ())),) if sources is not None else ())
         for col, value in enumerate(values, 1):
             cell = ws.cell(n, col, _xlsx_cell(value, col in _XLSX_DATES))
