@@ -185,7 +185,7 @@ def test_export_names_the_watches_of_each_reference(base, monkeypatch):
     assert re.fullmatch(r'attachment; filename="\d{4}-\d{2}-\d{2}-base-composants\.xlsx"',
                         r.headers["content-disposition"])
     rows = list(_sheet(r.content).iter_rows(values_only=True))
-    assert rows[0][-1] == "Veilles" and len(rows[0]) == 14
+    assert rows[0][-1] == "Veilles" and len(rows[0]) == 15
     by = {row[0]: row for row in rows[1:]}
     label = catalog.archived_label(archived)  # comme dans l'interface
     assert label.startswith("carte-b (archivée le 20")

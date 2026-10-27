@@ -227,6 +227,8 @@ lundi 6h30 — job de la veille thématique rattachée
   - **Consulter** : badge « ⇄ n » et filtre « Avec alternatives » de la liste, détail du composant, base
     des composants (lecture seule), Telegram (`get_component_sheet`, `list_alternatives`,
     `set_critical_parameters`).
+  - **Rapport** (0.8.1) : alternatives sous le détail de chaque fin de vie du PDF (3 écarts au plus) ou motif
+    de leur absence ; « ⇄ n » dans les tableaux et l'e-mail ; colonne « Alternatives » de l'Excel.
   - Au moins une critique est exigée (sinon toute référence de la catégorie passerait). Une recherche refusée
     par Digi-Key est affichée dans le détail du composant et refaite après 30 jours (ou à la demande).
   - Ce sont des **suggestions** à qualifier : correspondance des caractéristiques publiées par Digi-Key,

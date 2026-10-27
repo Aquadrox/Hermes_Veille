@@ -670,3 +670,103 @@ def test_ui_search_targets_the_opened_reference_only(ui, bom, monkeypatch):
     url = f"/veilles/{bom.slug}/components/{anchor('RC0603FR-0710KL')}/alternatives"
     r = client.post(url, headers={"X-CSRF-Token": csrf, "HX-Request": "true"})
     assert r.status_code == 200 and len(fake.searches) == 1 and 'role="alert"' not in r.text
+
+
+# --------------------------------------------------------------------------
+# Rapport, e-mail, Excel : alternatives des composants en fin de vie
+# --------------------------------------------------------------------------
+def test_report_mail_and_xlsx_show_alternatives_of_end_of_life(bom, tools):  # noqa: F811
+    service.components_scan(bom.slug, client=AltClient(LTB, similar={"52": [
+        res("ERJ-3EKF1002V", (2, "±5%"), (3, "0.2W"), (4, "Thin Film"), (6, "±50ppm/°C"), mfr="Panasonic"),
+        res("RMCF0603FT10K0")]}))
+    p = bom.dir / "rapports" / "cand.json"
+    p.write_text(json.dumps({"notices": []}))
+    service.components_finalize(bom.slug, p)
+    md = next((bom.dir / "rapports").glob("*-veille.md")).read_text()
+    # tableau : nombre d'alternatives ; détail : critères, alternatives liées, 3 écarts au plus (le reste compté)
+    assert f"[**RC0603FR\\-0710KL**](#{comp.anchor(comp.key_of('RC0603FR-0710KL', 'YAGEO'))}) ⇄ 2 |" in md
+    assert "**Alternatives actives Digi-Key** (recherche du" in md and "Resistance = 10 kOhms" in md
+    assert "- [**RMCF0603FT10K0**](https://www.digikey.com/p/RMCF0603FT10K0) — YAGEO · 100 % identique" in md
+    assert "Autres caractéristiques identiques" in md
+    assert "Écarts : Tolerance : ±1\\% → ±5\\% ; " in md and "Thin Film ; …" in md and "Temperature Coefficient" not in md
+    # pas d'alternative : le motif est dit (circuit intégré)
+    assert "*Alternatives : famille non concernée \\(seuls les passifs et les discrets le sont\\).*" in md
+    mail = tools()[-1]
+    text = mail["args"][mail["args"].index("--text") + 1]
+    assert "⇄ 2 alternative(s) dans le PDF" in mail["html"] and "— 2 alternative(s) dans le PDF —" in text
+    from test_components import _sheet
+    sheet = _sheet(next((bom.dir / "rapports").glob("*.xlsx")).read_bytes())
+    head = [c.value for c in sheet[1]]
+    rows = {r[0]: dict(zip(head, r, strict=True)) for r in sheet.iter_rows(min_row=2, values_only=True)}
+    assert rows["RC0603FR-0710KL"]["Alternatives"] == "RMCF0603FT10K0 (YAGEO) ; ERJ-3EKF1002V (Panasonic)"
+    assert rows["LM317T"]["Alternatives"] is None and rows["RC0603FR-0710KL"]["Lien"]  # colonnes suivantes intactes
+
+
+def test_alternatives_gap_reasons():
+    rec = {"searched_at": "2026-10-26", "criteria": [], "items": []}
+    assert comp.alternatives_gap(comp_with(dk={"alternatives": {**rec, "items": [{"mpn": "X"}]}}), spec()) == ""
+    assert comp.alternatives_gap(comp_with(dk={"alternatives": rec}), spec()) == (
+        "aucune référence active équivalente chez Digi-Key (recherche du 2026-10-26)")
+    assert comp.alternatives_gap(comp_with(dk={"alternatives": {**rec, "error": "HTTP 400"}}), spec()) == (
+        "recherche refusée par Digi-Key le 2026-10-26")
+    assert comp.alternatives_gap(comp_with(dk={"error": "introuvable"}), None) == "référence inconnue de Digi-Key"
+    assert comp.alternatives_gap(comp_with(), spec(category=IC_CAT)).startswith("famille non concernée")
+    assert comp.alternatives_gap(comp_with(), spec()) == "recherche au prochain passage Digi-Key"
+    # sans les fiches, la vue ne prétend rien (pas de « pas de fiche » trompeur)
+    c = comp_with(dk={"status": "Obsolete"})
+    notice = comp.status_notice(c, "OBSOLETE", "Statut Digi-Key : Obsolete", "https://www.digikey.com/p/r",
+                                "Digi-Key", "digikey")
+    comp.merge(notices := [], [notice], "2026-10-26")
+    assert comp.digest([c], notices, [])["alt_gaps"] == {}
+    assert "*Alternatives :" not in comp.to_markdown(comp.digest([c], notices, []))
+    assert list(comp.digest([c], notices, [], specs={})["alt_gaps"].values()) == [
+        "pas de fiche Digi-Key (statut Digi-Key à vérifier d'abord)"]
+
+
+def test_report_alternatives_escape_untrusted_values_and_skip_odd_entries():
+    import shutil
+    import subprocess
+    evil = "<img src=x onerror=alert(1)> | ::: {.x}"
+    rec = {"searched_at": "2026-10-26", "criteria": [{"id": 1, "name": evil, "value": "[a](javascript:x)"}, "?"],
+           "items": ["pas un objet", {"mpn": evil, "manufacturer": evil, "score": 50, "url": "javascript:alert(1)",
+                                      "description": evil, "diffs": [{"name": evil, "ref": "1", "alt": "2"}, None]}]}
+    c = comp_with(dk={"status": "Obsolete", "alternatives": rec})
+    notice = comp.status_notice(c, "OBSOLETE", "Statut", "https://www.digikey.com/p/r", "Digi-Key", "digikey")
+    comp.merge(notices := [], [notice], "2026-10-26")
+    view = comp.digest([c], notices, notices, specs={})
+    md = comp.to_markdown(view, heading="#")
+    assert "](javascript" not in md and "⇄ 1" in md and "- **\\<img" in md  # lien refusé : MPN sans lien
+    assert "<img" not in comp.to_html_email(view, "T")
+    if shutil.which("pandoc"):
+        out = subprocess.run(["pandoc", "-f", "markdown+fenced_divs+bracketed_spans+pipe_tables", "-t", "html5"],
+                             input=md, capture_output=True, text=True, check=True).stdout
+        assert "<img" not in out and 'href="javascript' not in out and "Alternatives actives Digi-Key" in out
+
+
+def test_chapter_of_a_linked_veille_shows_alternatives_and_reasons(bom, tools):  # noqa: F811
+    service.components_scan(bom.slug, client=AltClient(LTB, similar={"52": [res("RMCF0603FT10K0")]}))
+    v = service.create_veille(name="Veille Indus", subject="s", schedule_expr="30 6 * * 1",
+                              recipients=["a@example.org"], brief="# b\n", include_components=bom.slug)
+    md = v.dir / "rapports" / "2026-10-12-06h30-veille.md"
+    md.write_text("# r\n")
+    service.components_chapter(bom.slug, v.slug, md)
+    text = md.read_text()
+    assert "**Alternatives actives Digi-Key**" in text and "RMCF0603FT10K0" in text and "⇄ 1" in text
+    assert "*Alternatives : famille non concernée" in text  # fiches passées au chapitre aussi
+
+
+def test_report_alternatives_odd_records():
+    rec = {"searched_at": "2026-10-26", "criteria": [], "items": [
+        {"mpn": "ZERO", "manufacturer": "M", "score": 0, "diffs": [{"name": f"P{i}", "ref": "a", "alt": "b"}
+                                                                   for i in range(comp.MAX_DIFFS)]},
+        {"mpn": "", "score": 50}, {"manufacturer": "sans MPN"}, None]}
+    c = comp_with(dk={"status": "Obsolete", "alternatives": rec})
+    notice = comp.status_notice(c, "OBSOLETE", "Statut", "https://www.digikey.com/p/r", "Digi-Key", "digikey")
+    comp.merge(notices := [], [notice], "2026-10-26")
+    md = comp.to_markdown(comp.digest([c], notices, notices, specs={}))
+    # score nul affiché ; écarts stockés tronqués : « … », jamais un compte faux ; entrées sans MPN ignorées
+    assert "— M · 0 % identique" in md and "P2 : a → b ; …" in md and "⇄ 1" in md and "sans MPN" not in md
+    # que des entrées illisibles : le motif est dit (et non un détail muet)
+    c["dk"]["alternatives"] = {**rec, "items": ["x", None, {"mpn": None}]}
+    assert comp.alternatives_gap(c, spec()) == "aucune référence active équivalente chez Digi-Key (recherche du 2026-10-26)"
+    assert comp.criteria({"critical_params": [[1], "x", 1]}, spec())[0]["name"] == "Resistance"  # retouché : pas d'erreur

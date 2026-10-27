@@ -615,6 +615,7 @@ DEFAULT_CRITICAL = frozenset({
 })
 MAX_ALTERNATIVES = 5
 MAX_DIFFS = 8          # différences affichées par alternative
+REPORT_DIFFS = 3       # dont dans le rapport PDF (toutes dans l'interface)
 ALT_MAX_AGE_DAYS = 30  # une recherche plus ancienne est refaite (catalogue des distributeurs vivant)
 _NO_VALUE = frozenset({"", "-", "—"})
 
@@ -684,7 +685,7 @@ def criteria(c: dict, spec: dict | None) -> list[dict]:
     chosen = c.get("critical_params")
     if chosen is None:
         return [p for p in params(spec) if _valued(p) and p["name"] in DEFAULT_CRITICAL]
-    ids = set(chosen) if isinstance(chosen, list) else set()
+    ids = {x for x in chosen if isinstance(x, int)} if isinstance(chosen, list) else set()
     return [p for p in params(spec) if _valued(p) and p["id"] in ids]
 
 
@@ -808,6 +809,24 @@ def alternatives_due(components: list[dict], specs: dict[str, dict], notices: li
     return sorted(due, key=lambda c: (alternatives(c) or {}).get("searched_at") or "")
 
 
+def _alt_items(rec: dict | None) -> list[dict]:
+    """Alternatives affichables d'une recherche (une entrée sans MPN, fichier retouché, est ignorée)."""
+    return [a for a in rec["items"] if isinstance(a, dict) and a.get("mpn") and isinstance(a["mpn"], str)] if rec else []
+
+
+def alternatives_gap(c: dict, spec: dict | None) -> str:
+    """Pourquoi aucune alternative n'est proposée pour cette référence (rapport, e-mail), vide s'il y en a."""
+    rec = alternatives(c)
+    if _alt_items(rec):
+        return ""
+    if rec:
+        return (f"recherche refusée par Digi-Key le {rec['searched_at']}" if rec.get("error")
+                else f"aucune référence active équivalente chez Digi-Key (recherche du {rec['searched_at']})")
+    if (c.get("dk") or {}).get("error") and not spec:
+        return "référence inconnue de Digi-Key"
+    return searchable(c, spec) or "recherche au prochain passage Digi-Key"
+
+
 def sheet(c: dict, spec: dict | None) -> dict:
     """Fiche composant (interface, MCP) : famille, catégorie, caractéristiques (critiques marquées), origine des
     critères, dernière recherche d'alternatives (`stale` : faite avec d'autres critères)."""
@@ -901,11 +920,12 @@ def group(notices: list[dict], components: list[dict], include_quiet: bool = Fal
         dk, web = c.get("dk") or {}, c.get("web_status") or {}
         worst = ns[0] if ns else None
         link = worst["sources"][0] if worst else _status_link(dk, web)
+        alt = alternatives(c)
         rows.append({
             "key": key, "anchor": anchor(key), "tracked": bool(c), "dk": dk, "web": web,
             "mpn": c.get("mpn") or worst["mpn"], "manufacturer": c.get("manufacturer") or worst["manufacturer"],
             "web_checked_at": c.get("web_checked_at"), "notices": ns, "worst": worst, "link": link,
-            "critical_params": c.get("critical_params"), "alts": len((alternatives(c) or {}).get("items") or []),
+            "critical_params": c.get("critical_params"), "alt": alt, "alts": len(_alt_items(alt)),
             "types": list(dict.fromkeys(n["type"] for n in ns)),
             "critical": bool(c) and any(n["type"] in CRITICAL for n in ns),
             "deadline": next((d for n in ns if (d := n.get("ltb_date") or n.get("eol_date"))), ""),
@@ -923,13 +943,18 @@ def summary(components: list[dict], notices: list[dict]) -> dict:
     return {"components": len(components), "notices": len(notices), "critical": len(critical)}
 
 
-def digest(components: list[dict], notices: list[dict], new: list[dict], scan: dict | None = None) -> dict:
-    """Vue commune au rapport, au chapitre et à l'e-mail ; `scan` : dernier passage Digi-Key (`scan_coverage`)."""
-    keys = {key_of(c["mpn"], c["manufacturer"]) for c in components}
+def digest(components: list[dict], notices: list[dict], new: list[dict], scan: dict | None = None,
+           specs: dict[str, dict] | None = None) -> dict:
+    """Vue commune au rapport, au chapitre et à l'e-mail ; `scan` : dernier passage Digi-Key (`scan_coverage`) ;
+    `specs` (fiches) : motif d'absence d'alternatives des composants en fin de vie (`alternatives_gap`) ; sans
+    elles, aucun motif (qui serait faux : « pas de fiche »)."""
+    by_key = {key_of(c["mpn"], c["manufacturer"]): c for c in components}
     worst = worst_by_key(notices)
-    reminder = _sort([w for k, w in worst.items() if k in keys and w["type"] in CRITICAL])
+    reminder = _sort([w for k, w in worst.items() if k in by_key and w["type"] in CRITICAL])
     new = _sort(new)
     return {
+        "alt_gaps": {} if specs is None else {
+            w["key"]: alternatives_gap(by_key[w["key"]], specs.get(w["key"])) for w in reminder},
         "new_critical": [n for n in new if n["type"] in CRITICAL],
         "new_other": [n for n in new if n["type"] not in CRITICAL],
         "reminder": reminder,
@@ -986,12 +1011,37 @@ def _md_table(rows: list[dict]) -> list[str]:
     """Tableau compact : une ligne par composant ; le MPN renvoie à son détail (lien interne).
     Bloc `.comp-table` : le tableau peut se couper entre deux pages (sinon une longue liste saute de page)."""
     out = ["::: {.comp-table}", "| Composant | Fabricant | Avis | Échéance | Lien |", "|---|---|---|---|---|"]
-    out += [f"| [**{md_escape(r['mpn'])}**](#{r['anchor']}) | {md_escape(r['manufacturer'])} "
+    out += [f"| [**{md_escape(r['mpn'])}**](#{r['anchor']}){' ⇄ ' + str(r['alts']) if r['alts'] else ''} "
+            f"| {md_escape(r['manufacturer'])} "
             f"| {_md_badges(r['types'])} | {md_escape(r['deadline'] or '—')} | {_md_link(r['link'])} |" for r in rows]
     return [*out, ":::"]
 
 
-def _md_detail(r: dict) -> list[str]:
+def _md_alternatives(r: dict, gap: str) -> list[str]:
+    """Alternatives d'un composant sous son détail (REPORT_DIFFS écarts chacune), ou le motif de leur absence."""
+    rec, items = r["alt"], _alt_items(r["alt"])
+    if not items:
+        return ["", f"*Alternatives : {md_escape(gap)}.*"] if gap else []
+    crit = " · ".join(f"{md_escape(p.get('name'))} = {md_escape(p.get('value'))}"
+                      for p in rec["criteria"] if isinstance(p, dict))
+    out = ["", f"**Alternatives actives Digi-Key** (recherche du {md_escape(rec['searched_at'])}"
+               f"{f' ; à l’identique : {crit}' if crit else ''} ; à qualifier avant tout remplacement)", ""]
+    for a in items:
+        url, mpn = normalize_url(a.get("url") or ""), f"**{md_escape(a.get('mpn'))}**"
+        line = f"- {f'[{mpn}]({_md_url(url)})' if url else mpn} — {md_escape(a.get('manufacturer'))}"
+        if isinstance(a.get("score"), int):
+            line += f" · {a['score']} % identique"
+        if a.get("description"):
+            line += f" · {md_escape(a['description'])}"
+        diffs = [d for d in a.get("diffs") or [] if isinstance(d, dict)]
+        gaps = " ; ".join(f"{md_escape(d.get('name'))} : {md_escape(d.get('ref'))} → {md_escape(d.get('alt'))}"
+                          for d in diffs[:REPORT_DIFFS])
+        more = " ; …" if len(diffs) > REPORT_DIFFS else ""
+        out += [line + "\\", f"  {f'Écarts : {gaps}{more}' if gaps else 'Autres caractéristiques identiques'}"]
+    return out
+
+
+def _md_detail(r: dict, gap: str = "") -> list[str]:
     out = [f"::: {{#{r['anchor']} .comp}}", f"**{md_escape(r['mpn'])}** — {md_escape(r['manufacturer'])}", ""]
     for n in r["notices"]:
         line = f"- {_md_badges([n['type']])} **{md_escape(n['title'])}**"
@@ -1006,7 +1056,7 @@ def _md_detail(r: dict) -> list[str]:
         if n.get("summary"):
             out.append(f"  {md_escape(n['summary'])}\\")
         out.append(f"  Sources : {_md_sources(n)}")
-    return [*out, ":::", ""]
+    return [*out, *_md_alternatives(r, gap), ":::", ""]
 
 
 def to_markdown(view: dict, heading: str = "##", reminder_limit: int = 200) -> str:
@@ -1042,7 +1092,7 @@ def to_markdown(view: dict, heading: str = "##", reminder_limit: int = 200) -> s
     if detail_rows:
         lines += [f"{sub} Détail par composant", ""]
         for r in detail_rows:
-            lines += _md_detail(r)
+            lines += _md_detail(r, view["alt_gaps"].get(r["key"], ""))
     if cov and not cov["partial"]:
         lines += [f"*{md_escape(cov['text'])}*", ""]
     lines += [f"*Couverture : {view['components']} composants suivis ; statut Digi-Key connu pour "
@@ -1076,6 +1126,8 @@ def to_html_email(view: dict, title: str, ui_hint: str = "") -> str:
         for r in rows:
             link = (f'<a href="{esc(r["link"]["url"])}">{esc(r["link"]["label"])}</a>' if r["link"] else "—")
             who = f"<b>{esc(r['mpn'])}</b><br><small>{esc(r['manufacturer'])}</small>"
+            if r["alts"]:
+                who += f'<br><small style="color:#0f766e">⇄ {r["alts"]} alternative(s) dans le PDF</small>'
             avis = f'{badges(r["types"])}<br><small>{esc(r["worst"]["title"])}</small>'
             cells = (who, avis, f'<span style="white-space:nowrap">{esc(r["deadline"] or "—")}</span>', link)
             tint = "background:#fef2f2;" if r["critical"] else ""
@@ -1118,6 +1170,7 @@ def to_text_email(view: dict) -> str:
         if rows:
             lines.append(f"{label} ({len(rows)} composant(s))")
             lines += [f"- {r['mpn']} ({r['manufacturer']}) : {', '.join(TYPES[t][0] for t in r['types'])}"
+                      f"{' — ' + str(r['alts']) + ' alternative(s) dans le PDF' if r['alts'] else ''}"
                       f"{' — ' + r['link']['url'] if r['link'] else ''}" for r in rows]
             lines.append("")
     if not crit_rows and not other_rows:
@@ -1133,7 +1186,8 @@ XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _XLSX_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
 _XLSX_COLUMNS = (("Composant", 24), ("Fabricant", 22), ("Critique", 9), ("Avis", 28),
                  ("Avis principal", 48), ("Échéance", 12), ("Détecté", 12), ("Statut Digi-Key", 20),
-                 ("Vérifié Digi-Key", 15), ("Statut web", 18), ("Recherche web", 15), ("Lien", 48), ("Suivi", 9))
+                 ("Vérifié Digi-Key", 15), ("Statut web", 18), ("Recherche web", 15), ("Alternatives", 40),
+                 ("Lien", 48), ("Suivi", 9))
 _XLSX_DATES = frozenset(i for i, (name, _) in enumerate(_XLSX_COLUMNS, 1)
                         if name in ("Échéance", "Détecté", "Vérifié Digi-Key", "Recherche web"))
 _XLSX_LINK = next(i for i, (name, _) in enumerate(_XLSX_COLUMNS, 1) if name == "Lien")
@@ -1187,7 +1241,8 @@ def to_xlsx(components: list[dict], notices: list[dict], sources: dict[str, list
         values = (r["mpn"], r["manufacturer"], "Oui" if r["critical"] else "",
                   ", ".join(TYPES[t][0] for t in r["types"]), r["worst"]["title"] if r["worst"] else "",
                   r["deadline"], r["found"], dk.get("status") or dk.get("error"), dk.get("checked_at"),
-                  web_status_label(r["web"]), r["web_checked_at"], url,
+                  web_status_label(r["web"]), r["web_checked_at"],
+                  " ; ".join(f"{a['mpn']} ({a.get('manufacturer') or '?'})" for a in _alt_items(r["alt"])), url,
                   "" if r["tracked"] else "retiré") + ((", ".join(sources.get(r["key"], ())),) if sources is not None else ())
         for col, value in enumerate(values, 1):
             cell = ws.cell(n, col, _xlsx_cell(value, col in _XLSX_DATES))

@@ -1118,14 +1118,14 @@ def test_xlsx_full_list_critical_first_and_safe_cells(watch, tools):
     ws = _sheet(data)
     rows = list(ws.iter_rows(values_only=True))
     assert rows[0][:4] == ("Composant", "Fabricant", "Critique", "Avis")  # plus de réf. interne
-    assert len(rows[0]) == 13 and rows[0][-1] == "Suivi"  # « Veilles » : export de la base seulement
+    assert len(rows[0]) == 14 and rows[0][-1] == "Suivi"  # « Veilles » : export de la base seulement
     assert [r[0] for r in rows[1:]] == ["LM317T", "NE555P", "STM32F103C8T6"]
     lm, ne, stm = rows[1:]
-    assert lm[2] == "Oui" and lm[7] == "Last Time Buy" and lm[12] is None
-    assert ne[2] is None and ne[12] == "retiré" and rows[0][9] == "Statut web" and lm[9] is None
+    assert lm[2] == "Oui" and lm[7] == "Last Time Buy" and lm[13] is None
+    assert ne[2] is None and ne[13] == "retiré" and rows[0][9] == "Statut web" and lm[9] is None
     assert stm[4] == '=HYPERLINK("http://evil/x","clic")' and stm[5] == as_read(2027, 3, 31)
     assert ws.cell(4, 5).data_type == "s" and "<f>" not in _sheet_xml(data)  # texte, jamais formule
-    assert ws.cell(4, 12).hyperlink.target == "https://st.com/pcn/1"
+    assert ws.cell(4, 13).hyperlink.target == "https://st.com/pcn/1"
     assert ws.cell(2, 1).fill.fgColor.rgb.endswith("FEF2F2") and ws.freeze_panes == "A2" and ws.auto_filter.ref
     assert ws.page_setup.orientation == "landscape" and ws.sheet_properties.pageSetUpPr.fitToPage
 

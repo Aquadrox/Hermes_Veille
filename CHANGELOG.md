@@ -7,6 +7,27 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.8.1] — 2026-10-27
+
+Les alternatives trouvées pour les composants en fin de vie n'apparaissaient pas dans le rapport de la veille
+composants : la 0.8.0 les cherchait et les enregistrait, mais seuls l'interface, le MCP et la CLI les lisaient.
+
+### Corrigé
+
+- **Rapport PDF** (et chapitre composants d'une veille rattachée) : sous le détail de chaque composant en fin de
+  vie ou en dernière commande, ses alternatives actives Digi-Key (référence liée, fabricant, part des
+  caractéristiques identiques, description, 3 écarts au plus), avec la date et les critères de la recherche ;
+  sinon, le motif : circuit intégré (famille non concernée), référence inconnue de Digi-Key, aucune équivalente
+  trouvée, recherche refusée ou à venir. Badge « ⇄ n » dans les tableaux.
+- **E-mail** (HTML et texte) : « ⇄ n alternative(s) dans le PDF » par composant concerné.
+- **Excel** (pièce jointe, export de la liste et de la base des composants) : colonne « Alternatives »
+  (« MPN (fabricant) ; … »), avant « Lien ».
+- Le compteur « ⇄ n » de la liste ne compte plus une entrée illisible de `dk.alternatives`.
+
+### Déploiement
+
+- `make update`. Rien à régler : le prochain rapport affiche les alternatives déjà trouvées.
+
 ## [0.8.0] — 2026-10-26
 
 Alternatives aux composants en fin de vie : fiche composant (caractéristiques Digi-Key), caractéristiques
