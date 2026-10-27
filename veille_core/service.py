@@ -1337,7 +1337,7 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
     stamp = store.report_stamp()
     day = stamp[:10]  # un seul instant : jour des livraisons et nom du rapport toujours d'accord
     with _locked():
-        data, notices = comp.load_components(slug), comp.load_notices(slug)
+        data, notices, specs = comp.load_components(slug), comp.load_notices(slug), comp.load_specs(slug)
         valid, rejected = comp.validate_candidates(raw, data["components"])
         statuses, bad = comp.validate_statuses(raw, data["components"])
         rejected += bad
@@ -1364,7 +1364,7 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
                                           "rejected": len(rejected)})
 
     report = comp.pending(notices, "report", {day})
-    view = comp.digest(data["components"], notices, report, data.get("scan"))
+    view = comp.digest(data["components"], notices, report, data.get("scan"), specs)
     cov = view["coverage"]  # D4 : un passage Digi-Key partiel est dit partout (PDF, en-tête, e-mail, sortie)
     body = comp.to_markdown(view, heading="#")
     searched = [c["mpn"] for c in data["components"] if comp.key_of(c["mpn"], c["manufacturer"]) in lot]
@@ -1395,7 +1395,7 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         return "\n".join(lines)
     if track:
         track.update(phase="mail")
-    view = comp.digest(data["components"], notices, mail, data.get("scan"))
+    view = comp.digest(data["components"], notices, mail, data.get("scan"), specs)
     xlsx = _write_xlsx(pdf.parent, slug, data, notices, stamp, actor)
     hint = "Liste complète des composants dans le fichier Excel joint." if xlsx else ""
     with tempfile.NamedTemporaryFile("w", suffix=".html", encoding="utf-8", delete=False) as fh:
@@ -1436,12 +1436,12 @@ def components_chapter(slug: str, for_slug: str, report_md: Path,
     # une exécution commencée avant minuit reste rattachée à son rapport (détection des échecs).
     day, channel = path.name[:10], comp.chapter_channel(for_slug)
     with _locked():
-        data, notices = comp.load_components(slug), comp.load_notices(slug)
+        data, notices, specs = comp.load_components(slug), comp.load_notices(slug), comp.load_specs(slug)
         # Livrés un jour où la veille n'a finalement produit aucun PDF (exécution en échec après
         # l'ajout du chapitre) : pas réellement envoyés, donc réinclus.
         failed = {d for d in comp.delivery_days(notices, channel) if not any(rdir.glob(f"{d}*-veille.pdf"))}
         new = comp.pending(notices, channel, {day} | failed)
-        view = comp.digest(data["components"], notices, new, data.get("scan"))
+        view = comp.digest(data["components"], notices, new, data.get("scan"), specs)
         text = path.read_text(encoding="utf-8").split(CHAPTER_MARK)[0].rstrip()
         store.atomic_write(path, f"{text}\n\n{CHAPTER_MARK}\n\n{comp.to_markdown(view)}")
         for n in new:  # nouvelle date de livraison, y compris pour les réinclus
