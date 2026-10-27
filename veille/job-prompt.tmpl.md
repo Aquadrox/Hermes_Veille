@@ -15,13 +15,13 @@ RÉPERTOIRES (intérieur du conteneur — ne pas utiliser d'autres chemins) :
 
 ÉTAPES OBLIGATOIRES, dans cet ordre :
 
-1. LIS le brief de mission `${dir}/config.md` et suis-le STRICTEMENT : périmètre et thèmes, cadre temporel et anti-répétition, règles de fiabilité, badges, structure, conventions de mise en forme (Markdown enrichi), couverture, ton. C'est le brief qui définit les sujets à rechercher.
+${delegated}1. LIS le brief de mission `${dir}/config.md` et suis-le STRICTEMENT : périmètre et thèmes, cadre temporel et anti-répétition, règles de fiabilité, badges, structure, conventions de mise en forme (Markdown enrichi), couverture, ton. C'est le brief qui définit les sujets à rechercher.
 
 2. HISTORIQUE : `ls -t ${dir}/rapports/`. Si un rapport .md existe, lis le plus récent en entier et ne répète AUCUNE information déjà traitée.
 
 3. PÉRIODE COUVERTE : ${period_desc}. Détermine les dates exactes de cette période (et, pour une période hebdomadaire, le numéro de semaine ISO).
 
-${research}
+4. RECHERCHE : web_search / web_extract sur la période couverte, selon les thèmes du brief. Vérifie chaque source (date exacte, lien précis vers l'article), recoupe les faits clés.
 
 5. RÉDIGE le corps du rapport en Markdown enrichi, EXACTEMENT selon les conventions du brief (blocs `::: {.keyfigures}` avec `.fig`, `::: {.card}` avec badges, `::: {.callout}`, `::: {.timeline}`, `::: {.glossary}`, `::: {.sources}`, tableaux pipe, et UN `<div class="chart-slot"></div>`). Rédige en FRANÇAIS. Écris-le dans `${dir}/rapports/D-veille.md` (D : voir RÉPERTOIRES).
 

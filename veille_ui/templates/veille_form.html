@@ -62,17 +62,37 @@
       </select></label>
   </section>
   {% endif %}
-  {% if not composants %}
   <section class="card">
     <h2>Recherche</h2>
     <label class="inline-choice"><input type="checkbox" name="claude_research"{% if values.claude_research %} checked{% endif %}>
-      Déléguer la recherche web à Claude Code</label>
-    <p class="small muted">L'agent rédige toujours le rapport, à partir des informations sourcées que Claude Code,
-      installé sur l'hôte, renvoie en JSON (conservées dans la page de la veille). Nécessite le pont de l'hôte
-      (<code>sudo ./scripts/install-claude-bridge.sh</code>, état : page Santé) ; sans réponse du pont, l'agent
-      cherche lui-même. Consomme le quota du compte Claude de l'hôte.</p>
+      Déléguer la recherche {{ "et l'analyse" if composants else "et la rédaction" }} à Claude Code</label>
+    <div class="grid4">
+      <label>Modèle Claude
+        <select name="claude_model">
+          <option value="">par défaut (pont, sinon compte)</option>
+          {% for m in CLAUDE_MODELS %}<option value="{{ m }}"{% if values.claude_model == m %} selected{% endif %}>{{ m|capitalize }}</option>{% endfor %}
+        </select></label>
+      <label>Effort
+        <select name="claude_effort">
+          <option value="">par défaut (pont, sinon modèle)</option>
+          {% for e in CLAUDE_EFFORTS %}<option value="{{ e }}"{% if values.claude_effort == e %} selected{% endif %}>{{ e }}</option>{% endfor %}
+        </select></label>
+    </div>
+    {% if composants %}
+    <p class="small muted">Hermes ne fait plus que l'orchestration (statut Digi-Key, enregistrement, PDF, e-mail
+      restent déterministes) ; la recherche web ET l'analyse du lot (avis avec impact, urgence et action, statuts,
+      remplaçants des composants en fin de vie, synthèse) sont faites par Claude Code, installé sur l'hôte, dont la
+      réponse (JSON conservé dans la page de la veille) est validée puis enregistrée.
+    {% else %}
+    <p class="small muted">Hermes ne fait plus que l'orchestration : Claude Code, installé sur l'hôte, fait la
+      recherche web ET rédige le rapport ; le PDF et l'e-mail restent produits par l'application. Les informations
+      sourcées de chaque recherche sont conservées (JSON, page de la veille).
+    {% endif %}
+      Nécessite le pont de l'hôte (<code>sudo ./scripts/install-claude-bridge.sh</code>, état : page Santé) ; sans
+      réponse du pont, l'agent cherche lui-même. Consomme le quota du compte Claude de l'hôte : un modèle plus
+      puissant et un effort plus élevé le consomment plus vite. Le modèle réellement utilisé s'affiche pour chaque
+      recherche (page de la veille).</p>
   </section>
-  {% endif %}
 
   <section class="card">
     <h2>Fréquence</h2>

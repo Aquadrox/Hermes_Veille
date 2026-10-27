@@ -46,7 +46,7 @@
   <h2>Pont Claude Code</h2>
   {% if claude.reachable %}
   <p>Joignable : {{ claude.today }} / {{ claude.max_per_day }} recherche(s) aujourd'hui, {{ claude.running }} en cours,
-    {{ claude.queued }} en attente ; {{ claude.timeout_s }} s au plus par recherche{% if claude.model %}, modèle {{ claude.model }}{% endif %}.</p>
+    {{ claude.queued }} en attente ; {{ claude.timeout_s }} s au plus par recherche ; par défaut : modèle {{ claude.model or "du compte" }}, effort {{ claude.effort or "du modèle" }} (chaque veille peut choisir les siens).</p>
   {% else %}<p class="muted">{{ claude.error }}</p>{% endif %}
   <p class="small muted">Recherche web déléguée à Claude Code sur l'hôte, pour les veilles qui l'activent
     (Modifier → Recherche). Installation : <code>sudo ./scripts/install-claude-bridge.sh</code>.</p>

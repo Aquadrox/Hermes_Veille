@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # install-claude-bridge.sh — installe sur l'HÔTE le pont Claude Code des veilles.
 #
-# Option « recherche déléguée à Claude » d'une veille (désactivée par défaut) : l'agent Hermes rédige
-# toujours le rapport, mais la recherche web est faite par `claude -p` sur l'hôte, qui renvoie un JSON
-# sourcé (conservé dans veilles/<slug>/recherches/). Le conteneur ne voit ni le binaire ni les
+# Option « recherche déléguée à Claude » d'une veille (désactivée par défaut) : la recherche web est faite
+# par `claude -p` sur l'hôte, qui renvoie un JSON sourcé (conservé dans veilles/<slug>/recherches/). Veille
+# thématique : l'agent Hermes rédige toujours le rapport ; veille composants : Claude fait aussi l'analyse. Le conteneur ne voit ni le binaire ni les
 # identifiants de Claude : il passe par une socket Unix, /run/veille-claude-bridge/bridge.sock, dans un dossier
 # au service (systemd) monté en lecture seule dans le conteneur (/opt/claude-bridge, docker-compose.yml) ;
 # aucun port n'est ouvert. Jamais dans le dossier de données : le conteneur peut le modifier.
@@ -14,7 +14,9 @@
 #   sudo ./scripts/install-claude-bridge.sh              # installe, démarre et vérifie le pont
 #   sudo ./scripts/install-claude-bridge.sh --test       # … puis une courte recherche réelle (quota Claude)
 #   sudo CLAUDE_USER=exploitant ./scripts/install-claude-bridge.sh   # compte où Claude Code est connecté
-#   sudo MAX_PER_DAY=40 TIMEOUT=1800 MODEL=sonnet ./scripts/install-claude-bridge.sh
+#   sudo MAX_PER_DAY=40 TIMEOUT=2400 MODEL=sonnet EFFORT=medium ./scripts/install-claude-bridge.sh
+#     (défauts du pont ; chaque veille peut choisir son modèle et son effort. TIMEOUT : par recherche, ou par
+#     sous-lot de 25 composants. Vides : modèle du compte, effort du modèle ; ~/.claude/settings.json non lu)
 #   ./scripts/install-claude-bridge.sh --check           # état du pont (sans rien modifier)
 #   sudo ./scripts/install-claude-bridge.sh --uninstall
 set -euo pipefail
@@ -25,8 +27,9 @@ SERVICE="veille-claude-bridge.service"
 CONTAINER="${CONTAINER:-veille-hermes}"
 CLAUDE_USER="${CLAUDE_USER:-root}"
 MAX_PER_DAY="${MAX_PER_DAY:-20}"
-TIMEOUT="${TIMEOUT:-1200}"
+TIMEOUT="${TIMEOUT:-1800}"
 MODEL="${MODEL:-}"
+EFFORT="${EFFORT:-}"
 MODE=install
 DO_TEST=0
 
@@ -35,7 +38,7 @@ for arg in "$@"; do
         --uninstall) MODE=uninstall ;;
         --check)     MODE=check ;;
         --test)      DO_TEST=1 ;;
-        -h|--help)   sed -n '2,21p' "$0"; exit 0 ;;
+        -h|--help)   sed -n '2,24p' "$0"; exit 0 ;;
         *) echo "option inconnue : $arg" >&2; exit 2 ;;
     esac
 done
@@ -90,6 +93,7 @@ command -v curl >/dev/null || fail "curl requis (vérification du pont)"
 [ -d "$DATA" ] || fail "dossier de données introuvable : $DATA (./scripts/deploy.sh --init)"
 [[ "$MAX_PER_DAY" =~ ^[0-9]+$ && "$TIMEOUT" =~ ^[0-9]+$ ]] || fail "MAX_PER_DAY et TIMEOUT : nombres entiers"
 [[ "$MODEL" =~ ^[A-Za-z0-9._:-]*$ ]] || fail "MODEL : caractères non pris en charge"
+[[ "$EFFORT" =~ ^(|low|medium|high|xhigh|max)$ ]] || fail "EFFORT : low, medium, high, xhigh, max ou vide"
 
 # Compte où Claude Code est connecté : son HOME porte les identifiants (~/.claude), jamais copiés ailleurs.
 CLAUDE_HOME="$(getent passwd "$CLAUDE_USER" | cut -d: -f6)"
@@ -122,6 +126,7 @@ sed -e "s|^ExecStart=.*|ExecStart=/usr/bin/python3 $REPO/scripts/claude-bridge.p
     -e "s|^Environment=CLAUDE_BRIDGE_MAX_PER_DAY=.*|Environment=CLAUDE_BRIDGE_MAX_PER_DAY=$MAX_PER_DAY|" \
     -e "s|^Environment=CLAUDE_BRIDGE_TIMEOUT=.*|Environment=CLAUDE_BRIDGE_TIMEOUT=$TIMEOUT|" \
     -e "s|^Environment=CLAUDE_BRIDGE_MODEL=.*|Environment=CLAUDE_BRIDGE_MODEL=$MODEL|" \
+    -e "s|^Environment=CLAUDE_BRIDGE_EFFORT=.*|Environment=CLAUDE_BRIDGE_EFFORT=$EFFORT|" \
     "$REPO/deploy/systemd/$SERVICE" > "$UNIT_DIR/$SERVICE"
 if [ "$CLAUDE_USER" != root ]; then
     # Un compte non root ne peut pas changer le groupe de la socket : il prend celui de hermes comme groupe principal.
@@ -137,7 +142,7 @@ for _ in $(seq 1 20); do
     [ -S "$SOCK" ] && health >/dev/null && break
     sleep 0.5
 done
-ok "pont installé : $SERVICE ($CLAUDE_USER, $MAX_PER_DAY recherches/jour, $TIMEOUT s max)"
+ok "pont installé : $SERVICE ($CLAUDE_USER, $MAX_PER_DAY recherches/jour, $TIMEOUT s max, modèle ${MODEL:-du compte}, effort ${EFFORT:-du modèle})"
 check
 
 if [ "$DO_TEST" = 1 ]; then

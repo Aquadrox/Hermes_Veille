@@ -64,7 +64,15 @@ _ALLDATASHEET_HOST = re.compile(r"(?:[a-z0-9-]+\.)*alldatasheet[a-z]{0,2}\.(?:co
 SCOPES = ("référence", "gamme")
 HEADER_WORDS = {"mpn", "référence", "reference", "ref", "partnumber", "manufacturerpartnumber", "fabricant",
                 "manufacturer", "mfr", "brand", "marque"}
-_TEXT_LIMITS = {"title": 200, "number": 64, "summary": 600, "label": 80}
+_TEXT_LIMITS = {"title": 200, "number": 64, "summary": 600, "label": 80, "impact": 400, "action": 300,
+                "notes": 300, "synthesis": 1500}
+# Analyse d'un avis par la recherche déléguée à Claude (claude_research.SCHEMA_PCN) : facultative, comme ses champs.
+URGENCIES = ("immédiate", "à planifier", "à surveiller")
+ANALYSIS_FIELDS = ("impact", "urgency", "action")
+# Remplaçants trouvés sur le web (successeur du fabricant, équivalent reconnu) d'un composant en fin de vie :
+# complément de la recherche paramétrique Digi-Key, qui ne couvre pas les circuits intégrés (FAMILIES).
+COMPATIBILITIES = ("broche à broche", "fonctionnel", "à valider")
+MAX_WEB_ALTERNATIVES = 3
 
 
 class ComponentsError(store.StoreError):
@@ -390,12 +398,74 @@ def validate_candidates(raw, components: list[dict]) -> tuple[list[dict], list[s
             "summary": _text(item.get("summary"), "summary"),
             "sources": sources[:MAX_SOURCES],
             "origin": "web",
+            **analysis(item),
         }
         valid.extend({**base, "key": key_of(c["mpn"], c["manufacturer"]), "mpn": c["mpn"],
                       "manufacturer": c["manufacturer"]} for c in matched)
     if len(items) > MAX_CANDIDATES:
         rejected.append(f"{len(items) - MAX_CANDIDATES} avis au-delà de la limite de {MAX_CANDIDATES}")
     return valid, rejected
+
+
+def analysis(item: dict) -> dict:
+    """Analyse facultative d'un avis (impact, urgence, action conseillée) ; champs vides omis."""
+    urgency = _text(item.get("urgency"), "label").lower()
+    out = {"impact": _text(item.get("impact"), "impact"), "action": _text(item.get("action"), "action"),
+           "urgency": urgency if urgency in URGENCIES else ""}
+    return {k: v for k, v in out.items() if v}
+
+
+def validate_replacements(raw, components: list[dict]) -> tuple[dict[str, list[dict]], list[str]]:
+    """{"replacements": [{"mpn", "manufacturer", "candidates": [...]}]} -> ({clé suivie: remplaçants}, rejets).
+    Même rigueur que les avis : référence suivie, page http(s) qui justifie chaque remplaçant (jamais
+    alldatasheet), au plus MAX_WEB_ALTERNATIVES par référence. Champ facultatif."""
+    items = raw.get("replacements") if isinstance(raw, dict) else None
+    if not isinstance(items, list):
+        return {}, [] if items is None else ["« replacements » : liste attendue"]
+    match = _matcher(components)
+    found: dict[str, list[dict]] = {}
+    rejected = []
+    for i, item in enumerate(items[:MAX_CANDIDATES], 1):
+        c = match(item.get("mpn"), _text(item.get("manufacturer"), "label")) if isinstance(item, dict) else None
+        if c is None:
+            rejected.append(f"remplaçants #{i} : aucune référence suivie")
+            continue
+        out = found.setdefault(key_of(c["mpn"], c["manufacturer"]), [])
+        for cand in item.get("candidates") or []:
+            if not isinstance(cand, dict) or len(out) >= MAX_WEB_ALTERNATIVES:
+                continue
+            mpn, url = _text(cand.get("mpn"), "label"), normalize_url(cand.get("url") or "")
+            if not mpn or norm_mpn(mpn) == norm_mpn(c["mpn"]) or not url or is_alldatasheet(url):
+                rejected.append(f"remplaçant de {c['mpn']} : MPN ou page justificative invalide")
+                continue
+            compat = _text(cand.get("compatibility"), "label").lower()
+            out.append({"mpn": mpn, "manufacturer": _text(cand.get("manufacturer"), "label"), "url": url,
+                        "compatibility": compat if compat in COMPATIBILITIES else "à valider",
+                        "notes": _text(cand.get("notes"), "notes")})
+    return {k: v for k, v in found.items() if v}, rejected
+
+
+def synthesis(raw) -> str:
+    """Synthèse de la recherche (D-pcn.json d'une recherche déléguée à Claude), pour le rapport et l'e-mail."""
+    return _text(raw.get("synthesis"), "synthesis") if isinstance(raw, dict) else ""
+
+
+def apply_replacements(components: list[dict], found: dict[str, list[dict]], day: str) -> int:
+    """Enregistre (en place) les remplaçants trouvés sur le web ; renvoie le nombre de références touchées."""
+    n = 0
+    for c in components:
+        items = found.get(key_of(c["mpn"], c["manufacturer"]))
+        if items:
+            c["web_alternatives"] = {"checked_at": day, "items": items}
+            n += 1
+    return n
+
+
+def web_alternatives(c: dict) -> dict | None:
+    """Derniers remplaçants trouvés sur le web, ou None (jamais cherchés, ou fichier retouché)."""
+    rec = c.get("web_alternatives")
+    ok = isinstance(rec, dict) and isinstance(rec.get("checked_at"), str) and isinstance(rec.get("items"), list)
+    return {**rec, "items": [a for a in rec["items"] if isinstance(a, dict) and a.get("mpn")]} if ok else None
 
 
 def validate_statuses(raw, components: list[dict]) -> tuple[dict[str, dict], list[str]]:
@@ -501,7 +571,7 @@ def merge(notices: list[dict], candidates: list[dict], found_at: str | None = No
         if known is not None:
             urls = {s["url"] for s in known["sources"]}
             known["sources"] += [s for s in c["sources"] if s["url"] not in urls][: MAX_SOURCES - len(known["sources"])]
-            for field in ("number", "published", "ltb_date", "eol_date", "summary"):
+            for field in ("number", "published", "ltb_date", "eol_date", "summary", *ANALYSIS_FIELDS):
                 if not known.get(field) and c.get(field):
                     known[field] = c[field]
             for ident in _identities(known):
@@ -613,6 +683,36 @@ def search_since(c: dict) -> str | None:
     if not web:
         return None
     return (dt.date.fromisoformat(web[:10]) - dt.timedelta(days=WEB_MARGIN_DAYS)).isoformat()
+
+
+def _fallback(c: dict) -> dict:
+    """Repli d'une référence inconnue de Digi-Key, pour l'agent : sa recherche alldatasheet (dont le « Direct
+    Link » mène au fabricant), ce qu'un passage précédent en a établi (statut web, site du fabricant), et les
+    références proches que Digi-Key liste (`near` : variantes, alias)."""
+    if not (c.get("dk") or {}).get("error"):
+        return {}
+    web = c.get("web_status") or {}
+    return {"alldatasheet": alldatasheet_url(c["mpn"]), "web_status": web.get("status"),
+            "maker": web.get("maker"), "digikey_near": near(c)[:NEAR_FOR_AGENT]}
+
+
+def agent_batch(lot: list[dict], notices: list[dict]) -> list[dict]:
+    """Lot de recherche web tel que le reçoit la recherche (l'agent à la sortie du scan, ou Claude)."""
+    known: dict[str, list[str]] = {}
+    for n in notices:
+        known.setdefault(n["key"], []).append(n.get("number") or n["title"])
+    return [{"mpn": c["mpn"], "manufacturer": c["manufacturer"],
+             "since": search_since(c), "digikey_status": (c.get("dk") or {}).get("status"),
+             # non nul : Digi-Key ne la trouve pas, la recherche établit elle-même son statut (« statuses »)
+             "digikey_error": (c.get("dk") or {}).get("error"), **_fallback(c),
+             "known": known.get(key_of(c["mpn"], c["manufacturer"]), [])[:20]}
+            for c in lot]
+
+
+def planned_batch(data: dict) -> list[dict]:
+    """Composants du lot tiré par le dernier scan (`batch` de components.json, vidé par finalize)."""
+    by_key = {key_of(c["mpn"], c["manufacturer"]): c for c in data["components"]}
+    return [by_key[k] for k in data.get("batch") or [] if k in by_key]
 
 
 # --------------------------------------------------------------------------
@@ -935,6 +1035,7 @@ def sheet(c: dict, spec: dict | None) -> dict:
             "unsearchable": searchable(c, spec),
             "params": [{**p, "critical": p["id"] in crit, "valued": _valued(p)} for p in params(spec)],
             "custom": c.get("critical_params") is not None, "alternatives": alternatives(c),
+            "web_alternatives": web_alternatives(c),
             "stale": alternatives_stale(c, spec)}
 
 
@@ -1020,12 +1121,13 @@ def group(notices: list[dict], components: list[dict], include_quiet: bool = Fal
         dk, web = c.get("dk") or {}, c.get("web_status") or {}
         worst = ns[0] if ns else None
         link = worst["sources"][0] if worst else _status_link(dk, web)
-        alt = alternatives(c)
+        alt, web_alt = alternatives(c), web_alternatives(c)
         rows.append({
             "key": key, "anchor": anchor(key), "tracked": bool(c), "dk": dk, "web": web,
             "mpn": c.get("mpn") or worst["mpn"], "manufacturer": c.get("manufacturer") or worst["manufacturer"],
             "web_checked_at": c.get("web_checked_at"), "notices": ns, "worst": worst, "link": link,
-            "critical_params": c.get("critical_params"), "alt": alt, "alts": len(_alt_items(alt)),
+            "critical_params": c.get("critical_params"), "alt": alt, "web_alt": web_alt,
+            "alts": len(_alt_items(alt)) + len((web_alt or {}).get("items") or []),
             "types": list(dict.fromkeys(n["type"] for n in ns)),
             "critical": bool(c) and any(n["type"] in CRITICAL for n in ns),
             "deadline": next((d for n in ns if (d := n.get("ltb_date") or n.get("eol_date"))), ""),
@@ -1044,10 +1146,11 @@ def summary(components: list[dict], notices: list[dict]) -> dict:
 
 
 def digest(components: list[dict], notices: list[dict], new: list[dict], scan: dict | None = None,
-           specs: dict[str, dict] | None = None) -> dict:
+           specs: dict[str, dict] | None = None, synthesis: str = "") -> dict:
     """Vue commune au rapport, au chapitre et à l'e-mail ; `scan` : dernier passage Digi-Key (`scan_coverage`) ;
     `specs` (fiches) : motif d'absence d'alternatives des composants en fin de vie (`alternatives_gap`) ; sans
-    elles, aucun motif (qui serait faux : « pas de fiche »)."""
+    elles, aucun motif (qui serait faux : « pas de fiche »). `synthesis` : synthèse de la recherche déléguée à
+    Claude pour cette exécution (vide sinon)."""
     by_key = {key_of(c["mpn"], c["manufacturer"]): c for c in components}
     worst = worst_by_key(notices)
     reminder = _sort([w for k, w in worst.items() if k in by_key and w["type"] in CRITICAL])
@@ -1063,6 +1166,7 @@ def digest(components: list[dict], notices: list[dict], new: list[dict], scan: d
         "web_checked": sum(1 for c in components if c.get("web_checked_at")),
         "dk_checked": sum(1 for c in components if (c.get("dk") or {}).get("status")),
         "coverage": scan_coverage(scan),
+        "synthesis": synthesis,
     }
 
 
@@ -1120,8 +1224,9 @@ def _md_table(rows: list[dict]) -> list[str]:
 def _md_alternatives(r: dict, gap: str) -> list[str]:
     """Alternatives d'un composant sous son détail (REPORT_DIFFS écarts chacune), ou le motif de leur absence."""
     rec, items = r["alt"], _alt_items(r["alt"])
+    web = _md_web_alternatives(r.get("web_alt"))
     if not items:
-        return ["", f"*Alternatives : {md_escape(gap)}.*"] if gap else []
+        return (["", f"*Alternatives : {md_escape(gap)}.*"] if gap and not web else []) + web
     crit = " · ".join(md_escape(criterion(p)) for p in rec["criteria"] if isinstance(p, dict))
     out = ["", f"**Alternatives actives Digi-Key** (recherche du {md_escape(rec['searched_at'])}"
                f"{f' ; critères : {crit}' if crit else ''} ; à qualifier avant tout remplacement)", ""]
@@ -1137,6 +1242,20 @@ def _md_alternatives(r: dict, gap: str) -> list[str]:
                           for d in diffs[:REPORT_DIFFS])
         more = " ; …" if len(diffs) > REPORT_DIFFS else ""
         out += [line + "\\", f"  {f'Écarts : {gaps}{more}' if gaps else 'Autres caractéristiques identiques'}"]
+    return out + web
+
+
+def _md_web_alternatives(rec: dict | None) -> list[str]:
+    """Remplaçants trouvés sur le web (recherche déléguée à Claude), sous le détail d'un composant."""
+    if not rec or not rec["items"]:
+        return []
+    out = ["", f"**Remplaçants trouvés sur le web** (recherche du {md_escape(rec['checked_at'])} ; à qualifier "
+               "avant tout remplacement)", ""]
+    for a in rec["items"]:
+        url, mpn = normalize_url(a.get("url") or ""), f"**{md_escape(a['mpn'])}**"
+        line = f"- {f'[{mpn}]({_md_url(url)})' if url else mpn} — {md_escape(a.get('manufacturer'))}"
+        line += f" · {md_escape(a.get('compatibility') or 'à valider')}"
+        out.append(line + (f" · {md_escape(a['notes'])}" if a.get("notes") else ""))
     return out
 
 
@@ -1154,6 +1273,11 @@ def _md_detail(r: dict, gap: str = "") -> list[str]:
         out.append(line + (" — " + " · ".join(dates) if dates else "") + "\\")
         if n.get("summary"):
             out.append(f"  {md_escape(n['summary'])}\\")
+        if n.get("impact") or n.get("action"):
+            head = f"*Analyse{' — urgence ' + md_escape(n['urgency']) if n.get('urgency') else ''}* : "
+            text = " ".join(filter(None, (md_escape(n.get("impact")),
+                                          f"**Action :** {md_escape(n['action'])}" if n.get("action") else "")))
+            out.append(f"  {head}{text}\\")
         out.append(f"  Sources : {_md_sources(n)}")
     return [*out, *_md_alternatives(r, gap), ":::", ""]
 
@@ -1177,6 +1301,8 @@ def to_markdown(view: dict, heading: str = "##", reminder_limit: int = 200) -> s
     cov = view.get("coverage")
     if cov and cov["partial"]:
         lines += ["::: {.callout .vigilance}", md_escape(cov["text"]), ":::", ""]
+    if view.get("synthesis"):
+        lines += ["::: {.callout}", f"**Synthèse de la recherche** — {md_escape(view['synthesis'])}", ":::", ""]
     if crit_rows:
         lines += ["::: {.critical}", f"{sub} Nouvelles fins de vie et dernières commandes", "",
                   *_md_table(crit_rows), ":::", ""]
@@ -1243,6 +1369,9 @@ def to_html_email(view: dict, title: str, ui_hint: str = "") -> str:
     if cov and cov["partial"]:
         parts.append(f'<div style="border-left:6px solid #d97706;background:#fff7ed;padding:10px;margin:12px 0">'
                      f"<b>⚠ {esc(cov['text'])}</b></div>")
+    if view.get("synthesis"):
+        parts.append(f'<div style="border-left:6px solid #0f766e;background:#f0fdfa;padding:10px;margin:12px 0">'
+                     f"<b>Synthèse</b> — {esc(view['synthesis'])}</div>")
     if crit_rows:
         parts.append(f'<div style="border-left:6px solid #b91c1c;background:#fef2f2;padding:10px;margin:12px 0">'
                      f'<h3 style="color:#b91c1c;margin:0 0 8px">⚠ {len(crit_rows)} composant(s) avec une nouvelle '
@@ -1264,6 +1393,8 @@ def to_text_email(view: dict) -> str:
     crit_rows, other_rows, _ = _sections(view, 0)
     cov = view.get("coverage")
     lines = [f"⚠ {cov['text']}", ""] if cov and cov["partial"] else []
+    if view.get("synthesis"):
+        lines += [f"Synthèse : {view['synthesis']}", ""]
     for label, rows in (("NOUVELLES FINS DE VIE / DERNIÈRES COMMANDES", crit_rows),
                         ("AUTRES NOUVEAUX AVIS", other_rows)):
         if rows:

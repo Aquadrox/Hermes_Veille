@@ -387,25 +387,68 @@ l'agent avec ce moteur.
 
 ## Recherche déléguée à Claude Code (option par veille)
 
-Option d'une veille thématique, **désactivée par défaut** : la recherche web est confiée à **Claude Code**,
-installé et connecté sur l'**hôte**. L'agent Hermes tourne normalement (modèle, garde-fou, rédaction, PDF,
-e-mail) ; seule son étape RECHERCHE change :
+Option de chaque veille, **désactivée par défaut** (sans elle, rien ne change : prompt de l'agent identique) :
+la recherche web ET l'analyse sont confiées à **Claude Code**, installé et connecté sur l'**hôte** ; Hermes ne
+fait plus que l'**orchestration** (lancer les commandes, attendre, publier) et reprend tout lui-même si Claude
+échoue. Le PDF, l'e-mail, Digi-Key et l'enregistrement restent produits par l'application, sans LLM.
 
-1. il lance `veillectl research claude <slug>` (seule commande ajoutée à sa liste blanche, et seulement si
-   l'option est activée) ;
-2. la commande construit le prompt **elle-même**, à partir du brief, de la période couverte et des URL du
-   rapport précédent (l'agent n'y ajoute rien), et le dépose auprès du **pont de l'hôte** ;
+Veille thématique : Claude **recherche et rédige** le rapport.
+
+1. l'agent lance `veillectl research claude <slug> <dir>/rapports/D-veille.md` (seule commande ajoutée à sa
+   liste blanche, et seulement si l'option est activée) ;
+2. la commande construit le prompt **elle-même**, à partir du brief complet (mise en forme comprise), de la
+   période couverte et du rapport précédent (anti-répétition ; l'agent n'y ajoute rien), et le dépose auprès du
+   **pont de l'hôte** ;
 3. le pont lance `claude -p` avec les seuls outils **WebSearch et WebFetch**, dans un dossier vide, sans
    réglages utilisateur (ni hooks, ni plugins, ni MCP) : Claude ne peut ni lire de fichier ni lancer de
    commande sur l'hôte, même détourné par une page lue ;
-4. Claude renvoie un **JSON** structuré (`items` : thème, titre, résumé, URL, date, source, chiffres clés,
-   confiance, page lue ou non ; `coverage` : couverture de chaque thème du brief ; `notes`) ;
-5. l'agent rédige le rapport à partir de ce JSON (contenu externe, encadré comme non fiable), vérifie les
-   faits clés avec `web_extract` et complète les thèmes sans résultat avec `web_search`.
+4. Claude renvoie un **JSON** structuré : les informations sourcées (`items` : thème, titre, résumé, URL,
+   date, source, chiffres clés, confiance, page lue ou non ; `coverage` : couverture de chaque thème du brief ;
+   `notes`), gardées pour analyse, et le rapport (`report_md`, `charts`, `mail`) ;
+5. la commande écrit `D-veille.md`, `D-charts.json` et `D-mail.json` ; l'agent lance `veillectl report
+   publish` (PDF, e-mail), comme sans l'option. Il ne lit, ne cherche ni ne rédige plus rien, sauf en repli.
+
+Les recherches lancées **à la demande** (bouton, MCP, CLI) restent des recherches seules (JSON d'informations
+sourcées), sans rédaction.
 
 La recherche dure plusieurs minutes (4 à 5 minutes sur la veille industrie 4.0), plus que le délai d'un appel
-d'outil de Hermes : la commande attend 5 minutes au plus, puis répond « EN COURS » et l'agent la relance.
-Si le pont ne répond pas ou que Claude échoue, l'agent cherche lui-même (`web_search`, comme sans l'option).
+d'outil de Hermes : la commande attend 5 minutes au plus, puis répond « EN COURS » avec l'avancement (sortie
+différente à chaque appel : les garde-fous de boucle de Hermes, qui arrêtent un job après 5 sorties identiques, ne
+la prennent pas pour une boucle) et l'agent la relance, sans limite de relances : le pont borne chaque travail
+(`TIMEOUT`) et la commande abandonne au-delà de 6 h. Si le pont ne répond pas ou que Claude échoue, l'agent
+cherche lui-même (`web_search`, comme sans l'option).
+
+**Veille composants** : Hermes ne fait plus que l'**orchestration**. Il lance le scan Digi-Key (inchangé), puis
+`veillectl research claude <slug> <dir>/rapports/D-pcn.json` : Claude fait **toute la recherche web et
+l'analyse** du lot (avis PCN / EOL / LTB / NRND, statut des références inconnues de Digi-Key, références proches,
+repli alldatasheet : mêmes règles que l'agent), et sa réponse, au format de `D-pcn.json`, est écrite telle quelle
+dans ce fichier. Il y ajoute ce que l'agent ne faisait pas :
+
+- pour chaque avis, une **analyse** : impact, urgence (immédiate, à planifier, à surveiller) et action
+  conseillée, affichées sous l'avis (PDF, interface) ;
+- des **remplaçants trouvés sur le web** pour les composants en fin de vie (successeur annoncé par le fabricant,
+  équivalents reconnus ; compatibilité broche à broche, fonctionnelle ou à valider), chacun justifié par une page
+  lue ; complément de la recherche paramétrique Digi-Key, qui exclut les circuits intégrés ;
+- une **synthèse** de quelques phrases, en tête du rapport PDF et de l'e-mail. L'agent passe alors à `veillectl components finalize`, qui la valide (références suivies, liens,
+alldatasheet refusé comme preuve) et l'enregistre, puis produit le PDF et l'e-mail. Il ne refait les étapes de
+recherche lui-même qu'en cas d'échec de Claude.
+
+Le lot web (`batch_size`, jusqu'à 500) est **découpé en sous-lots** de 25 composants, un fabricant d'un seul
+tenant tant qu'il y tient (un avis vise souvent une gamme). Chacun est un `claude -p` à part (délai et contexte
+bornés), mis dans la file du pont, qui les enchaîne ; leurs réponses sont réunies en un seul fichier. Le plafond
+quotidien du pont compte les **recherches**, pas leurs sous-lots. Un sous-lot en échec ne fait pas échouer les
+autres : ses composants ne sont pas marqués « recherchés » par finalize et repassent en tête du lot suivant.
+Compter quelques minutes par sous-lot : un lot de 400 références (16 sous-lots) prend une à deux heures avec un
+seul `claude` à la fois (`CLAUDE_BRIDGE_CONCURRENCY` de l'unité systemd pour en lancer plusieurs, au prix du quota).
+
+**Modèle et effort** : par veille (interface : Modifier → Recherche ; MCP `update_veille` `claude_model` /
+`claude_effort` ; `veillectl edit <slug> --claude-model sonnet --claude-effort medium`, `defaut` pour revenir au
+défaut) : `haiku`, `sonnet`, `opus`, `fable` (alias de Claude Code : dernier modèle de chaque famille) et
+`low` … `max`. Sans choix : ceux du pont (`MODEL`, `EFFORT` à l'installation), sinon le modèle par défaut du
+compte et l'effort par défaut de ce modèle. Le pont ne lit **pas** `~/.claude/settings.json` (réglages du compte
+interactif). Le modèle **réellement utilisé** (d'après Claude Code, qui emploie aussi Haiku pour lire les pages)
+s'affiche pour chaque recherche dans la page de la veille. Un modèle plus puissant et un effort plus élevé
+consomment le quota plus vite.
 
 **Chaque réponse est conservée pour analyse** dans `veilles/<slug>/recherches/AAAAMMJJ-HHMMSS-claude.json` :
 prompt, réponse complète, durée, nombre de tours, coût équivalent API rapporté par Claude Code. Avec un
@@ -418,7 +461,7 @@ l'usage interactif de Claude Code (environ 1,4 $ équivalent et 50 tours pour un
 sudo ./scripts/install-claude-bridge.sh            # service systemd veille-claude-bridge, vérifications
 sudo ./scripts/install-claude-bridge.sh --test     # … et une courte recherche réelle
 ./scripts/install-claude-bridge.sh --check         # état (hôte et conteneur) ; make claude-bridge-check
-sudo MAX_PER_DAY=40 TIMEOUT=1800 MODEL=sonnet ./scripts/install-claude-bridge.sh   # bornes et modèle
+sudo MAX_PER_DAY=40 TIMEOUT=2400 MODEL=sonnet EFFORT=medium ./scripts/install-claude-bridge.sh   # bornes, défauts
 sudo CLAUDE_USER=exploitant ./scripts/install-claude-bridge.sh                        # autre compte connecté
 ```
 
@@ -429,7 +472,7 @@ Le pont (`scripts/claude-bridge.py`, bibliothèque standard) écoute sur une **s
 (`/opt/claude-bridge`, `docker-compose.yml`). Il n'est jamais dans le dossier de données, que le conteneur peut
 modifier : un lien symbolique posé à la place de la socket y détournerait le `chown` du service, qui tourne en
 root. Le pont refuse de démarrer si ce dossier est un lien ou modifiable par un autre compte. Bornes : un
-`claude` à la fois, 20 recherches par jour, 20 minutes par recherche (réglables à l'installation). Résultats du
+`claude` à la fois, 20 recherches par jour, 30 minutes par recherche ou sous-lot (réglables à l'installation). Résultats du
 pont gardés 30 jours dans `/var/lib/veille-claude-bridge`. Le montage date de la v0.9.0 : recréer le conteneur
 (`docker compose up -d`) après la mise à jour.
 
@@ -437,7 +480,8 @@ pont gardés 30 jours dans `/var/lib/veille-claude-bridge`. Le montage date de l
 Telegram (« Active la recherche Claude pour la veille industrie-4-0 » : `update_veille`,
 `claude_research=true`) ou `veillectl edit <slug> --claude-research on`.
 
-**À la demande**, option activée ou non, sans rapport ni e-mail : bouton « Rechercher avec Claude maintenant »
+**À la demande**, option activée ou non, sans rapport ni e-mail (veille composants : sur le lot en attente,
+sinon celui du prochain passage, sans enregistrer d'avis) : bouton « Rechercher avec Claude maintenant »
 de la page de la veille, outils MCP `start_claude_research` (avec une `question` précise, facultative) puis
 `get_claude_research` / `list_claude_research`, ou `veillectl research ask <slug> --question "…" --wait`.
 

@@ -7,6 +7,54 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.10.0] — 2026-10-27
+
+Option `claude_research` : Hermes ne fait plus que l'orchestration, Claude recherche, analyse et rédige. Sans
+l'option, rien ne change (prompts identiques). Modèle et effort au choix.
+
+### Ajouté
+
+- **Veille thématique : Claude recherche ET rédige le rapport** (exécution planifiée, option activée).
+  `veillectl research claude <slug> <rapports/D-veille.md>` donne à Claude le brief complet et le rapport
+  précédent ; sa réponse (informations sourcées gardées pour analyse, rapport Markdown, graphique, période et
+  messages clés) devient D-veille.md, D-charts.json et D-mail.json. L'agent ne fait plus que `report publish`.
+  Repli : il fait toutes les étapes lui-même si Claude échoue ou ne rédige pas. Les recherches à la demande
+  restent des recherches seules.
+- **Veille composants : analyse par Claude** — impact, urgence et action conseillée de chaque avis ; remplaçants
+  trouvés sur le web pour les composants en fin de vie (successeur du fabricant, équivalents, compatibilité, page
+  justificative obligatoire), affichés dans le PDF et la fiche du composant ; synthèse en tête du PDF et de
+  l'e-mail. Champs facultatifs de D-pcn.json, validés par finalize.
+
+- **Veille composants : recherche ET analyse déléguées à Claude** (option `claude_research`). Hermes orchestre
+  (scan Digi-Key, finalize, PDF, e-mail) ; `veillectl research claude <slug> <rapports/D-pcn.json>` envoie le lot
+  à Claude, avec les règles de recherche de l'agent, et écrit sa réponse (avis, statuts web) dans le fichier que
+  finalize valide. Repli : l'agent fait la recherche lui-même si Claude échoue.
+- **Sous-lots** de 25 composants (fabricants d'un seul tenant), déposés ensemble et réunis en un fichier : un lot
+  de plusieurs centaines de références tient dans le délai et le contexte de chaque `claude -p`. Un sous-lot en
+  échec n'est pas marqué recherché (`unsearched` de D-pcn.json) et repasse en tête du lot suivant.
+- **Modèle et effort par veille** (`claude_model` : haiku, sonnet, opus, fable ; `claude_effort` : low … max) :
+  interface, MCP, `veillectl create|edit --claude-model --claude-effort`. Défauts du pont : `MODEL` et `EFFORT`
+  de l'installation. Modèles réellement utilisés enregistrés avec chaque recherche et affichés.
+
+### Modifié
+
+- Pont : durée maximale par défaut 30 min (par recherche ou sous-lot) ; plafond quotidien compté en recherches
+  (champ `group`), 40 sous-lots au plus par recherche ; refuse un modèle ou un effort inconnu.
+- « EN COURS » : sortie qui change à chaque appel (sous-lots terminés, minutes écoulées), plus de limite fixe de
+  relances dans le prompt ; abandon par la commande au-delà de 6 h.
+
+### Sécurité
+
+- `veillectl research claude` écrit seulement les fichiers de sortie horodatés de SA veille (garde-fou et
+  commande), jamais ceux d'un rapport déjà publié ; avis, statuts et remplaçants de Claude passent par la même
+  validation que ceux de l'agent (références suivies, liens http(s), alldatasheet refusé comme preuve).
+
+### Corrigé
+
+- Nombre de recherches web d'une recherche Claude : lu dans `modelUsage` (le compteur `server_tool_use` vaut 0).
+- Sortie « EN COURS » identique d'un appel à l'autre : les garde-fous de boucle de Hermes (arrêt d'un job après
+  5 sorties identiques sans progrès) auraient coupé une recherche longue.
+
 ## [0.9.0] — 2026-10-27
 
 Recherche d'une veille déléguée à Claude Code, installé sur l'hôte : option par veille, désactivée par défaut.

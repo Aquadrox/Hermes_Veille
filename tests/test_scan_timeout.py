@@ -431,7 +431,8 @@ def documented_calls(prompt: str, rapports: str) -> list[dict]:
     return calls
 
 
-@pytest.mark.parametrize("kind, claude", [("composants", False), ("veille", False), ("veille", True)])
+@pytest.mark.parametrize("kind, claude", [("composants", False), ("composants", True), ("veille", False),
+                                         ("veille", True)])
 def test_prompt_contract_is_exactly_what_the_guard_permits(tools, kind, claude):  # noqa: F811
     v = service.create_veille(name=f"Veille {kind}", subject="s", schedule_expr="0 8 * * 1",
                               recipients=["a@example.org"], brief="# b\n", kind=kind,
