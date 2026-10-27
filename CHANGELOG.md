@@ -48,6 +48,9 @@ l'option, rien ne change (prompts identiques). Modèle et effort au choix.
 - `veillectl research claude` écrit seulement les fichiers de sortie horodatés de SA veille (garde-fou et
   commande), jamais ceux d'un rapport déjà publié ; avis, statuts et remplaçants de Claude passent par la même
   validation que ceux de l'agent (références suivies, liens http(s), alldatasheet refusé comme preuve).
+- Pont : un sous-lot n'échappe au plafond quotidien que s'il appartient à une recherche déposée le jour même et
+  dont l'id préfixe le sien ; nombre total de travaux par jour borné (plafond × 40). Sans cela, un conteneur
+  compromis rattachait des travaux à une ancienne recherche pour lancer `claude` sans limite.
 
 ### Corrigé
 

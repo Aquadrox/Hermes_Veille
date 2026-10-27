@@ -177,6 +177,11 @@ def test_bridge_validates_model_effort_and_counts_groups(tmp_path):
     assert b.submit({"id": "g-2", "prompt": "p", "group": "g", "model": "haiku"})[1]["model"] == "haiku"
     assert b.today_count() == 1  # deux sous-lots, une recherche
     assert b.submit({"id": "h", "prompt": "p"})[0] == 429
+    # le client ne contourne pas le plafond : groupe préfixe de l'id, pas d'ajout à une recherche d'un autre jour
+    assert b.submit({"id": "autre-1", "prompt": "p", "group": "g"})[0] == 400
+    b.jobs["vieux"] = {"id": "vieux", "group": "vieux", "state": "done", "created_at": "2026-01-01T08:00:00+01:00"}
+    code, err = b.submit({"id": "vieux-2", "prompt": "p", "group": "vieux"})
+    assert code == 429 and "autre jour" in err["error"]
     assert b.command(None, "fable", "xhigh")[-4:] == ["--model", "fable", "--effort", "xhigh"]
 
 

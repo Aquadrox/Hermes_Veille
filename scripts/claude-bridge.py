@@ -146,8 +146,11 @@ class Bridge:
         if schema is not None and not isinstance(schema, dict):
             return 400, {"error": "schema : objet JSON attendu"}
         group = body.get("group") or job_id
-        if not isinstance(group, str) or not ID_RE.fullmatch(group):
-            return 400, {"error": "group invalide (minuscules, chiffres et tirets, 80 caractères au plus)"}
+        # Un sous-lot porte l'id de sa recherche en préfixe : le client ne rattache pas un travail à n'importe quel
+        # groupe pour échapper au plafond.
+        if not isinstance(group, str) or not ID_RE.fullmatch(group) \
+                or not (job_id == group or job_id.startswith(group + "-")):
+            return 400, {"error": "group invalide (id de la recherche, préfixe de celui du sous-lot)"}
         model, effort = body.get("model") or "", body.get("effort") or ""
         if not (model == "" or model in MODELS or (isinstance(model, str) and MODEL_RE.fullmatch(model))):
             return 400, {"error": f"modèle inconnu (permis : {', '.join(MODELS)} ou nom complet claude-…)"}
@@ -156,10 +159,18 @@ class Bridge:
         with self.lock:
             if job_id in self.jobs:
                 return 200, self.public(self.jobs[job_id])
-            parts = sum(1 for j in self.jobs.values() if (j.get("group") or j["id"]) == group)
-            if parts >= MAX_PARTS:
+            today = dt.date.today().isoformat()
+            mine = [j for j in self.jobs.values() if (j.get("group") or j["id"]) == group]
+            if len(mine) >= MAX_PARTS:
                 return 429, {"error": f"{MAX_PARTS} sous-lots au plus par recherche"}
-            if not parts and self.today_count() >= self.max_per_day:
+            # Seule une recherche déposée aujourd'hui reçoit d'autres sous-lots hors plafond (pas une ancienne,
+            # gardée RETENTION_DAYS) ; et le nombre total de travaux du jour reste borné quoi qu'il arrive.
+            if mine and not all(str(j.get("created_at", "")).startswith(today) for j in mine):
+                return 429, {"error": "recherche d'un autre jour : nouveaux sous-lots refusés"}
+            if sum(1 for j in self.jobs.values() if str(j.get("created_at", "")).startswith(today)) \
+                    >= self.max_per_day * MAX_PARTS:
+                return 429, {"error": f"plafond de {self.max_per_day * MAX_PARTS} travaux Claude par jour atteint"}
+            if not mine and self.today_count() >= self.max_per_day:
                 return 429, {"error": f"plafond de {self.max_per_day} recherches Claude par jour atteint"}
             # Modèle et effort effectifs (ceux de la recherche, sinon ceux du pont ; vides : défaut de Claude Code).
             job = {"id": job_id, "group": group, "state": "queued", "created_at": now_iso(), "prompt": prompt,
