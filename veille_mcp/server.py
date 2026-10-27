@@ -320,7 +320,7 @@ def _alternatives(sheet: dict) -> dict | None:
     if rec is None:
         return None
     return {"searched_at": rec["searched_at"], "stale": sheet["stale"],
-            "criteria": [f"{x.get('name')} = {x.get('value')}" for x in rec["criteria"] if isinstance(x, dict)],
+            "criteria": [components.criterion(x) for x in rec["criteria"] if isinstance(x, dict)],
             "items": rec["items"], **({"error": rec["error"]} if rec.get("error") else {})}
 
 

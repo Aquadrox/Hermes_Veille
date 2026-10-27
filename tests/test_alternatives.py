@@ -791,8 +791,13 @@ def bjt(mpn, mfr="Microchip Technology", status="Active", ic="600 mA", vce="40 V
 
 
 def test_ratings_read_and_compared_at_least():
-    assert comp.rating("600 mA") == (pytest.approx(0.6), "A", "") and comp.rating("32A (Tc)") == (32.0, "A", "(Tc)")
-    assert comp.rating("0.1W, 1/10W") == (0.1, "W", "") and comp.rating("1.2 V ~ 37 V") is None
+    assert comp.rating("600 mA") == {"": (pytest.approx(0.6), "A")} and comp.rating("32A (Tc)") == {"(Tc)": (32.0, "A")}
+    assert comp.rating("0.1W, 1/10W") == {"": (0.1, "W")} and comp.rating("1.2 V ~ 37 V") is None
+    # tenue double (MOSFET) : chaque condition de la référence doit être tenue
+    assert comp.rating("4.5A (Ta), 32A (Tc)") == {"(Ta)": (4.5, "A"), "(Tc)": (32.0, "A")}
+    assert not comp.at_least("5A (Ta), 10A (Tc)", "4.5A (Ta), 32A (Tc)")  # 10 A en Tc pour 32 A
+    assert not comp.at_least("4.5A (Ta)", "4.5A (Ta), 32A (Tc)")  # Tc inconnue
+    assert comp.at_least("8A (Ta), 40A (Tc)", "32A (Tc)") and comp.at_least("5A (Ta), 40A (Tc)", "4.5A (Ta), 32A (Tc)")
     assert comp.at_least("800 mA", "600 mA") and comp.at_least("0.6 A", "600 mA") and comp.at_least("1A", "600 mA")
     assert not comp.at_least("500 mA", "600 mA") and not comp.at_least("600 mV", "600 mA")  # autre unité
     assert not comp.at_least("40A (Ta)", "32A (Tc)") and comp.at_least("40A (Tc)", "32A (Tc)")  # autre condition
@@ -804,6 +809,7 @@ def test_ratings_read_and_compared_at_least():
     assert comp.criterion({"name": "Current - Collector (Ic) (Max)", "value": "600 mA"}) == (
         "Current - Collector (Ic) (Max) ≥ 600 mA")
     assert comp.criterion({"name": "Resistance", "value": "10 kOhms"}) == "Resistance = 10 kOhms"
+    assert comp.criterion({"name": ["retouché"], "value": 1}) == "['retouché'] = 1"  # jamais d'erreur
     triac = [prm(1, "Voltage - Off State", "400 V"), prm(2, "Current - On State (It (RMS)) (Max)", "600 mA"),
              prm(3, "Voltage - Gate Trigger (Vgt) (Max)", "2 V"), prm(69, "Mounting Type", "Through Hole")]
     assert [p["name"] for p in comp.criteria(comp_with(), {"params": triac})] == [
@@ -847,7 +853,8 @@ def test_similar_asks_active_parts_then_ratings_at_least():
     # aucune valeur suffisante proposée : rien, sans second appel ; réponse mal formée : rien non plus
     f = Fake(TOKEN, {"Products": [alt], "FilterOptions": offered})
     assert f.client().similar("276", [], [(2103, "100 V")]) == [] and len(f.requests) == 2
-    assert Fake(TOKEN, {"FilterOptions": "x"}).client().similar("276", [], [(2103, "40 V")]) == []
+    for odd in ("x", {"ParametricFilters": [{"ParameterId": 2103, "FilterValues": 5}, {"ParameterId": [1]}, 7]}):
+        assert Fake(TOKEN, {"FilterOptions": odd}).client().similar("276", [], [(2103, "40 V")]) == []
     # sans tenue critique : un seul appel, comme avant
     f = Fake(TOKEN, {"Products": [alt]})
     assert len(f.client().similar("276", [(74, "380569")])) == 1 and len(f.requests) == 2
@@ -868,6 +875,7 @@ def test_rank_accepts_better_ratings_and_second_source():
     assert out[0]["diffs"] == [] and out[1]["score"] == 100  # tenues supérieures : pas une perte de score
     assert out[1]["diffs"][0] == {"name": "Current - Collector (Ic) (Max)", "ref": "600 mA", "alt": "800 mA"}
     assert out[2]["score"] == 0 and out[2]["diffs"][-1]["name"] == "Power - Max"
+    assert all(set(a) == {"mpn", "manufacturer", "status", "url", "description", "score", "diffs"} for a in out)
 
 
 def test_search_of_an_older_method_is_redone(bom):
@@ -892,3 +900,11 @@ def test_alternatives_budget_counts_digikey_calls(bom):
     client = TwoCalls({})
     info = service._alternatives(bom.slug, client, targets, specs, comp.today(), max_calls=6)
     assert info["searched"] == 3 and info["pending"] == 7 and client.calls == 6
+
+
+def test_mcp_criteria_say_at_least_for_ratings():
+    from veille_mcp import server
+    rec = {"searched_at": "2026-10-27", "criteria": [{"id": 2101, "name": "Current - Collector (Ic) (Max)", "value": "600 mA"},
+                                                    {"id": 16, "name": "Package / Case", "value": "TO-18"}], "items": []}
+    assert server._alternatives({"alternatives": rec, "stale": False})["criteria"] == [
+        "Current - Collector (Ic) (Max) ≥ 600 mA", "Package / Case = TO-18"]

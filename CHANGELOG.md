@@ -16,7 +16,8 @@ SI2301BDS-T1-E3) n'en trouvaient aucune. Diagnostic sur l'API Digi-Key réelle :
 ### Corrigé
 
 - **Tenues supérieures ou égales** (`components.AT_LEAST`, `components.at_least`) : tension, courant et puissance
-  critiques se comparent en « ≥ » (même unité, même condition « (Tc) » / « (Ta) »), les autres à l'identique.
+  critiques se comparent en « ≥ » (même unité ; chaque condition d'une tenue double « 4.5A (Ta), 32A (Tc) »), les
+  autres à l'identique.
   `digikey.Client.similar` lit les valeurs proposées par Digi-Key (FilterOptions), demande les plus proches de la
   référence d'abord, puis toutes si trop peu de fiches (un à trois appels par recherche).
 - **Fiches actives demandées à l'API** (`StatusFilter`) : les fiches lues ne sont plus des obsolètes.

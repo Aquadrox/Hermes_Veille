@@ -734,19 +734,26 @@ _SI = {"p": 1e-12, "n": 1e-9, "µ": 1e-6, "u": 1e-6, "m": 1e-3, "": 1.0, "k": 1e
 _RATING = re.compile(r"(\d+(?:\.\d+)?) ?([pnµumkM]?)([A-Za-z]+) ?(\(\w+\))?")
 
 
-def rating(text) -> tuple[float, str, str] | None:
-    """Tenue lue chez Digi-Key : « 600 mA » -> (0.6, "A", "") ; « 32A (Tc) » -> (32.0, "A", "(Tc)") ; une autre
-    écriture après une virgule (« 0.1W, 1/10W ») est ignorée. None : illisible (plage, texte)."""
-    m = _RATING.fullmatch(" ".join(str(text or "").split(",")[0].split()))
-    return (float(m.group(1)) * _SI[m.group(2)], m.group(3), m.group(4) or "") if m else None
+def rating(text) -> dict[str, tuple[float, str]] | None:
+    """Tenue lue chez Digi-Key, par condition : « 600 mA » -> {"": (0.6, "A")} ; « 4.5A (Ta), 32A (Tc) » ->
+    {"(Ta)": (4.5, "A"), "(Tc)": (32.0, "A")} ; une autre écriture de la même valeur (« 0.1W, 1/10W ») est
+    ignorée. None : illisible (plage, texte)."""
+    out = {}
+    for i, part in enumerate(str(text or "").split(",")):
+        m = _RATING.fullmatch(" ".join(part.split()))
+        if m and (m.group(4) or "") not in out:
+            out[m.group(4) or ""] = (float(m.group(1)) * _SI[m.group(2)], m.group(3))
+        elif i == 0:
+            return None
+    return out
 
 
 def at_least(value, ref) -> bool:
-    """Tenue `value` suffisante pour remplacer `ref` : même unité, même condition (« (Tc) », « (Ta) »), valeur
-    supérieure ou égale ; illisible : identique seulement."""
+    """Tenue `value` suffisante pour remplacer `ref` : pour chaque condition de `ref` (« (Tc) », « (Ta) »), même
+    unité et valeur supérieure ou égale ; illisible : identique seulement."""
     a, b = rating(value), rating(ref)
     if a and b:
-        return a[1:] == b[1:] and a[0] >= b[0] * (1 - 1e-9)
+        return all(c in a and a[c][1] == unit and a[c][0] >= v * (1 - 1e-9) for c, (v, unit) in b.items())
     return " ".join(str(value or "").split()).lower() == " ".join(str(ref or "").split()).lower()
 
 
@@ -765,7 +772,8 @@ def search_filters(c: dict, spec: dict | None) -> tuple[list[tuple[int, str]], l
 
 def criterion(x: dict) -> str:
     """Critère d'une recherche, lisible : « Resistance = 10 kOhms », « Current - Collector (Ic) (Max) ≥ 600 mA »."""
-    return f"{x.get('name')} {'≥' if x.get('name') in AT_LEAST else '='} {x.get('value')}"
+    name = x.get("name")
+    return f"{name} {'≥' if isinstance(name, str) and name in AT_LEAST else '='} {x.get('value')}"
 
 
 def _diffs(ref: list[dict], vals: dict[int, dict]) -> list[dict]:

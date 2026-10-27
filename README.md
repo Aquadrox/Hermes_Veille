@@ -221,8 +221,8 @@ lundi 6h30 — job de la veille thématique rattachée
     défauts » pour l'annuler) et survit à une réinitialisation de la recherche. Une recherche faite avec
     d'autres critères est signalée jusqu'à la suivante.
   - **Quand** : après chaque passage Digi-Key, pour les fins de vie sans recherche depuis 30 jours (ou
-    recherchées avec d'autres critères), dans le temps restant de la tranche et 50 recherches au plus
-    (quota de l'offre gratuite). **À la demande** : « Rechercher des alternatives » dans le détail d'un
+    recherchées avec d'autres critères, ou par une version précédente), dans le temps restant de la tranche
+    et 100 appels Digi-Key au plus (un à trois par recherche ; quota de l'offre gratuite). **À la demande** : « Rechercher des alternatives » dans le détail d'un
     composant (même actif), « Alternatives des fins de vie » au-dessus de la liste (en arrière-plan,
     avancement affiché), `veillectl components alternatives <slug> [MPN …]`, ou Telegram
     (`search_alternatives`).

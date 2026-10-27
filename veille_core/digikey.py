@@ -228,9 +228,9 @@ class Client:
         if at_least:
             options = res.get("FilterOptions")
             options = options.get("ParametricFilters") if isinstance(options, dict) else None
-            offered = {pf.get("ParameterId"): pf.get("FilterValues") for pf in options
-                       if isinstance(pf, dict)} if isinstance(options, list) else {}
-            enough = [[v for v in offered.get(pid) or [] if isinstance(v, dict) and isinstance(v.get("ValueId"), str)
+            offered = {pf["ParameterId"]: pf.get("FilterValues") for pf in options if isinstance(pf, dict)
+                       and isinstance(pf.get("ParameterId"), int)} if isinstance(options, list) else {}
+            enough = [[v for v in _list(offered.get(pid)) if isinstance(v, dict) and isinstance(v.get("ValueId"), str)
                        and v["ValueId"] and components.at_least(v.get("ValueName"), ref)] for pid, ref in at_least]
             if not all(enough):
                 return []
@@ -245,15 +245,19 @@ class Client:
                 for p in _products(res)]
 
 
+def _list(value) -> list:
+    return value if isinstance(value, list) else []
+
+
 def _products(res: dict) -> list[dict]:
-    products = res.get("Products") if isinstance(res, dict) else None
-    return [p for p in products if isinstance(p, dict)] if isinstance(products, list) else []
+    return [p for p in _list(res.get("Products") if isinstance(res, dict) else None) if isinstance(p, dict)]
 
 
 def _ranked(values: list[dict]) -> tuple[list[str], int]:
     """Identifiants des valeurs admises (FilterValues) par valeur croissante, MAX_VALUES au plus, et combien des
     premières couvrent KEYWORD_LIMIT fiches (ProductCount ; absent : toutes)."""
-    values = sorted(values, key=lambda v: (components.rating(v.get("ValueName")) or (0.0,))[0])[:MAX_VALUES]
+    values = sorted(values, key=lambda v: min((x for x, _ in (components.rating(v.get("ValueName")) or {}).values()),
+                                              default=0.0))[:MAX_VALUES]
     total = 0
     for n, v in enumerate(values, 1):
         total += v["ProductCount"] if isinstance(v.get("ProductCount"), int) else 0
