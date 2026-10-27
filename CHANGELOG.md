@@ -7,6 +7,36 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.8.2] — 2026-10-27
+
+Recherche d'alternatives : des discrets courants en fin de vie (2N2222A, BC548B, BC557B, FQP30N06L,
+SI2301BDS-T1-E3) n'en trouvaient aucune. Diagnostic sur l'API Digi-Key réelle : les tenues (Ic, Vce, Vdss, Id)
+étaient exigées identiques, ce qui ne laissait que les variantes, obsolètes, de la référence elle-même (1 à 16 fiches).
+
+### Corrigé
+
+- **Tenues supérieures ou égales** (`components.AT_LEAST`, `components.at_least`) : tension, courant et puissance
+  critiques se comparent en « ≥ » (même unité, même condition « (Tc) » / « (Ta) »), les autres à l'identique.
+  `digikey.Client.similar` lit les valeurs proposées par Digi-Key (FilterOptions), demande les plus proches de la
+  référence d'abord, puis toutes si trop peu de fiches (un à trois appels par recherche).
+- **Fiches actives demandées à l'API** (`StatusFilter`) : les fiches lues ne sont plus des obsolètes.
+- **Seconde source** : la même référence chez un autre fabricant est une alternative (2N2222A Microchip pour une
+  2N2222A ST).
+- **Triacs** : tension à l'état bloqué et courant efficace critiques par défaut.
+- Les recherches de la méthode précédente sont refaites au prochain passage Digi-Key (`ALT_METHOD`).
+- Critères affichés avec leur sens (« Ic ≥ 600 mA », « Resistance = 10 kOhms ») : rapport, interface.
+- Réponse Digi-Key mal formée (FilterOptions) : aucune alternative, jamais d'erreur.
+
+### Mesuré (API réelle, 27/10/2026)
+
+- 2N2222A, BC548B, BC557B, FQP30N06L, SI2301BDS-T1-E3 : 0 → 5 alternatives. 1N4001 et condensateur 100 nF :
+  inchangés (mêmes alternatives). MAC97A6 : toujours aucune (aucun triac actif en boîtier « TO-92 Long Body »).
+
+### Déploiement
+
+- `make update`. Les fins de vie sont recherchées de nouveau au prochain passage (≈ 2 à 3 appels Digi-Key chacune,
+  100 appels au plus par série).
+
 ## [0.8.1] — 2026-10-27
 
 Les alternatives trouvées pour les composants en fin de vie n'apparaissaient pas dans le rapport de la veille

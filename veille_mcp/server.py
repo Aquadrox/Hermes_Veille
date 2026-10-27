@@ -659,8 +659,8 @@ def search_alternatives(slug: str, mpns: list[str] | None = None) -> dict:
 
 def set_critical_parameters(slug: str, mpn: str, parameters: list[str | int] | None,
                             manufacturer: str | None = None) -> dict:
-    """Caractéristiques critiques d'une référence : celles que ses alternatives doivent avoir à l'identique
-    (libellés ou identifiants donnés par `get_component_sheet`). null : retour aux défauts de sa famille (valeur,
+    """Caractéristiques critiques d'une référence : celles que ses alternatives doivent avoir à l'identique, ou
+    supérieures pour une tension, un courant ou une puissance (libellés ou identifiants donnés par `get_component_sheet`). null : retour aux défauts de sa famille (valeur,
     boîtier, montage, tenue principale) ; il en faut au moins une pour chercher. Relancer ensuite
     `search_alternatives` pour cette référence. Renvoie la fiche mise à jour."""
     c, _ = _tracked(slug, mpn, manufacturer)
