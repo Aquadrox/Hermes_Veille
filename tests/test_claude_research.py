@@ -304,3 +304,42 @@ def test_agent_text_truncates(veille):
     out = claude_research.agent_text(rec)
     assert len(out) < claude_research.MAX_AGENT_CHARS + 200 and "tronqué" in out
     assert out.startswith("OK:")
+
+
+# --------------------------------------------------------------------------
+# Socket du pont : dossier au service, jamais un lien ni un dossier modifiable par un autre compte
+# --------------------------------------------------------------------------
+def test_socket_dir_must_be_private(tmp_path):
+    good = tmp_path / "run"
+    good.mkdir(mode=0o755)
+    bridge_mod.check_dir(good)
+    link = tmp_path / "lien"
+    link.symlink_to(good)
+    with pytest.raises(SystemExit, match="n'est pas un dossier"):
+        bridge_mod.check_dir(link)
+    shared = tmp_path / "partage"
+    shared.mkdir()
+    shared.chmod(0o775)
+    with pytest.raises(SystemExit, match="modifiable que par lui"):
+        bridge_mod.check_dir(shared)
+
+
+def test_bridge_process_creates_socket_0660(tmp_path):
+    import os
+    import subprocess
+
+    run = Path(tempfile.mkdtemp(prefix="cbp-", dir="/tmp"))
+    sock = run / "b.sock"
+    proc = subprocess.Popen([sys.executable, str(REPO / "scripts" / "claude-bridge.py"), "--socket", str(sock),
+                             "--state-dir", str(tmp_path / "state"), "--group", str(os.getgid()),
+                             "--claude", "/bin/false"], stderr=subprocess.PIPE)
+    try:
+        deadline = time.time() + 10
+        while not sock.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        assert oct(sock.stat().st_mode & 0o777) == oct(0o660)
+    finally:
+        proc.terminate()
+        proc.wait(10)
+        shutil.rmtree(run, ignore_errors=True)
+    assert not sock.exists()  # retirée à l'arrêt

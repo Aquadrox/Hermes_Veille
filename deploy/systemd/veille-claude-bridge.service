@@ -6,9 +6,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Chemins, utilisateur et binaire réécrits par install-claude-bridge.sh pour pointer sur le dépôt installé,
-# le dossier de données réel (VEILLE_DATA_DIR) et le compte où Claude Code est connecté.
-ExecStart=/usr/bin/python3 /root/veille-hermes/scripts/claude-bridge.py --socket /root/veille-hermes/data/claude-bridge/bridge.sock --owner 10000:10000 --claude /root/.local/bin/claude
+# Chemins, utilisateur et binaire réécrits par install-claude-bridge.sh pour pointer sur le dépôt installé, le
+# groupe de l'utilisateur hermes du conteneur (celui du dossier de données) et le compte où Claude Code est connecté.
+ExecStart=/usr/bin/python3 /root/veille-hermes/scripts/claude-bridge.py --socket /run/veille-claude-bridge/bridge.sock --group 10000 --claude /root/.local/bin/claude
 User=root
 Environment=HOME=/root
 # Bornes du pont (voir scripts/claude-bridge.py) : un seul claude à la fois, 20 recherches par jour, 20 min chacune.
@@ -19,6 +19,11 @@ Environment=CLAUDE_BRIDGE_TIMEOUT=1200
 Environment=CLAUDE_BRIDGE_MODEL=
 StateDirectory=veille-claude-bridge
 StateDirectoryMode=0700
+# Dossier de la socket : au service, modifiable par lui seul (le pont le vérifie), monté en lecture seule dans le
+# conteneur (docker-compose.yml). Conservé à l'arrêt : le montage du conteneur reste sur le même dossier.
+RuntimeDirectory=veille-claude-bridge
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
 Restart=on-failure
 RestartSec=10
 # Durcissement : claude n'a que WebSearch et WebFetch (aucun outil fichier ni shell), mais le processus

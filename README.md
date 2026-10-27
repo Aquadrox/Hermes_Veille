@@ -422,13 +422,16 @@ sudo MAX_PER_DAY=40 TIMEOUT=1800 MODEL=sonnet ./scripts/install-claude-bridge.sh
 sudo CLAUDE_USER=exploitant ./scripts/install-claude-bridge.sh                        # autre compte connecté
 ```
 
-Le pont (`scripts/claude-bridge.py`, bibliothèque standard) écoute sur une **socket Unix** du dossier de
-données (`<VEILLE_DATA_DIR>/claude-bridge/bridge.sock`, `/opt/data/claude-bridge/bridge.sock` dans le
-conteneur), lisible par l'utilisateur hermes du conteneur seulement : **aucun port** n'est ouvert, et les
-identifiants de Claude restent sur l'hôte. Bornes : un `claude` à la fois, 20 recherches par jour, 20 minutes
-par recherche (réglables à l'installation). Résultats du pont gardés 30 jours dans
-`/var/lib/veille-claude-bridge`. Après un déplacement du dossier de données (`make move-data`), relancer
-l'installation : la socket suit le nouveau chemin.
+Le pont (`scripts/claude-bridge.py`, bibliothèque standard) écoute sur une **socket Unix**,
+`/run/veille-claude-bridge/bridge.sock`, accessible au groupe de l'utilisateur hermes du conteneur seulement :
+**aucun port** n'est ouvert, et les identifiants de Claude restent sur l'hôte. Son dossier appartient au service
+(créé par systemd) et n'est modifiable que par lui : il est monté **en lecture seule** dans le conteneur
+(`/opt/claude-bridge`, `docker-compose.yml`). Il n'est jamais dans le dossier de données, que le conteneur peut
+modifier : un lien symbolique posé à la place de la socket y détournerait le `chown` du service, qui tourne en
+root. Le pont refuse de démarrer si ce dossier est un lien ou modifiable par un autre compte. Bornes : un
+`claude` à la fois, 20 recherches par jour, 20 minutes par recherche (réglables à l'installation). Résultats du
+pont gardés 30 jours dans `/var/lib/veille-claude-bridge`. Le montage date de la v0.9.0 : recréer le conteneur
+(`docker compose up -d`) après la mise à jour.
 
 **Activer l'option** : interface (Modifier → « Recherche » → « Déléguer la recherche web à Claude Code »),
 Telegram (« Active la recherche Claude pour la veille industrie-4-0 » : `update_veille`,

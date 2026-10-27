@@ -4,9 +4,9 @@
 # Option « recherche déléguée à Claude » d'une veille (désactivée par défaut) : l'agent Hermes rédige
 # toujours le rapport, mais la recherche web est faite par `claude -p` sur l'hôte, qui renvoie un JSON
 # sourcé (conservé dans veilles/<slug>/recherches/). Le conteneur ne voit ni le binaire ni les
-# identifiants de Claude : il passe par une socket Unix placée dans le dossier de données
-# (<données>/claude-bridge/bridge.sock, /opt/data/claude-bridge/bridge.sock dans le conteneur) ; aucun
-# port n'est ouvert.
+# identifiants de Claude : il passe par une socket Unix, /run/veille-claude-bridge/bridge.sock, dans un dossier
+# au service (systemd) monté en lecture seule dans le conteneur (/opt/claude-bridge, docker-compose.yml) ;
+# aucun port n'est ouvert. Jamais dans le dossier de données : le conteneur peut le modifier.
 #
 # Prérequis : Claude Code installé et connecté (`claude auth status`) pour l'utilisateur CLAUDE_USER.
 #
@@ -45,7 +45,7 @@ warn() { printf '\033[33m! %s\033[0m\n' "$*"; }
 fail() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
 DATA="$("$REPO/scripts/data-dir.sh")"
-SOCK_DIR="$DATA/claude-bridge"
+SOCK_DIR="/run/veille-claude-bridge"  # RuntimeDirectory de l'unité ; monté dans le conteneur (docker-compose.yml)
 SOCK="$SOCK_DIR/bridge.sock"
 
 health() {
@@ -63,7 +63,7 @@ check() {
         if docker exec -u hermes "$CONTAINER" veillectl research status; then
             ok "pont joignable depuis le conteneur $CONTAINER"
         else
-            warn "conteneur $CONTAINER : pont injoignable (image antérieure à la v0.9.0 ? docker compose up -d)"
+            warn "conteneur $CONTAINER : pont injoignable (image ou docker-compose.yml antérieurs à la v0.9.0 ? docker compose up -d)"
         fi
     else
         warn "conteneur $CONTAINER arrêté : vérification depuis le conteneur sautée"
@@ -82,7 +82,7 @@ case "$MODE" in
         exit 0 ;;
 esac
 
-[ "$(id -u)" = 0 ] || fail "à lancer en root (sudo) : unité systemd et socket dans le dossier de données"
+[ "$(id -u)" = 0 ] || fail "à lancer en root (sudo) : unité systemd du pont"
 command -v systemctl >/dev/null || fail "systemd requis"
 command -v python3 >/dev/null || fail "python3 requis sur l'hôte"
 command -v curl >/dev/null || fail "curl requis (vérification du pont)"
@@ -108,21 +108,15 @@ else
     fail "Claude Code n'est pas connecté pour $CLAUDE_USER : lance « claude » une fois sous ce compte (/login)"
 fi
 
-# Propriétaire de la socket : celui du dossier de données, c.-à-d. l'utilisateur hermes du conteneur.
-OWNER="$(stat -c '%u:%g' "$DATA")"
-for p in "$REPO" "$SOCK" "$CLAUDE_BIN" "$CLAUDE_HOME"; do
+# Groupe de la socket : celui du dossier de données, c.-à-d. de l'utilisateur hermes du conteneur (lu, jamais modifié).
+HERMES_GID="$(stat -c '%g' "$DATA")"
+for p in "$REPO" "$CLAUDE_BIN" "$CLAUDE_HOME"; do
     [[ "$p" =~ ^/[A-Za-z0-9._/-]+$ ]] || fail "chemin non pris en charge par l'unité systemd : $p"
 done
 [[ "$CLAUDE_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || fail "nom d'utilisateur non pris en charge : $CLAUDE_USER"
-if [ "$CLAUDE_USER" != root ] && ! sudo -u "$CLAUDE_USER" test -x "$DATA"; then
-    fail "$CLAUDE_USER ne peut pas traverser $DATA (droits $(stat -c %a "$DATA")) : chmod o+x ou CLAUDE_USER=root"
-fi
 
-install -d -m 0750 -o root -g "${OWNER#*:}" "$SOCK_DIR"
-# Le compte de Claude doit pouvoir créer la socket : dossier à lui (groupe : hermes du conteneur).
-chown "$CLAUDE_USER:${OWNER#*:}" "$SOCK_DIR"
-
-sed -e "s|^ExecStart=.*|ExecStart=/usr/bin/python3 $REPO/scripts/claude-bridge.py --socket $SOCK --owner $OWNER --claude $CLAUDE_BIN|" \
+# Aucun dossier créé ni modifié ici : systemd crée celui de la socket (RuntimeDirectory), au compte du service.
+sed -e "s|^ExecStart=.*|ExecStart=/usr/bin/python3 $REPO/scripts/claude-bridge.py --socket $SOCK --group $HERMES_GID --claude $CLAUDE_BIN|" \
     -e "s|^User=.*|User=$CLAUDE_USER|" \
     -e "s|^Environment=HOME=.*|Environment=HOME=$CLAUDE_HOME|" \
     -e "s|^Environment=CLAUDE_BRIDGE_MAX_PER_DAY=.*|Environment=CLAUDE_BRIDGE_MAX_PER_DAY=$MAX_PER_DAY|" \
@@ -130,9 +124,9 @@ sed -e "s|^ExecStart=.*|ExecStart=/usr/bin/python3 $REPO/scripts/claude-bridge.p
     -e "s|^Environment=CLAUDE_BRIDGE_MODEL=.*|Environment=CLAUDE_BRIDGE_MODEL=$MODEL|" \
     "$REPO/deploy/systemd/$SERVICE" > "$UNIT_DIR/$SERVICE"
 if [ "$CLAUDE_USER" != root ]; then
-    # Un compte non root ne peut pas donner la socket à hermes : il en partage le groupe (socket en 0660).
-    sed -i -e "s| --owner $OWNER||" "$UNIT_DIR/$SERVICE"
-    sed -i -e "/^User=/a Group=${OWNER#*:}" "$UNIT_DIR/$SERVICE"
+    # Un compte non root ne peut pas changer le groupe de la socket : il prend celui de hermes comme groupe principal.
+    sed -i -e "s| --group $HERMES_GID||" "$UNIT_DIR/$SERVICE"
+    sed -i -e "/^User=/a Group=$HERMES_GID" "$UNIT_DIR/$SERVICE"
 fi
 chmod +x "$REPO/scripts/claude-bridge.py"
 

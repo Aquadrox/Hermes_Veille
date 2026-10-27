@@ -119,8 +119,11 @@ def test_compose_config_resolves_data_dir(tmp_path):
         pytest.skip("plugin docker compose absent")
     assert out.returncode == 0, out.stderr
     service = json.loads(out.stdout)["services"]["veille"]
-    [volume] = service["volumes"]
+    volume, bridge = service["volumes"]
     assert volume["type"] == "bind" and volume["target"] == "/opt/data"
+    # Socket du pont Claude Code : dossier de l'hôte au service, en lecture seule, hors du dossier de données.
+    assert bridge["source"] == "/run/veille-claude-bridge" and bridge["target"] == "/opt/claude-bridge"
+    assert bridge["read_only"] is True
     assert volume["source"] == "/srv/veille-hermes/data"
     # Selon la version de compose, la valeur par défaut (false) est omise de la sortie JSON.
     assert volume.get("bind", {}).get("create_host_path", False) is False

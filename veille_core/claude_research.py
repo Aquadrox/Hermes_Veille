@@ -2,7 +2,7 @@
 
 L'agent Hermes rédige toujours le rapport : seule la collecte des informations change. À l'étape RECHERCHE, il
 lance `veillectl research claude <slug>`, qui dépose la recherche auprès du pont de l'hôte
-(scripts/claude-bridge.py, socket Unix dans le dossier de données) puis en attend le résultat par tranches
+(scripts/claude-bridge.py, socket Unix montée en lecture seule sur /opt/claude-bridge) puis en attend le résultat par tranches
 sous le plafond de durée du garde-fou (une recherche dure plusieurs minutes). Claude y travaille avec ses seuls
 outils WebSearch et WebFetch et renvoie un JSON conforme à SCHEMA : informations datées et sourcées par thème
 du brief, couverture des thèmes. Le prompt est construit ICI, à partir du brief (rédigé par l'administrateur)
@@ -25,10 +25,11 @@ import socket
 import time
 from pathlib import Path
 
-from . import guard, paths, schedule, store
+from . import guard, schedule, store
 from .store import StoreError, Veille
 
 SOCKET_ENV = "VEILLE_CLAUDE_SOCKET"
+DEFAULT_SOCKET = "/opt/claude-bridge/bridge.sock"
 FILE_RE = re.compile(r"(\d{8}-\d{6})-claude\.json\Z")
 ORIGINS = ("job", "cli", "mcp", "ui")
 PERIOD_DAYS = {"day": 1, "week": 7, "month": 31, "custom": 7}
@@ -94,7 +95,8 @@ class BridgeError(RuntimeError):
 # Pont de l'hôte (HTTP sur socket Unix)
 # --------------------------------------------------------------------------
 def socket_path() -> Path:
-    return Path(os.environ.get(SOCKET_ENV) or paths.hermes_home() / "claude-bridge" / "bridge.sock")
+    """Socket du pont : dossier de l'hôte au service, monté en lecture seule (docker-compose.yml)."""
+    return Path(os.environ.get(SOCKET_ENV) or DEFAULT_SOCKET)
 
 
 class _UnixConnection(http.client.HTTPConnection):

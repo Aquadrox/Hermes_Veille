@@ -2,8 +2,10 @@
 """claude-bridge — pont entre le conteneur des veilles et Claude Code installé sur l'HÔTE.
 
 Le conteneur ne peut pas lancer le binaire `claude` de l'hôte (ni ses identifiants, qui restent ici) : il
-dépose une recherche sur une socket Unix placée dans le dossier de données (vu du conteneur :
-/opt/data/claude-bridge/bridge.sock) et vient en chercher le résultat. Le pont lance pour chaque
+dépose une recherche sur une socket Unix et vient en chercher le résultat. La socket vit dans un dossier de
+l'hôte qui appartient au service (/run/veille-claude-bridge, RuntimeDirectory de systemd), monté en lecture
+seule dans le conteneur (/opt/claude-bridge) : JAMAIS dans le dossier de données, modifiable par le conteneur,
+où un lien symbolique posé à la place de la socket détournerait le chown du service (exécuté en root). Le pont lance pour chaque
 recherche `claude -p` avec les SEULS outils WebSearch et WebFetch, dans un dossier vide, sans réglages
 utilisateur (ni hooks, ni plugins, ni serveurs MCP) ; Claude n'a donc accès ni aux fichiers ni au shell
 de l'hôte, même si une page lue tente de le détourner.
@@ -29,11 +31,11 @@ import grp
 import http.server
 import json
 import os
-import pwd
 import re
 import shutil
 import signal
 import socketserver
+import stat
 import subprocess
 import sys
 import tempfile
@@ -246,26 +248,35 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
 
 
-def _owner(spec: str) -> tuple[int, int]:
-    """« uid:gid » (nombres ou noms) : propriétaire de la socket, l'utilisateur hermes du conteneur."""
-    user, _, group = spec.partition(":")
-    uid = int(user) if user.isdigit() else pwd.getpwnam(user).pw_uid
-    gid = int(group) if group.isdigit() else grp.getgrnam(group).gr_gid if group else uid
-    return uid, gid
+def _gid(group: str) -> int:
+    return int(group) if group.isdigit() else grp.getgrnam(group).gr_gid
 
 
-def serve(socket_path: Path, bridge: Bridge, owner: str | None = None) -> None:
-    socket_path.parent.mkdir(parents=True, exist_ok=True)
+def check_dir(path: Path) -> None:
+    """Dossier de la socket : un vrai dossier (pas un lien), au service, modifiable par lui seul. Sinon un autre
+    compte (l'utilisateur du conteneur) pourrait y substituer un lien à la socket entre sa création et son chown."""
+    st = os.lstat(path)
+    if not stat.S_ISDIR(st.st_mode):
+        raise SystemExit(f"claude-bridge : {path} n'est pas un dossier (lien symbolique ?)")
+    if st.st_uid != os.geteuid() or st.st_mode & 0o022:
+        raise SystemExit(f"claude-bridge : {path} doit appartenir au service et n'être modifiable que par lui "
+                         f"(propriétaire {st.st_uid}, droits {stat.S_IMODE(st.st_mode):o})")
+
+
+def serve(socket_path: Path, bridge: Bridge, group: str | None = None) -> None:
+    check_dir(socket_path.parent)
     try:
         socket_path.unlink()
     except FileNotFoundError:
         pass
     handler = type("BoundHandler", (Handler,), {"bridge": bridge})
-    server = Server(str(socket_path), handler)
-    if owner:
-        uid, gid = _owner(owner)
-        os.chown(socket_path, uid, gid)
-    os.chmod(socket_path, 0o660)
+    old = os.umask(0o117)  # socket créée directement en 0660 : aucun chmod après coup
+    try:
+        server = Server(str(socket_path), handler)
+    finally:
+        os.umask(old)
+    if group:  # groupe de l'utilisateur hermes du conteneur ; lien jamais suivi
+        os.chown(socket_path, -1, _gid(group), follow_symlinks=False)
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown).start())
     print(f"claude-bridge : écoute sur {socket_path} (claude : {bridge.claude})", file=sys.stderr, flush=True)
     try:
@@ -280,9 +291,9 @@ def serve(socket_path: Path, bridge: Bridge, owner: str | None = None) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--socket", required=True, help="chemin de la socket (dossier de données de l'hôte)")
+    ap.add_argument("--socket", required=True, help="chemin de la socket (dossier au service : /run/veille-claude-bridge)")
     ap.add_argument("--state-dir", default="/var/lib/veille-claude-bridge")
-    ap.add_argument("--owner", help="propriétaire de la socket, uid:gid (utilisateur hermes du conteneur)")
+    ap.add_argument("--group", help="groupe de la socket (gid de l'utilisateur hermes du conteneur)")
     ap.add_argument("--claude", default=os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude")
     args = ap.parse_args(argv)
     bridge = Bridge(Path(args.state_dir), args.claude,
@@ -291,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
                     max_per_day=_env_int("CLAUDE_BRIDGE_MAX_PER_DAY", 20),
                     model=os.environ.get("CLAUDE_BRIDGE_MODEL", "").strip(),
                     retention_days=_env_int("CLAUDE_BRIDGE_RETENTION_DAYS", 30))
-    serve(Path(args.socket), bridge, args.owner)
+    serve(Path(args.socket), bridge, args.group)
     return 0
 
 
