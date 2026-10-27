@@ -12,7 +12,9 @@ de l'hôte, même si une page lue tente de le détourner.
 
 Protocole (HTTP sur la socket, JSON) :
   GET  /health              état, file d'attente, recherches du jour
-  POST /jobs                {"id", "prompt", "schema"} → 202 ; un id déjà connu renvoie son état
+  POST /jobs                {"id", "prompt", "schema"[, "group", "model", "effort"]} → 202 ; un id déjà connu
+                            renvoie son état. `group` : recherche dont ce travail est un sous-lot (veille
+                            composants) ; le plafond quotidien compte les recherches, pas leurs sous-lots.
   GET  /jobs/<id>           {"state": queued|running|done|error, "result": <sortie JSON de claude>, "error"}
 
 Recherches asynchrones : une recherche dure plusieurs minutes, plus qu'un appel d'outil de Hermes ;
@@ -20,7 +22,8 @@ le conteneur interroge l'état par tranches. Les résultats sont conservés sur 
 RETENTION_DAYS) : un redémarrage du pont ne perd que les recherches en cours, déclarées en échec.
 
 Bornes (variables d'environnement, voir deploy/systemd/veille-claude-bridge.service) : un seul `claude`
-à la fois par défaut, un plafond de recherches par jour, une durée maximale par recherche.
+à la fois par défaut, un plafond de recherches par jour, une durée maximale par recherche ; modèle et effort par
+défaut (vides : ceux de Claude Code pour le compte), qu'une recherche peut remplacer par les siens (MODELS, EFFORTS).
 Bibliothèque standard uniquement : ce script tourne avec le python3 de l'hôte.
 """
 from __future__ import annotations
@@ -47,6 +50,11 @@ VERSION = 1
 ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,79}")
 MAX_BODY = 256_000  # prompt + schéma : un brief tient en quelques dizaines de Ko
 TOOLS = "WebSearch,WebFetch"
+# Choix permis à une recherche : alias de Claude Code (dernier modèle de la famille) ou nom complet d'un modèle.
+MODELS = ("haiku", "sonnet", "opus", "fable")
+MODEL_RE = re.compile(r"claude-[a-z0-9-]{1,60}")
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+MAX_PARTS = 40  # sous-lots par recherche (veille composants : 500 références au plus, par 25)
 # Les sorties de claude au-delà sont tronquées : un résultat de recherche reste sous quelques centaines de Ko.
 MAX_OUTPUT = 4_000_000
 
@@ -65,13 +73,14 @@ def now_iso() -> str:
 class Bridge:
     """File des recherches : au plus `concurrency` processus `claude` à la fois, état persisté par recherche."""
 
-    def __init__(self, state_dir: Path, claude: str, *, concurrency: int = 1, timeout: int = 1200,
-                 max_per_day: int = 20, model: str = "", retention_days: int = 30):
+    def __init__(self, state_dir: Path, claude: str, *, concurrency: int = 1, timeout: int = 1800,
+                 max_per_day: int = 20, model: str = "", effort: str = "", retention_days: int = 30):
         self.state_dir = state_dir
         self.claude = claude
         self.timeout = timeout
         self.max_per_day = max_per_day
         self.model = model
+        self.effort = effort
         self.retention_days = retention_days
         self.lock = threading.Lock()
         self.slots = threading.Semaphore(concurrency)
@@ -108,14 +117,16 @@ class Bridge:
 
     # ---------------------------------------------------------------- API
     def today_count(self) -> int:
+        """Recherches déposées aujourd'hui (les sous-lots d'une même recherche comptent pour une)."""
         today = dt.date.today().isoformat()
-        return sum(1 for j in self.jobs.values() if str(j.get("created_at", "")).startswith(today))
+        return len({j.get("group") or j["id"] for j in self.jobs.values()
+                    if str(j.get("created_at", "")).startswith(today)})
 
     def health(self) -> dict:
         with self.lock:
             states = [j["state"] for j in self.jobs.values()]
             return {"ok": True, "version": VERSION, "claude": self.claude, "model": self.model or None,
-                    "running": states.count("running"), "queued": states.count("queued"),
+                    "effort": self.effort or None, "models": MODELS, "efforts": EFFORTS, "running": states.count("running"), "queued": states.count("queued"),
                     "today": self.today_count(), "max_per_day": self.max_per_day, "timeout_s": self.timeout}
 
     def public(self, job: dict) -> dict:
@@ -134,26 +145,52 @@ class Bridge:
             return 400, {"error": "prompt vide"}
         if schema is not None and not isinstance(schema, dict):
             return 400, {"error": "schema : objet JSON attendu"}
+        group = body.get("group") or job_id
+        # Un sous-lot porte l'id de sa recherche en préfixe : le client ne rattache pas un travail à n'importe quel
+        # groupe pour échapper au plafond.
+        if not isinstance(group, str) or not ID_RE.fullmatch(group) \
+                or not (job_id == group or job_id.startswith(group + "-")):
+            return 400, {"error": "group invalide (id de la recherche, préfixe de celui du sous-lot)"}
+        model, effort = body.get("model") or "", body.get("effort") or ""
+        if not (model == "" or model in MODELS or (isinstance(model, str) and MODEL_RE.fullmatch(model))):
+            return 400, {"error": f"modèle inconnu (permis : {', '.join(MODELS)} ou nom complet claude-…)"}
+        if effort not in ("", *EFFORTS):
+            return 400, {"error": f"effort inconnu (permis : {', '.join(EFFORTS)})"}
         with self.lock:
             if job_id in self.jobs:
                 return 200, self.public(self.jobs[job_id])
-            if self.today_count() >= self.max_per_day:
+            today = dt.date.today().isoformat()
+            mine = [j for j in self.jobs.values() if (j.get("group") or j["id"]) == group]
+            if len(mine) >= MAX_PARTS:
+                return 429, {"error": f"{MAX_PARTS} sous-lots au plus par recherche"}
+            # Seule une recherche déposée aujourd'hui reçoit d'autres sous-lots hors plafond (pas une ancienne,
+            # gardée RETENTION_DAYS) ; et le nombre total de travaux du jour reste borné quoi qu'il arrive.
+            if mine and not all(str(j.get("created_at", "")).startswith(today) for j in mine):
+                return 429, {"error": "recherche d'un autre jour : nouveaux sous-lots refusés"}
+            if sum(1 for j in self.jobs.values() if str(j.get("created_at", "")).startswith(today)) \
+                    >= self.max_per_day * MAX_PARTS:
+                return 429, {"error": f"plafond de {self.max_per_day * MAX_PARTS} travaux Claude par jour atteint"}
+            if not mine and self.today_count() >= self.max_per_day:
                 return 429, {"error": f"plafond de {self.max_per_day} recherches Claude par jour atteint"}
-            job = {"id": job_id, "state": "queued", "created_at": now_iso(), "prompt": prompt, "schema": schema}
+            # Modèle et effort effectifs (ceux de la recherche, sinon ceux du pont ; vides : défaut de Claude Code).
+            job = {"id": job_id, "group": group, "state": "queued", "created_at": now_iso(), "prompt": prompt,
+                   "schema": schema, "model": model or self.model, "effort": effort or self.effort}
             self.jobs[job_id] = job
             self._save(job)
         threading.Thread(target=self._run, args=(job,), daemon=True).start()
         return 202, self.public(job)
 
     # ---------------------------------------------------------------- exécution
-    def command(self, schema: dict | None) -> list[str]:
+    def command(self, schema: dict | None, model: str = "", effort: str = "") -> list[str]:
         cmd = [self.claude, "-p", "--output-format", "json", "--tools", TOOLS, "--allowedTools", TOOLS,
                "--permission-mode", "dontAsk", "--strict-mcp-config", "--setting-sources", "project",
                "--no-session-persistence"]
         if schema:
             cmd += ["--json-schema", json.dumps(schema, ensure_ascii=False)]
-        if self.model:
-            cmd += ["--model", self.model]
+        if model:
+            cmd += ["--model", model]
+        if effort:
+            cmd += ["--effort", effort]
         return cmd
 
     def _finish(self, job: dict, **fields) -> None:
@@ -172,7 +209,7 @@ class Bridge:
             cwd = tempfile.mkdtemp(prefix="claude-bridge-")
             started = time.monotonic()
             try:
-                proc = subprocess.run(self.command(job.get("schema")), input=job["prompt"], cwd=cwd,
+                proc = subprocess.run(self.command(job.get("schema"), job.get("model") or "", job.get("effort") or ""), input=job["prompt"], cwd=cwd,
                                       capture_output=True, text=True, timeout=self.timeout)
             except subprocess.TimeoutExpired:
                 self._finish(job, state="error", error=f"délai de {self.timeout} s dépassé")
@@ -298,9 +335,10 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     bridge = Bridge(Path(args.state_dir), args.claude,
                     concurrency=_env_int("CLAUDE_BRIDGE_CONCURRENCY", 1),
-                    timeout=_env_int("CLAUDE_BRIDGE_TIMEOUT", 1200),
+                    timeout=_env_int("CLAUDE_BRIDGE_TIMEOUT", 1800),
                     max_per_day=_env_int("CLAUDE_BRIDGE_MAX_PER_DAY", 20),
                     model=os.environ.get("CLAUDE_BRIDGE_MODEL", "").strip(),
+                    effort=os.environ.get("CLAUDE_BRIDGE_EFFORT", "").strip(),
                     retention_days=_env_int("CLAUDE_BRIDGE_RETENTION_DAYS", 30))
     serve(Path(args.socket), bridge, args.group)
     return 0

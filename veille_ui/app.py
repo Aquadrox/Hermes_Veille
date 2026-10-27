@@ -146,6 +146,8 @@ templates.env.globals["status_class"] = status_class
 templates.env.globals["DAYS"] = schedule.DAYS
 templates.env.globals["NOTICE_TYPES"] = components.TYPES
 templates.env.globals["WEB_STATUSES"] = components.WEB_STATUSES
+templates.env.globals["CLAUDE_MODELS"] = claude_research.MODELS
+templates.env.globals["CLAUDE_EFFORTS"] = claude_research.EFFORTS
 templates.env.globals["web_status_label"] = components.web_status_label
 templates.env.globals["CRITICAL"] = components.CRITICAL
 templates.env.globals["badge_class"] = components.badge_class
@@ -174,7 +176,8 @@ def form_defaults(v: store.Veille | None = None, template: str = "vierge", kind:
                 "cron_expr": "", "pdf_title": "", "pdf_header": "", "pdf_footer": "Document interne",
                 "pdf_audience": "achats, méthodes & ingénierie" if composants else "direction & ingénierie",
                 "pdf_accent": "#0f766e", "model": "", "components": "", "include_components": "",
-                "batch_size": store.Veille.batch_size, "claude_research": False}
+                "batch_size": store.Veille.batch_size, "claude_research": False, "claude_model": "",
+                "claude_effort": ""}
     freq = schedule.from_cron(v.schedule)
     comps = components.load_components(v.slug)["components"] if v.kind == "composants" else []
     return {"name": v.name, "slug": v.slug, "subject": v.subject, "kind": v.kind,
@@ -183,7 +186,8 @@ def form_defaults(v: store.Veille | None = None, template: str = "vierge", kind:
             "pdf_title": v.pdf.title, "pdf_header": v.pdf.header, "pdf_footer": v.pdf.footer,
             "pdf_audience": v.pdf.audience, "pdf_accent": v.pdf.accent, "model": v.model or "",
             "components": components.format_components(comps), "include_components": v.components or "",
-            "batch_size": v.batch_size, "claude_research": v.claude_research}
+            "batch_size": v.batch_size, "claude_research": v.claude_research, "claude_model": v.claude_model,
+            "claude_effort": v.claude_effort}
 
 
 def freq_from_form(form) -> dict:
@@ -207,15 +211,20 @@ def values_from_form(form) -> dict:
             "pdf_accent": form.get("pdf_accent", "#0f766e"), "model": form.get("model", "").strip(),
             "components": form.get("components", ""), "include_components": form.get("include_components", ""),
             "batch_size": form.get("batch_size", "") or store.Veille.batch_size,
-            "claude_research": form.get("claude_research") == "on"}
+            "claude_research": form.get("claude_research") == "on",
+            "claude_model": form.get("claude_model", ""), "claude_effort": form.get("claude_effort", "")}
 
 
 def kind_fields(values: dict) -> dict:
     """Champs propres au type de veille, pour service.create_veille / update_veille."""
     if values["kind"] == "composants":
         return {"components": components.parse_components(values["components"]),
-                "batch_size": values["batch_size"]}
-    return {"include_components": values["include_components"], "claude_research": values["claude_research"]}
+                "batch_size": values["batch_size"], **_claude_fields(values)}
+    return {"include_components": values["include_components"], **_claude_fields(values)}
+
+
+def _claude_fields(values: dict) -> dict:
+    return {k: values[k] for k in ("claude_research", "claude_model", "claude_effort")}
 
 
 def schedule_ctx(freq: dict) -> dict:
@@ -421,8 +430,6 @@ def create_app() -> FastAPI:
 
     def research_rows(v: store.Veille) -> list[dict]:
         """Recherches Claude de la veille ; la plus récente relevée auprès du pont si elle est en cours."""
-        if v.kind != "veille":
-            return []
         rows = claude_research.list_research(v.slug, 10)
         if rows and rows[0]["state"] == "pending":
             rows[0] = claude_research.summary(claude_research.current(v.slug, rows[0]["stamp"]))

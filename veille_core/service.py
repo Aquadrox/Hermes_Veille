@@ -128,9 +128,16 @@ def _pdf(data: dict | None, base: PdfOptions | None = None) -> PdfOptions:
     return pdf
 
 
-def _check_claude(kind: str, enabled) -> None:
-    if enabled and kind != "veille":
-        raise StoreError("recherche déléguée à Claude : veilles thématiques seulement (pas une veille composants)")
+# Paramètres `claude_research` (option) de create_veille / update_veille : ils masquent le module.
+_CLAUDE_MODELS, _CLAUDE_EFFORTS = claude_research.MODELS, claude_research.EFFORTS
+
+
+def _claude_choice(value, allowed: tuple[str, ...], what: str) -> str:
+    """Modèle ou effort de la recherche Claude d'une veille : vide (défaut) ou une valeur de `allowed`."""
+    value = (value or "").strip().lower()
+    if value and value not in allowed:
+        raise StoreError(f"{what} de Claude inconnu : {value!r} (permis : {', '.join(allowed)}, ou vide)")
+    return value
 
 
 def _create_job(v: Veille, paused: bool = False) -> str:
@@ -264,7 +271,8 @@ def create_veille(*, name: str, subject: str, schedule_expr: str, recipients: li
                   model: str | None = None, provider: str | None = None,
                   paused: bool = False, kind: str = "veille", components: list[dict] | None = None,
                   include_components: str | None = None, batch_size: int | None = None,
-                  claude_research: bool = False, actor: str = "cli") -> Veille:
+                  claude_research: bool = False, claude_model: str = "", claude_effort: str = "",
+                  actor: str = "cli") -> Veille:
     name = (name or "").strip()
     if not name:
         raise StoreError("le nom est obligatoire")
@@ -273,13 +281,14 @@ def create_veille(*, name: str, subject: str, schedule_expr: str, recipients: li
         raise StoreError(f"type de veille inconnu : {kind!r}")
     if not recipients:
         raise StoreError("au moins un destinataire est requis")
-    _check_claude(kind, claude_research)
     with _locked():
         if store.veille_dir(slug).exists():
             raise StoreError(f"une veille « {slug} » existe déjà")
         v = Veille(slug=slug, name=name, subject=(subject or "").strip(), kind=kind,
                    model=model or None, provider=provider or None, pdf=_pdf(pdf),
-                   claude_research=bool(claude_research))
+                   claude_research=bool(claude_research),
+                   claude_model=_claude_choice(claude_model, _CLAUDE_MODELS, "modèle"),
+                   claude_effort=_claude_choice(claude_effort, _CLAUDE_EFFORTS, "effort"))
         _apply_schedule(v, schedule_expr)
         if batch_size is not None:
             v.batch_size = _batch_size(batch_size)
@@ -312,6 +321,7 @@ def update_veille(slug: str, *, name: str | None = None, subject: str | None = N
                   model: str | None = None, provider: str | None = None,
                   components: list[dict] | None = None, include_components: str | None = None,
                   batch_size: int | None = None, claude_research: bool | None = None,
+                  claude_model: str | None = None, claude_effort: str | None = None,
                   actor: str = "cli") -> Veille:
     with _locked():
         v = store.load(slug)
@@ -365,9 +375,13 @@ def update_veille(slug: str, *, name: str | None = None, subject: str | None = N
         if include_components is not None and _set_link(v, include_components):
             changes.append("chapitre composants")
         if claude_research is not None and bool(claude_research) != v.claude_research:
-            _check_claude(v.kind, claude_research)
             v.claude_research = bool(claude_research)
             changes.append("recherche Claude " + ("activée" if v.claude_research else "désactivée"))
+        for attr, value, allowed, what in (("claude_model", claude_model, _CLAUDE_MODELS, "modèle"),
+                                           ("claude_effort", claude_effort, _CLAUDE_EFFORTS, "effort")):
+            if value is not None and _claude_choice(value, allowed, what) != getattr(v, attr):
+                setattr(v, attr, _claude_choice(value, allowed, what))
+                changes.append(f"{what} Claude : {getattr(v, attr) or 'par défaut'}")
         store.save(v)
         render.write(v)
         job = hermes.get_job(v.job_id, jobs)
@@ -862,17 +876,8 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
                 {"mpn": c["mpn"], "manufacturer": c["manufacturer"], "state": "pending"} for c in lot])
         else:
             track.update(step="done", digikey=dk_progress)
-    known: dict[str, list[str]] = {}
-    for n in notices:
-        known.setdefault(n["key"], []).append(n.get("number") or n["title"])
     return {"slug": slug, "date": day, "complete": True, "track_progress": track is not None and plan_batch,
-            "digikey": info, "new_digikey_notices": run["notices"],
-            "batch": [{"mpn": c["mpn"], "manufacturer": c["manufacturer"],
-                       "since": comp.search_since(c), "digikey_status": (c.get("dk") or {}).get("status"),
-                       # non nul : Digi-Key ne la trouve pas, l'agent établit lui-même son statut (« statuses »)
-                       "digikey_error": (c.get("dk") or {}).get("error"), **_fallback(c),
-                       "known": known.get(comp.key_of(c["mpn"], c["manufacturer"]), [])[:20]}
-                      for c in lot]}
+            "digikey": info, "new_digikey_notices": run["notices"], "batch": comp.agent_batch(lot, notices)}
 
 
 def _alternatives(slug: str, client: digikey.Client, targets: list[dict], specs: dict[str, dict], day: str,
@@ -999,17 +1004,6 @@ def _dk_note(info: dict) -> str:
 def _dk_progress(info: dict, done: int, total: int, **extra) -> dict:
     note = _dk_note(info)
     return {"done": done, "total": total, **extra, **({"note": note[:200]} if note else {})}
-
-
-def _fallback(c: dict) -> dict:
-    """Repli d'une référence inconnue de Digi-Key, pour l'agent : sa recherche alldatasheet (dont le « Direct
-    Link » mène au fabricant), ce qu'un passage précédent en a établi (statut web, site du fabricant), et les
-    références proches que Digi-Key liste (`components.near` : variantes, alias)."""
-    if not (c.get("dk") or {}).get("error"):
-        return {}
-    web = c.get("web_status") or {}
-    return {"alldatasheet": comp.alldatasheet_url(c["mpn"]), "web_status": web.get("status"),
-            "maker": web.get("maker"), "digikey_near": comp.near(c)[:comp.NEAR_FOR_AGENT]}
 
 
 def components_progress(slug: str, mpns: list[str]) -> bool:
@@ -1374,8 +1368,16 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         valid, rejected = comp.validate_candidates(raw, data["components"])
         statuses, bad = comp.validate_statuses(raw, data["components"])
         rejected += bad
+        # Analyse de la recherche déléguée à Claude (facultative) : remplaçants trouvés sur le web, synthèse.
+        replacements, bad = comp.validate_replacements(raw, data["components"])
+        rejected += bad
+        comp.apply_replacements(data["components"], replacements, day)
+        synthesis = comp.synthesis(raw)
         new = comp.merge(notices, valid + comp.apply_statuses(data["components"], statuses, day), day)
-        lot = set(data["batch"])
+        # Sous-lots d'une recherche Claude en échec (claude_research.write_output) : ni recherchés, ni marqués comme
+        # tels, ils repassent en tête du lot suivant (jamais vérifiés, ou les plus anciens).
+        skipped = raw.get("unsearched") if isinstance(raw, dict) else None
+        lot = set(data["batch"]) - {k for k in skipped or [] if isinstance(k, str)}
         for c in data["components"]:
             if comp.key_of(c["mpn"], c["manufacturer"]) in lot:
                 c["web_checked_at"] = day
@@ -1385,7 +1387,8 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         _index(slug, data["components"], notices)
         linked = [x.slug for x in _linked_veilles(slug)]
     audit(actor, "components-finalize", slug,
-          f"{len(new)} nouvel(s) avis, {len(statuses)} statut(s) web, {len(rejected)} rejet(s)")
+          f"{len(new)} nouvel(s) avis, {len(statuses)} statut(s) web, {len(replacements)} référence(s) avec "
+          f"remplaçants web, {len(rejected)} rejet(s)")
     critical = sum(1 for n in new if n["type"] in comp.CRITICAL)
     if track:  # cumulés : finalize relancé après un échec (PDF, e-mail) garde les avis du premier passage
         found = Counter(n["key"] for n in new)
@@ -1397,7 +1400,7 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
                                           "rejected": len(rejected)})
 
     report = comp.pending(notices, "report", {day})
-    view = comp.digest(data["components"], notices, report, data.get("scan"), specs)
+    view = comp.digest(data["components"], notices, report, data.get("scan"), specs, synthesis)
     cov = view["coverage"]  # D4 : un passage Digi-Key partiel est dit partout (PDF, en-tête, e-mail, sortie)
     body = comp.to_markdown(view, heading="#")
     searched = [c["mpn"] for c in data["components"] if comp.key_of(c["mpn"], c["manufacturer"]) in lot]
@@ -1428,7 +1431,7 @@ def components_finalize(slug: str, candidates: Path, actor: str = "job") -> str:
         return "\n".join(lines)
     if track:
         track.update(phase="mail")
-    view = comp.digest(data["components"], notices, mail, data.get("scan"), specs)
+    view = comp.digest(data["components"], notices, mail, data.get("scan"), specs, synthesis)
     xlsx = _write_xlsx(pdf.parent, slug, data, notices, stamp, actor)
     hint = "Liste complète des composants dans le fichier Excel joint." if xlsx else ""
     with tempfile.NamedTemporaryFile("w", suffix=".html", encoding="utf-8", delete=False) as fh:

@@ -43,6 +43,8 @@
         {% if n.ltb_date %}· dernière cde <strong>{{ n.ltb_date }}</strong> {% endif %}
         {% if n.eol_date %}· fin de vie <strong>{{ n.eol_date }}</strong> {% endif %}· détecté {{ n.found_at }}</div>
       {% if n.summary %}<div class="small">{{ n.summary }}</div>{% endif %}
+      {% if n.impact or n.action %}<div class="small"><em>Analyse{% if n.urgency %} — urgence {{ n.urgency }}{% endif %} :</em>
+        {{ n.impact }}{% if n.action %} <strong>Action :</strong> {{ n.action }}{% endif %}</div>{% endif %}
       <div class="small">Sources : {% for s in n.sources %}{{ source_link(s) }}{{ " · " if not loop.last }}{% endfor %}</div>
     </li>
     {% endfor %}
@@ -94,6 +96,20 @@
     <button hx-post="/veilles/{{ slug }}/components/{{ r.anchor }}/alternatives" hx-target="#cd-{{ r.anchor }}" hx-swap="outerHTML" hx-disabled-elt="this">{{ "Relancer la recherche" if rec else "Rechercher des alternatives" }}</button>
     {% endif %}
     <p class="small muted">Suggestions Digi-Key paramétriques (références actives, mêmes caractéristiques critiques) : à qualifier avant tout remplacement.</p>
+  </div>
+  {% endif %}
+  {% set web_alt = sh.web_alternatives %}
+  {% if web_alt and web_alt['items'] %}
+  <div class="alts">
+    <p><strong>Remplaçants trouvés sur le web</strong> <span class="muted small">· recherche Claude du {{ web_alt.checked_at }}</span></p>
+    <ul class="alt-list">
+      {% for a in web_alt['items'] %}
+      <li><div class="alt-head"><strong>{{ source_link({"url": a.url, "label": a.mpn}) }}</strong>
+          <span class="muted">{{ a.manufacturer }}</span> <span class="badge alt">{{ a.compatibility }}</span></div>
+        {% if a.notes %}<div class="small muted">{{ a.notes }}</div>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    <p class="small muted">Successeurs annoncés par le fabricant ou équivalents reconnus, trouvés par la recherche web : à qualifier avant tout remplacement.</p>
   </div>
   {% endif %}
 </div>

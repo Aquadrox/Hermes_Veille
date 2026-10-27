@@ -162,11 +162,12 @@ def _one_output(suffix: str):
 VEILLECTL = {
     "composants": (
         ("components scan", "", lambda args, s: not args),
+        ("research claude", "{r}/D-pcn.json", _one_output("-pcn.json")),
         ("components progress", "<MPN> …", lambda args, s: bool(args) and not any(a.startswith("-") for a in args)),
         ("components finalize", "{r}/D-pcn.json", _one_output("-pcn.json")),
     ),
     "veille": (
-        ("research claude", "", lambda args, s: not args),
+        ("research claude", "{r}/D-veille.md", _one_output("-veille.md")),
         ("report publish", "{r}/D-veille.md", _one_output("-veille.md")),
     ),
 }
@@ -199,7 +200,7 @@ def _command(command, s: Session, timeout: float = 0) -> str | None:
             if action in LONG and timeout < COMMAND_TIMEOUT:
                 return (f"timeout {COMMAND_TIMEOUT} obligatoire pour veillectl {action} : en deçà, Hermes "
                         f"arrête la commande avant la fin {LONG[action]} (au bout de 180 s sans timeout). Appel exact : "
-                        f'{{"command": "veillectl {action} {s.slug}", "timeout": {COMMAND_TIMEOUT}}}')
+                        f'{{"command": "{" ".join(w)}", "timeout": {COMMAND_TIMEOUT}}}')
             return None
     return (f"commande non autorisée. Seules sont permises : date, ls {s.rapports}/, et pour la veille "
             f"{s.slug} : {', '.join(f'veillectl {name}' for name, _, _ in allowed)} "

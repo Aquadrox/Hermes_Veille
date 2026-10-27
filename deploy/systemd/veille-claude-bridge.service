@@ -11,12 +11,14 @@ Type=simple
 ExecStart=/usr/bin/python3 /root/veille-hermes/scripts/claude-bridge.py --socket /run/veille-claude-bridge/bridge.sock --group 10000 --claude /root/.local/bin/claude
 User=root
 Environment=HOME=/root
-# Bornes du pont (voir scripts/claude-bridge.py) : un seul claude à la fois, 20 recherches par jour, 20 min chacune.
+# Bornes du pont (voir scripts/claude-bridge.py) : un seul claude à la fois, 20 recherches par jour, 30 min chacune.
 Environment=CLAUDE_BRIDGE_CONCURRENCY=1
 Environment=CLAUDE_BRIDGE_MAX_PER_DAY=20
-Environment=CLAUDE_BRIDGE_TIMEOUT=1200
-# Modèle de Claude Code (vide : celui du compte).
+Environment=CLAUDE_BRIDGE_TIMEOUT=1800
+# Modèle et effort par défaut (vides : ceux de Claude Code pour le compte ; les réglages de l'utilisateur,
+# ~/.claude/settings.json, ne sont PAS lus) ; une veille peut choisir les siens (page de la veille).
 Environment=CLAUDE_BRIDGE_MODEL=
+Environment=CLAUDE_BRIDGE_EFFORT=
 StateDirectory=veille-claude-bridge
 StateDirectoryMode=0700
 # Dossier de la socket : au service, modifiable par lui seul (le pont le vérifie), monté en lecture seule dans le

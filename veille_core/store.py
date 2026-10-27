@@ -63,7 +63,9 @@ class Veille:
     kind: str = "veille"              # « composants » : surveillance PCN / fins de vie
     components: str | None = None     # veille : slug de la veille composants incluse en chapitre
     batch_size: int = 40              # composants : recherches web par exécution (lot tournant)
-    claude_research: bool = False     # veille : recherche déléguée à Claude Code sur l'hôte (claude_research.py)
+    claude_research: bool = False     # recherche déléguée à Claude Code sur l'hôte (claude_research.py)
+    claude_model: str = ""            # … modèle (claude_research.MODELS ; vide : celui du pont, sinon du compte)
+    claude_effort: str = ""           # … effort (claude_research.EFFORTS ; vide : celui du pont, sinon du modèle)
     created_at: str = ""
     updated_at: str = ""
 

@@ -12,7 +12,9 @@
 
 Recherche déléguée à Claude Code sur l'hôte (pont : scripts/install-claude-bridge.sh) :
   veillectl edit <slug> --claude-research on|off                    (option de la veille, désactivée par défaut)
-  veillectl research claude <slug>                                  (étape RECHERCHE du job, option activée)
+  veillectl edit <slug> --claude-model opus --claude-effort high    (défaut : celui du pont, sinon du compte)
+  veillectl research claude <slug> <dir>/rapports/D-veille.md       (étape du job, option activée : Claude
+                                                                     recherche et rédige ; composants : D-pcn.json)
   veillectl research ask <slug> [--question Q] [--wait]             (à la demande, option activée ou non)
   veillectl research list|show <slug> [AAAAMMJJ-HHMMSS]             (recherches conservées pour analyse)
   veillectl research status                                         (état du pont)
@@ -227,6 +229,18 @@ def _on_off(value: str | None) -> bool | None:
     return None if value is None else value == "on"
 
 
+def _default(value: str | None) -> str | None:
+    """« defaut » : modèle ou effort par défaut (vide) ; None : inchangé."""
+    return None if value is None else "" if value == "defaut" else value
+
+
+def _claude_args(p) -> None:
+    p.add_argument("--claude-model", choices=(*claude_research.MODELS, "defaut"),
+                   help="modèle de la recherche Claude (defaut : celui du pont, sinon du compte)")
+    p.add_argument("--claude-effort", choices=(*claude_research.EFFORTS, "defaut"),
+                   help="effort de la recherche Claude (defaut : celui du pont, sinon du modèle)")
+
+
 def _research(args) -> int:
     if args.action == "status":
         st = claude_research.status()
@@ -240,14 +254,27 @@ def _research(args) -> int:
     if not args.slug:
         raise store.StoreError("slug de la veille manquant")
     if args.action == "claude":  # étape du job : la sortie est lue par l'agent (claude_research.agent_text)
+        composants = store.load(args.slug).kind == "composants"
+        if not args.stamp:
+            raise store.StoreError("fichier de sortie manquant : veillectl research claude <slug> "
+                                   + ("<rapports/D-pcn.json>" if composants else "<rapports/D-veille.md>"))
+        output = claude_research.output_path(args.slug, args.stamp)
         try:
             rec = claude_research.for_job(args.slug)
         except claude_research.BridgeError as exc:
-            print(f"ÉCHEC de la recherche Claude : {exc}. Fais la recherche toi-même avec web_search / web_extract, "
-                  "selon les thèmes du brief.")
+            print(f"ÉCHEC de la recherche Claude : {exc}. "
+                  + ("Fais toi-même la recherche et l'écriture du fichier (étapes 3 et 4 du prompt), puis l'étape "
+                     "ENREGISTRE." if composants else "Fais toi-même toutes les étapes du prompt (1 à 9), comme "
+                     "sans l'option."))
             return 1
-        print(claude_research.agent_text(rec))
-        return 1 if rec.get("state") == "error" else 0
+        written = None
+        if composants and rec.get("state") == "pending":  # suivi en direct : tout le lot est en recherche
+            service.components_progress(args.slug, [c["mpn"] for c in components.planned_batch(
+                components.load_components(args.slug))])
+        elif claude_research.write_output(rec, output):
+            written = output
+        print(claude_research.agent_text(rec, written))
+        return 1 if rec.get("state") == "error" or (rec.get("state") == "done" and not written) else 0
     if args.action == "ask":
         rec = service.research_start(args.slug, args.question, origin="cli")
         print(f"✓ recherche Claude {rec['stamp']} déposée auprès du pont")
@@ -258,7 +285,8 @@ def _research(args) -> int:
     elif args.action == "list":
         for r in claude_research.list_research(args.slug):
             cost = "—" if r["cost_usd"] is None else f"{r['cost_usd']:.2f} $"
-            print(f"{r['stamp']}  {r['origin']:<4} {r['state']:<8} {r['items']:>3} info.  {cost:>8}  "
+            unit = "avis " if r["kind"] == "composants" else "info."
+            print(f"{r['stamp']}  {r['origin']:<4} {r['state']:<8} {r['items']:>3} {unit}  {cost:>8}  "
                   f"{r['question'] or ''}{r['error'] or ''}"[:200])
         return 0
     else:
@@ -306,6 +334,7 @@ def main(argv: list[str] | None = None) -> int:
     p_create.add_argument("--batch-size", type=int)
     p_create.add_argument("--claude-research", choices=("on", "off"), default="off",
                           help="recherche déléguée à Claude Code sur l'hôte")
+    _claude_args(p_create)
 
     p_edit = sub.add_parser("edit")
     p_edit.add_argument("slug")
@@ -319,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
     p_edit.add_argument("--include-components", help='slug, ou "" pour retirer le chapitre')
     p_edit.add_argument("--batch-size", type=int)
     p_edit.add_argument("--claude-research", choices=("on", "off"), help="recherche déléguée à Claude Code sur l'hôte")
+    _claude_args(p_edit)
 
     p_comp = sub.add_parser("components", help="veille composants : PCN et fins de vie")
     p_comp.add_argument("action", choices=("list", "notices", "add", "remove", "import", "scan", "progress",
@@ -350,7 +380,8 @@ def main(argv: list[str] | None = None) -> int:
     p_res = sub.add_parser("research", help="recherche déléguée à Claude Code sur l'hôte")
     p_res.add_argument("action", choices=("claude", "ask", "list", "show", "status"))
     p_res.add_argument("slug", nargs="?")
-    p_res.add_argument("stamp", nargs="?", help="show : recherche AAAAMMJJ-HHMMSS (défaut : la plus récente)")
+    p_res.add_argument("stamp", nargs="?", help="show : recherche AAAAMMJJ-HHMMSS (défaut : la plus récente) ; "
+                       "claude : fichier de sortie rapports/AAAA-MM-JJ-HHhMM-veille.md (composants : -pcn.json)")
     p_res.add_argument("--question", help="ask : question précise, dans le périmètre du brief")
     p_res.add_argument("--wait", action="store_true", help="ask : attendre le résultat")
 
@@ -402,7 +433,8 @@ def main(argv: list[str] | None = None) -> int:
                 brief=_brief_from(args), model=args.model, paused=args.paused, kind=args.kind,
                 components=_components_file(args.components_file),
                 include_components=args.include_components, batch_size=args.batch_size,
-                claude_research=args.claude_research == "on")
+                claude_research=args.claude_research == "on", claude_model=_default(args.claude_model) or "",
+                claude_effort=_default(args.claude_effort) or "")
             print(f"✓ veille créée : {v.slug} (job {v.job_id}) — {schedule.describe(v.schedule)}")
         elif args.cmd == "edit":
             v = service.update_veille(
@@ -411,7 +443,8 @@ def main(argv: list[str] | None = None) -> int:
                 brief=_brief_from(args), model=args.model,
                 components=_components_file(args.components_file),
                 include_components=args.include_components, batch_size=args.batch_size,
-                claude_research=_on_off(args.claude_research))
+                claude_research=_on_off(args.claude_research), claude_model=_default(args.claude_model),
+                claude_effort=_default(args.claude_effort))
             print(f"✓ veille modifiée : {v.slug}")
         elif args.cmd == "pause":
             service.pause(args.slug)
