@@ -760,8 +760,8 @@ def components_scan(slug: str, actor: str = "job", client: digikey.Client | None
             r = results.get(key)
             if r is None:
                 continue
-            prev = c.get("dk") or {}
-            dk = {**prev, "checked_at": day, "error": r.get("error")}
+            prev = {k: v for k, v in (c.get("dk") or {}).items() if k != "near"}  # références proches : du jour
+            dk = {**prev, "checked_at": day, "error": r.get("error"), **({"near": r["near"]} if r.get("near") else {})}
             if "status" in r:
                 info["checked"] += 1
                 ntype = digikey.STATUS_TYPES.get(r["status"].lower())
@@ -972,12 +972,13 @@ def _dk_progress(info: dict, done: int, total: int, **extra) -> dict:
 
 def _fallback(c: dict) -> dict:
     """Repli d'une référence inconnue de Digi-Key, pour l'agent : sa recherche alldatasheet (dont le « Direct
-    Link » mène au fabricant), et ce qu'un passage précédent en a établi (statut web, site du fabricant)."""
+    Link » mène au fabricant), ce qu'un passage précédent en a établi (statut web, site du fabricant), et les
+    références proches que Digi-Key liste (`components.near` : variantes, alias)."""
     if not (c.get("dk") or {}).get("error"):
         return {}
     web = c.get("web_status") or {}
     return {"alldatasheet": comp.alldatasheet_url(c["mpn"]), "web_status": web.get("status"),
-            "maker": web.get("maker")}
+            "maker": web.get("maker"), "digikey_near": comp.near(c)[:comp.NEAR_FOR_AGENT]}
 
 
 def components_progress(slug: str, mpns: list[str]) -> bool:

@@ -76,7 +76,11 @@ def test_not_found_and_odd_answers():
     f = Fake(TOKEN, found(product(mpn="LM317T-DG"), key="Products"), http_error(404), {},
              {"ExactMatches": "x", "Products": None}, ["pas", "un", "objet"])
     c = f.client(min_interval=0)
-    for _ in range(5):  # autre référence seulement, 404, vide, champs mal typés, réponse qui n'est pas un objet
+    # MPN prolongé chez le même fabricant : référence proche (variante), jamais la référence elle-même
+    assert c.status("LM317T", "Texas Instruments") == {"error": "référence exacte introuvable chez Digi-Key", "near": [
+        {"mpn": "LM317T-DG", "manufacturer": "Texas Instruments", "status": "Last Time Buy",
+         "url": "https://www.digikey.com/p/1", "kind": "variante"}]}
+    for _ in range(4):  # 404, vide, champs mal typés, réponse qui n'est pas un objet
         assert c.status("LM317T", "Texas Instruments") == {"error": "introuvable chez Digi-Key"}
     assert c.calls == 6 and not f.answers
 

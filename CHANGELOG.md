@@ -7,6 +7,39 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.8.3] — 2026-10-27
+
+Références « introuvables chez Digi-Key » : 32 références d'une nomenclature réelle sans aucune information.
+Diagnostic sur l'API Digi-Key : 15 y sont sous un MPN prolongé (« DS28E01P-100+T », « FT232RL-REEL »), 3 sous un
+fabricant écrit autrement (« NXP USA Inc. »), 4 comme alias d'un produit revendeur (« APA102-2020 » d'un produit
+SparkFun) ; 10 n'y sont pas. Et après une réinitialisation, ces références attendaient leur tour dans le lot web.
+
+### Ajouté
+
+- **Références proches** (`dk.near`, `digikey.Client.status`, sans appel de plus) : variantes du même fabricant au
+  MPN prolongé et alias (`OtherNames`) d'autres fabricants, 10 au plus, avec statut et fiche ; « référence exacte
+  introuvable chez Digi-Key ». Indices seulement : jamais le statut de la référence.
+- **Agent** : `digikey_near` dans le lot web ; une variante commandable confirmée (même statut pour toutes) donne
+  le statut de la référence, avec sa fiche Digi-Key pour source ; un alias ne fait jamais foi.
+- **Interface** : références proches dans le détail du composant. **Excel** : colonne « Proches chez Digi-Key » et
+  feuille « Références proches » (une ligne par variante ou alias).
+
+### Corrigé
+
+- Fabricants comparés sans les mots génériques (« Inc. », « USA », « Semiconductors »…) : « NXP Semiconductors »
+  reconnaît « NXP USA Inc. ».
+- Lot web : les références inconnues de Digi-Key jamais recherchées passent en tête (aucun autre statut).
+
+### Mesuré (API réelle, 27/10/2026)
+
+- 32 références « introuvables » : 22 avec références proches (variantes ou alias), 10 sans (CH340G, HC-SR04,
+  ME6211C33M5G, PL2303HXD, SGM2019-3.3YN5G, SI2302DS-T1-E3, SRV05-4-P-T7, UVR1H101MED, VL53L0X, WS2812B).
+
+### Déploiement
+
+- `make update`. Les références proches apparaissent au prochain passage Digi-Key ; les inconnues partent au lot
+  web en premier.
+
 ## [0.8.2] — 2026-10-27
 
 Recherche d'alternatives : des discrets courants en fin de vie (2N2222A, BC548B, BC557B, FQP30N06L,

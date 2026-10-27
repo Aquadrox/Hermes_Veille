@@ -111,7 +111,8 @@ def test_new_watch_adopts_known_statuses_and_notices(known, tools):  # noqa: F81
     other = new_watch("Composants carte Y", "lm317t;texas instruments\nSTM32F103C8T6;STMicroelectronics\nBC547;onsemi")
     data = {c["mpn"]: c for c in comp.load_components(other.slug)["components"]}
     assert data["lm317t"]["dk"]["status"] == "Last Time Buy"  # orthographe de CETTE veille conservée
-    assert data["STM32F103C8T6"]["web_checked_at"] == comp.today() and data["BC547"]["dk"] is None
+    # lot web de `known` : NE555P (inconnue de Digi-Key, en tête) et LM317T
+    assert data["lm317t"]["web_checked_at"] == comp.today() and data["BC547"]["dk"] is None
     notices = comp.load_notices(other.slug)
     assert sorted(n["type"] for n in notices) == ["LTB", "PCN"]
     for n in notices:

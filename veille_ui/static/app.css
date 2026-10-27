@@ -107,6 +107,7 @@ button.comp-toggle[aria-expanded=true]::before { content: "▾ "; }
 tr.detail > td { background: var(--bg); }
 .comp-detail p { margin: .2rem 0; }
 ul.notices { margin: .4rem 0; padding-left: 1.1rem; }
+ul.near { margin: .2rem 0; padding-left: 1.1rem; }
 ul.notices li { margin-bottom: .5rem; }
 ul.notices li.crit::marker { color: var(--bad); }
 /* Fiche composant : caractéristiques à cocher (une par ligne, cible tactile pleine largeur) et alternatives en

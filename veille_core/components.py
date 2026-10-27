@@ -99,11 +99,21 @@ def key_of(mpn: str, manufacturer: str) -> str:
     return f"{norm_mfr(manufacturer)}|{norm_mpn(mpn)}"
 
 
+# Mots sans valeur distinctive dans un nom de fabricant : « NXP Semiconductors » (nomenclature) ~ « NXP USA Inc. »
+# (Digi-Key) une fois retirés.
+_MFR_GENERIC = re.compile(r"\b(?:inc|incorporated|corp|corporation|co|ltd|llc|ag|gmbh|usa|semiconductors?|"
+                          r"technology|technologies|international)\b")
+
+
 def same_manufacturer(a: str, b: str) -> bool:
-    """« Texas Instruments » ~ « Texas Instruments Inc. ». Un nom court (« TI », « ON ») doit être
-    identique : « ON » n'est pas contenu dans « Infineon »."""
+    """« Texas Instruments » ~ « Texas Instruments Inc. », « NXP Semiconductors » ~ « NXP USA Inc. ». Un nom
+    court (« TI », « ON ») doit être identique : « ON » n'est pas contenu dans « Infineon ». Sans les mots
+    génériques, égalité seulement : « Diodes Incorporated » (« diodes ») n'est pas « SMC Diode Solutions »."""
     na, nb = sorted((norm_mfr(a), norm_mfr(b)), key=len)
-    return bool(na) and (na == nb or (len(na) >= 4 and na in nb))
+    if na and (na == nb or (len(na) >= 4 and na in nb)):
+        return True
+    ca, cb = (norm_mfr(_MFR_GENERIC.sub(" ", (x or "").lower())) for x in (a, b))
+    return bool(ca) and ca == cb
 
 
 def validate_entry(mpn, manufacturer) -> tuple[dict | None, str]:
@@ -536,13 +546,14 @@ def mark_delivered(notices: list[dict], ids: set[str], channel: str, day: str | 
 # Lot tournant de recherche web
 # --------------------------------------------------------------------------
 def batch(components: list[dict], size: int) -> list[dict]:
-    """Jamais vérifiés, puis statut Digi-Key changé depuis la dernière recherche (y compris une référence que
-    Digi-Key ne trouve plus : une recherche, pas toutes), puis les plus anciens."""
+    """Jamais vérifiés (inconnus de Digi-Key d'abord : ils n'ont aucun statut), puis statut Digi-Key changé depuis
+    la dernière recherche (y compris une référence que Digi-Key ne trouve plus : une recherche, pas toutes), puis
+    les plus anciens."""
     def rank(c):
         web = c.get("web_checked_at")
         changed = (c.get("dk") or {}).get("changed_at")
         if not web:
-            return (0, "")
+            return (0, "0" if (c.get("dk") or {}).get("error") else "1")
         return (1 if changed and changed > web else 2, web)
     return sorted(components, key=rank)[: max(1, size)]
 
@@ -573,6 +584,27 @@ def scan_coverage(scan: dict | None) -> dict | None:
         text += (f" ; les {total - checked} autre(s) gardent le statut de leur dernière vérification et passent en "
                  "priorité au prochain passage")
     return {"partial": partial, "checked": checked, "total": total, "text": text + (f" ({note})." if note else ".")}
+
+
+MAX_NEAR = 10  # références proches gardées pour une référence que Digi-Key ne connaît pas
+NEAR_KINDS = ("variante", "alias")
+NEAR_FOR_AGENT = 5  # références proches données à l'agent par référence (sortie du scan bornée : 40 × 5)
+
+
+def near(c: dict) -> list[dict]:
+    """Références proches d'une référence inconnue de Digi-Key (`dk.near`, voir `digikey.Client.status`) :
+    {"mpn", "manufacturer", "status", "url", "kind"} ; entrées mal formées ignorées, lien revalidé (fichier
+    retouché)."""
+    items = (c.get("dk") or {}).get("near")
+    return [{**x, "url": normalize_url(x.get("url") or "")} for x in items if isinstance(x, dict)
+            and isinstance(x.get("mpn"), str) and x["mpn"] and x.get("kind") in NEAR_KINDS][:MAX_NEAR] \
+        if isinstance(items, list) else []
+
+
+def near_text(c: dict) -> str:
+    """« 2 variante(s), 1 alias » (vide : aucune référence proche)."""
+    kinds = [x["kind"] for x in near(c)]
+    return ", ".join(f"{kinds.count(k)} {k}{'(s)' if k == 'variante' else ''}" for k in NEAR_KINDS if k in kinds)
 
 
 def search_since(c: dict) -> str | None:
@@ -1254,10 +1286,11 @@ _XLSX_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff
 _XLSX_COLUMNS = (("Composant", 24), ("Fabricant", 22), ("Critique", 9), ("Avis", 28),
                  ("Avis principal", 48), ("Échéance", 12), ("Détecté", 12), ("Statut Digi-Key", 20),
                  ("Vérifié Digi-Key", 15), ("Statut web", 18), ("Recherche web", 15), ("Alternatives", 40),
-                 ("Lien", 48), ("Suivi", 9))
-_XLSX_DATES = frozenset(i for i, (name, _) in enumerate(_XLSX_COLUMNS, 1)
-                        if name in ("Échéance", "Détecté", "Vérifié Digi-Key", "Recherche web"))
-_XLSX_LINK = next(i for i, (name, _) in enumerate(_XLSX_COLUMNS, 1) if name == "Lien")
+                 ("Proches chez Digi-Key", 20), ("Lien", 48), ("Suivi", 9))
+# Seconde feuille : une ligne par référence proche d'une référence que Digi-Key ne connaît pas (`near`).
+_XLSX_NEAR_COLUMNS = (("Composant", 24), ("Fabricant", 22), ("Référence proche", 26), ("Fabricant Digi-Key", 30),
+                      ("Type", 10), ("Statut Digi-Key", 18), ("Lien", 48))
+_XLSX_DATE_NAMES = frozenset({"Échéance", "Détecté", "Vérifié Digi-Key", "Recherche web"})
 
 
 def xlsx_name(slug: str, stamp: str) -> str:
@@ -1279,48 +1312,33 @@ def _xlsx_cell(value, is_date: bool) -> str | dt.date:
     return _XLSX_ILLEGAL.sub("", value)
 
 
-def to_xlsx(components: list[dict], notices: list[dict], sources: dict[str, list[str]] | None = None) -> bytes:
-    """Classeur Excel d'une ligne par composant (critiques en tête, filtre automatique). `sources` (base des
-    composants) : {clé: veilles qui ont analysé la référence}, en dernière colonne « Veilles ».
+def _xlsx_sheet(ws, columns: tuple, rows) -> None:
+    """Remplit la feuille `ws` : en-tête, lignes `rows` ([(valeurs, critique)]), filtre automatique, impression.
 
-    Les textes viennent du web : chaque cellule texte est forcée en type CHAÎNE, une valeur
-    « =… » n'est jamais une formule ; seuls les liens validés par `normalize_url` sont cliquables.
-    """
-    from io import BytesIO
-
-    from openpyxl import Workbook
+    Les textes viennent du web : chaque cellule texte est forcée en type CHAÎNE, une valeur « =… » n'est jamais
+    une formule ; seuls les liens validés par `normalize_url` (colonne « Lien ») sont cliquables."""
     from openpyxl.styles import Font, PatternFill
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Composants"
-    columns = _XLSX_COLUMNS + ((("Veilles", 40),) if sources is not None else ())
     ws.append([name for name, _ in columns])
     for i, (_, width) in enumerate(columns, 1):
         ws.cell(1, i).font = Font(bold=True, color="FFFFFF")
         ws.cell(1, i).fill = PatternFill("solid", fgColor="0F766E")
         ws.column_dimensions[ws.cell(1, i).column_letter].width = width
+    dates = {i for i, (name, _) in enumerate(columns, 1) if name in _XLSX_DATE_NAMES}
+    link = next(i for i, (name, _) in enumerate(columns, 1) if name == "Lien")
     crit_fill = PatternFill("solid", fgColor="FEF2F2")
     # numéro de ligne tenu ici : ws.max_row parcourt toute la feuille (export quadratique sinon)
-    for n, r in enumerate(group(notices, components, include_quiet=True), 2):
-        dk, link = r["dk"], r["link"]
-        url = normalize_url(link["url"]) if link else None
-        values = (r["mpn"], r["manufacturer"], "Oui" if r["critical"] else "",
-                  ", ".join(TYPES[t][0] for t in r["types"]), r["worst"]["title"] if r["worst"] else "",
-                  r["deadline"], r["found"], dk.get("status") or dk.get("error"), dk.get("checked_at"),
-                  web_status_label(r["web"]), r["web_checked_at"],
-                  " ; ".join(f"{a['mpn']} ({a.get('manufacturer') or '?'})" for a in _alt_items(r["alt"])), url,
-                  "" if r["tracked"] else "retiré") + ((", ".join(sources.get(r["key"], ())),) if sources is not None else ())
+    for n, (values, critical) in enumerate(rows, 2):
         for col, value in enumerate(values, 1):
-            cell = ws.cell(n, col, _xlsx_cell(value, col in _XLSX_DATES))
+            cell = ws.cell(n, col, _xlsx_cell(value, col in dates))
             if cell.data_type == "f":  # « =… » venu du web : texte, jamais formule
                 cell.data_type = "s"
             elif cell.is_date:
                 cell.number_format = "yyyy-mm-dd"
-            if r["critical"]:
+            if critical:
                 cell.fill = crit_fill
-        if url:
-            ws.cell(n, _XLSX_LINK).hyperlink = url
+        if values[link - 1]:
+            ws.cell(n, link).hyperlink = values[link - 1]
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
     # Impression : paysage, toutes les colonnes sur la largeur d'une page, en-tête répété.
@@ -1328,6 +1346,34 @@ def to_xlsx(components: list[dict], notices: list[dict], sources: dict[str, list
     ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.print_title_rows = "1:1"
+
+
+def to_xlsx(components: list[dict], notices: list[dict], sources: dict[str, list[str]] | None = None) -> bytes:
+    """Classeur Excel : feuille « Composants », une ligne par composant (critiques en tête) ; `sources` (base des
+    composants) : {clé: veilles qui ont analysé la référence}, en dernière colonne « Veilles ». Feuille
+    « Références proches » : une ligne par variante ou alias que Digi-Key liste pour une référence qu'il ne
+    connaît pas (`near`)."""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    rows = group(notices, components, include_quiet=True)
+    main, near_rows = [], []
+    for r in rows:
+        dk, link = r["dk"], r["link"]
+        main.append(((r["mpn"], r["manufacturer"], "Oui" if r["critical"] else "",
+                      ", ".join(TYPES[t][0] for t in r["types"]), r["worst"]["title"] if r["worst"] else "",
+                      r["deadline"], r["found"], dk.get("status") or dk.get("error"), dk.get("checked_at"),
+                      web_status_label(r["web"]), r["web_checked_at"],
+                      " ; ".join(f"{a['mpn']} ({a.get('manufacturer') or '?'})" for a in _alt_items(r["alt"])),
+                      near_text(r), normalize_url(link["url"]) if link else None, "" if r["tracked"] else "retiré")
+                     + ((", ".join(sources.get(r["key"], ())),) if sources is not None else ()), r["critical"]))
+        near_rows += [((r["mpn"], r["manufacturer"], x["mpn"], x.get("manufacturer"), x["kind"], x.get("status"),
+                    normalize_url(x.get("url") or "")), False) for x in near(r)]
+    wb.active.title = "Composants"
+    _xlsx_sheet(wb.active, _XLSX_COLUMNS + ((("Veilles", 40),) if sources is not None else ()), main)
+    _xlsx_sheet(wb.create_sheet("Références proches"), _XLSX_NEAR_COLUMNS, near_rows)
     out = BytesIO()
     wb.save(out)
     return out.getvalue()

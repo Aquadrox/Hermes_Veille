@@ -260,7 +260,9 @@ lundi 6h30 — job de la veille thématique rattachée
 Limites : la recherche web reste probabiliste (un avis peut être manqué : le statut Digi-Key sert
 de filet) ; les avis PCN de Digi-Key eux-mêmes ne sont pas lus (leur API exige une connexion
 interactive, OAuth « 3-legged ») ; Mouser et Nexar ne sont pas intégrés. Alternatives : seulement pour les
-références que Digi-Key connaît (une référence introuvable n'a pas de fiche) ; seules les tenues (tension,
+références que Digi-Key connaît (une référence introuvable n'a pas de fiche ; ses **références proches** —
+variantes au MPN prolongé, alias d'un revendeur — sont affichées dans son détail et la feuille « Références
+proches » de l'Excel, à titre d'indice, et données à l'agent web qui en confirme le statut, 0.8.3) ; seules les tenues (tension,
 courant, puissance) se comparent en « supérieure ou égale », les autres critiques à l'identique (une tolérance
 plus serrée ou un boîtier voisin — TO-92 « Long Body » / standard — ne passe pas une critique cochée : la
 décocher élargit la recherche).
