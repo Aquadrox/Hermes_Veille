@@ -7,6 +7,30 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.11.0] — 2026-10-28
+
+Accueil repensé et nouvelle navigation, pensés d'abord pour la PWA mobile (Capacitor).
+
+### Ajouté
+
+- **Accueil** : compte à rebours jusqu'à la prochaine exécution (toutes veilles confondues) et indicateurs : veilles
+  actives, en échec, coût DeepSeek du mois, composants en fin de vie (si une veille composants existe).
+- **Une carte par veille** à la place du tableau : liseré de l'état, rythme, prochain et dernier run, dernier
+  rapport, mini-graphe SVG du coût des 12 dernières exécutions (heures pleines en ambre, détail au survol, lien vers
+  « Coût des exécutions »), dernière erreur d'une veille en échec. Même identifiant, même rafraîchissement htmx
+  pendant un lancement et mêmes actions qu'avant.
+- **Derniers rapports** : les 5 plus récents, toutes veilles confondues.
+- `service.dashboard()` / `service.card()` et `schedule.parse_when()` (lecture unique des horodatages de Hermes).
+
+### Modifié
+
+- **Navigation** : barre d'onglets fixée en bas sur mobile (Accueil, Composants, Nouvelle, Santé, Plus), avec
+  icônes et onglet courant mis en évidence, marges de sécurité (encoche, barre gestuelle : `viewport-fit=cover`) ;
+  Sources, Paramètres et Déconnexion dans le menu « Plus » (refermé au toucher ailleurs ou par Échap). Dans
+  l'en-tête sur grand écran. Couleur de la barre d'état (`theme-color`) en clair et en sombre.
+- Tarifs DeepSeek lus une fois pour toutes les veilles (page Santé, MCP `get_costs` sans veille), au lieu d'une
+  fois par veille.
+
 ## [0.10.0] — 2026-10-27
 
 Option `claude_research` : Hermes ne fait plus que l'orchestration, Claude recherche, analyse et rédige. Sans

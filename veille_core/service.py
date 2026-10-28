@@ -47,6 +47,8 @@ PLACEHOLDER_RECIPIENT = store.PLACEHOLDER_RECIPIENT
 COMPONENTS_TEMPLATE = "composants"
 COMPONENTS_SCHEDULE = "0 23 * * 0"  # dimanche 23h : heures creuses DeepSeek toute l'année
 CHAPTER_MARK = "<!-- chapitre-composants -->"
+DASHBOARD_RUNS = 12  # accueil : exécutions du mini-graphe de coût d'une veille
+DASHBOARD_REPORTS = 5  # accueil : derniers rapports, toutes veilles confondues
 SCAN_BUDGET_S = 900  # passage Digi-Key, toutes tranches confondues : la suite au prochain passage
 # Tranche d'un appel `veillectl components scan` (D1, voir components_scan) : elle, l'appel Digi-Key en cours à son
 # terme (jeton expiré : 2 authentifications et 2 requêtes) et l'enregistrement tiennent dans guard.COMMAND_TIMEOUT.
@@ -167,6 +169,7 @@ def describe(v: Veille, jobs: list[dict] | None = None) -> dict:
         "schedule_human": schedule.describe(v.schedule),
         "recipients": store.read_recipients(v.slug),
         "last_report": reports[0] if reports else None,
+        "recent_reports": reports[:DASHBOARD_REPORTS],
         "report_count": len(reports),
         "running": running,
         "progress": run_progress(v.slug, running=True) if running else None,
@@ -229,8 +232,10 @@ def _run_row(run: dict, table: dict) -> dict:
 
 def costs(slug: str, days: int = 30, limit: int = 50) -> dict:
     """Exécutions mesurées d'une veille (tokens, durée, heures pleines, coût) et totaux."""
-    v = store.load(slug)
-    table = pricing.load()
+    return _costs(store.load(slug), pricing.load(), days, limit)
+
+
+def _costs(v: Veille, table: dict, days: int = 30, limit: int = 50) -> dict:
     runs = [_run_row(r, table) for r in hermes.run_usage(v.job_id, limit)]
     now = dt.datetime.now(schedule.ZONE)
     since = now - dt.timedelta(days=days)
@@ -238,7 +243,7 @@ def costs(slug: str, days: int = 30, limit: int = 50) -> dict:
     recent = [r for r in runs if r["started_at"] and r["started_at"] >= since]
     this_month = [r for r in runs if r["started_at"] and r["started_at"] >= month]
     return {
-        "slug": slug,
+        "slug": v.slug,
         "runs": runs,
         "days": days,
         "total_days_usd": round(sum(r["cost_usd"] for r in recent), 4),
@@ -252,15 +257,44 @@ def costs(slug: str, days: int = 30, limit: int = 50) -> dict:
 
 
 def costs_overview(days: int = 30) -> dict:
-    rows = []
+    rows, table = [], pricing.load()
     for v in store.list_all():
-        c = costs(v.slug, days)
+        c = _costs(v, table, days)
         rows.append({"slug": v.slug, "name": v.name, "total_month_usd": c["total_month_usd"],
                      "runs_month": c["runs_month"], "total_days_usd": c["total_days_usd"],
                      "average_run_usd": c["average_run_usd"]})
     return {"days": days, "veilles": rows,
             "total_month_usd": round(sum(r["total_month_usd"] for r in rows), 4),
             "total_days_usd": round(sum(r["total_days_usd"] for r in rows), 4)}
+
+
+# --------------------------------------------------------------------------
+# Accueil
+# --------------------------------------------------------------------------
+def card(v: Veille, jobs: list[dict] | None = None, table: dict | None = None) -> dict:
+    """Carte d'une veille sur l'accueil : son état (`describe`), son coût du mois et celui de ses dernières
+    exécutions (`spark`, de la plus ancienne à la plus récente)."""
+    c = _costs(v, table or pricing.load())
+    return {**describe(v, jobs), "month_usd": c["total_month_usd"],
+            "spark": c["runs"][:DASHBOARD_RUNS][::-1]}
+
+
+def dashboard() -> dict:
+    """Accueil : cartes des veilles, prochaine exécution, coût du mois, composants critiques et derniers
+    rapports, toutes veilles confondues. Jobs et tarifs lus une seule fois."""
+    jobs, table = _safe_jobs(), pricing.load()
+    cards = [card(v, jobs, table) for v in store.list_all()]
+    upcoming = [(when, c) for c in cards if (when := schedule.parse_when(c["status"].get("next_run_at")))]
+    reports = [{**r, "veille": c["veille"]} for c in cards for r in c["recent_reports"]]
+    soonest = min(upcoming, key=lambda x: x[0], default=None)
+    return {
+        "cards": cards,
+        "next": {"at": soonest[0], "card": soonest[1]} if soonest else None,
+        "month_usd": round(sum(c["month_usd"] for c in cards), 4),
+        "critical": sum((c["components"] or {}).get("critical", 0) for c in cards),
+        "has_components": any(c["veille"].kind == "composants" for c in cards),
+        "reports": sorted(reports, key=lambda r: r["stamp"], reverse=True)[:DASHBOARD_REPORTS],
+    }
 
 
 # --------------------------------------------------------------------------

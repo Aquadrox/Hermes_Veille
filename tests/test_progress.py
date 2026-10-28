@@ -327,7 +327,7 @@ def test_ui_dashboard_row_polls_only_while_running(ui, watch, monkeypatch):  # n
     assert f'hx-get="/veilles/{watch.slug}/row" hx-trigger="every 10s"' in row[:200]
     assert "Étape 2/3 — Recherche web : 0 / 2 composant(s) · en cours : LM317T" in row
     r = client.get(f"/veilles/{watch.slug}/row")
-    assert r.status_code == 200 and r.text.strip().startswith(f'<tr id="row-{watch.slug}" hx-get=')
+    assert r.status_code == 200 and r.text.strip().startswith(f'<article id="row-{watch.slug}" class="vcard run" hx-get=')
     running["pid"] = None
     r = client.get(f"/veilles/{watch.slug}/row").text
     assert "hx-trigger" not in r.split(">")[0] and "Étape 2/3" not in r

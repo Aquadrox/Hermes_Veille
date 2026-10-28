@@ -21,6 +21,13 @@
     document.querySelectorAll("button.busy").forEach(function (b) { b.disabled = false; b.classList.remove("busy"); });
   });
 
+  // Menu « Plus » de la navigation (<details class="more">) : refermé par un toucher ailleurs ou Échap.
+  function closeMenus(except) {
+    document.querySelectorAll("details.more[open]").forEach(function (d) { if (d !== except) d.open = false; });
+  }
+  document.addEventListener("click", function (e) { closeMenus(e.target.closest && e.target.closest("details.more")); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeMenus(null); });
+
   // Affiche seulement les champs utiles au rythme choisi : <label data-show="weekly monthly">.
   function syncFreq() {
     var sel = document.getElementById("freq_kind");

@@ -1,5 +1,32 @@
 {% extends "base.html" %}
 {% block content %}
+{% set cards = dash.cards %}
+<section class="hero" aria-label="Vue d'ensemble">
+  <div class="hero-next">
+    {% if dash.next %}{% set nv = dash.next.card.veille %}
+    <p class="muted small">Prochaine exécution</p>
+    <p class="countdown">{{ dash.next.at|until }}</p>
+    <p><a href="/veilles/{{ nv.slug }}">{{ nv.name }}</a> <span class="muted">{{ dash.next.at|dt }}</span></p>
+    {% elif cards %}
+    <p class="countdown">Rien de planifié</p>
+    <p class="muted">Toutes les veilles sont en pause.</p>
+    {% else %}
+    <p class="countdown">Aucune veille</p>
+    <p class="muted">Crée une veille thématique ou une veille composants pour démarrer.</p>
+    {% endif %}
+  </div>
+  {% if cards %}
+  <dl class="kpis">
+    <div><dt>Actives</dt><dd>{{ states.ok + states.run }}<small> / {{ cards|length }}</small></dd></div>
+    <div{% if states.bad %} class="alert"{% endif %}><dt>En échec</dt><dd>{{ states.bad }}</dd></div>
+    <div><dt>Coût du mois</dt><dd>{{ dash.month_usd|usd }}</dd></div>
+    {% if dash.has_components %}
+    <div{% if dash.critical %} class="alert"{% endif %}><dt>Fin de vie</dt><dd><a href="/composants">{{ dash.critical }}</a></dd></div>
+    {% endif %}
+  </dl>
+  {% endif %}
+</section>
+
 <div class="head">
   <h1>Veilles</h1>
   <div class="actions">
@@ -7,18 +34,24 @@
     <a class="button primary" href="/veilles/new">+ Nouvelle veille</a>
   </div>
 </div>
-{% if not rows %}
-<section class="card"><p>Aucune veille. <a href="/veilles/new">Créer la première</a>.</p></section>
-{% else %}
-<div class="table-wrap">
-<table class="list">
-  <thead>
-    <tr><th>Veille</th><th>Fréquence</th><th>État</th><th>Prochain run</th><th>Dernier run</th><th>Dernier rapport</th><th></th></tr>
-  </thead>
-  <tbody>
-    {% for row in rows %}{% include "partials/row.html" %}{% endfor %}
-  </tbody>
-</table>
+{% if cards %}
+<div class="cards">
+  {% for row in cards %}{% include "partials/row.html" %}{% endfor %}
 </div>
+{% endif %}
+
+{% if dash.reports %}
+<section class="card feed">
+  <h2>Derniers rapports</h2>
+  <ul>
+    {% for r in dash.reports %}
+    <li>
+      {% if r.pdf %}<a href="/veilles/{{ r.veille.slug }}/reports/{{ r.pdf }}" target="_blank" rel="noopener">{{ r.date }}{% if r.time %} {{ r.time }}{% endif %}</a>
+      {% else %}<span>{{ r.date }}</span>{% endif %}
+      <a class="muted" href="/veilles/{{ r.veille.slug }}#rapports">{{ r.veille.name }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
 {% endif %}
 {% endblock %}

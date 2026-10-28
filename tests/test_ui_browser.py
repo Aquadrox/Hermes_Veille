@@ -172,6 +172,7 @@ def test_settings_page_mobile(page, monkeypatch):
     for k in ("ALERT_EMAIL", "BREVO_SENDER_EMAIL"):  # indépendant de l'environnement du poste
         monkeypatch.delenv(k, raising=False)
     pg = page
+    pg.click("details.more summary")  # menu « Plus » de la barre d'onglets
     pg.click("nav a[href='/settings']")
     pg.get_by_text("aucune : le chien de garde ne peut prévenir personne").wait_for()
     pg.fill("textarea[name=alert_emails]", "admin@example.org\nrssi@example.org")
@@ -530,3 +531,28 @@ def test_component_sheet_and_alternatives_mobile(tools, monkeypatch):  # noqa: F
         detail.get_by_role("button", name="Relancer la recherche").click()
         detail.get_by_role("link", name="RMCF0603FT10K0").wait_for()
         assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+def test_dashboard_mobile_tab_bar_and_more_menu(watch, monkeypatch):  # noqa: F811
+    """Accueil en PWA mobile : barre d'onglets fixée en bas, menu « Plus » ouvert au toucher et refermé ailleurs
+    ou par Échap, aucun défilement horizontal, aucune erreur JS ni violation CSP (contrôlé par _browser)."""
+    with _browser(monkeypatch, "/") as pg:
+        assert pg.is_visible("section.hero") and pg.is_visible(f"article#row-{watch.slug}")
+        bar = pg.locator("nav.tabs").bounding_box()
+        assert abs(bar["y"] + bar["height"] - 844) <= 1 and bar["width"] == 390  # collée au bas, pleine largeur
+        pg.mouse.wheel(0, 2000)
+        assert pg.locator("nav.tabs").bounding_box()["y"] == bar["y"]  # reste en place au défilement
+        assert pg.get_attribute("nav.tabs a[href='/']", "aria-current") == "page"
+        assert not pg.is_visible("nav a[href='/settings']")
+        pg.click("details.more summary")
+        menu = pg.locator("details.more .menu").bounding_box()
+        assert pg.is_visible("nav a[href='/settings']") and menu["y"] + menu["height"] <= bar["y"]  # ouvert vers le haut
+        pg.mouse.click(195, 200)
+        assert not pg.is_visible("nav a[href='/settings']")
+        pg.click("details.more summary")
+        pg.keyboard.press("Escape")
+        assert not pg.is_visible("nav a[href='/settings']")
+        assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        pg.click("nav.tabs a[href='/composants']")
+        pg.wait_for_url("**/composants")
+        assert pg.get_attribute("nav.tabs a[href='/composants']", "aria-current") == "page"

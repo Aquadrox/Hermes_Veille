@@ -2,7 +2,9 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1a1f25" media="(prefers-color-scheme: dark)">
   <meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false, "allowScriptTags": false, "responseHandling": [{"code": "204", "swap": false}, {"code": "[23]..", "swap": true}, {"code": "400", "swap": true, "error": false}, {"code": "[45]..", "swap": false, "error": true}, {"code": "...", "swap": false}]}'>
   <title>{% block title %}Veilles{% endblock %}</title>
   <link rel="icon" href="/static/favicon.svg?v={{ STATIC_V }}" type="image/svg+xml">
@@ -10,21 +12,28 @@
   <script src="/static/htmx.min.js?v={{ STATIC_V }}" defer></script>
   <script src="/static/app.js?v={{ STATIC_V }}" defer></script>
 </head>
-<body hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'>
+<body hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'{% if csrf %} class="nav"{% endif %}>
+  {% from "partials/macros.html" import icon, tab %}{% set path = request.url.path %}
   <header class="top">
-    <a class="brand" href="/">Veilles</a>
+    <a class="brand" href="/"><img src="/static/favicon.svg?v={{ STATIC_V }}" alt="" width="22" height="22">Veilles</a>
     {% if csrf %}
-    <nav>
-      <a href="/">Tableau de bord</a>
-      <a href="/composants">Composants</a>
-      <a href="/veilles/new">Nouvelle veille</a>
-      <a href="/sources">Sources</a>
-      <a href="/settings">Paramètres</a>
-      <a href="/health">Santé</a>
-      <form method="post" action="/logout" class="inline">
-        <input type="hidden" name="csrf" value="{{ csrf }}">
-        <button class="link">Déconnexion</button>
-      </form>
+    {# Une seule navigation : barre d'onglets en bas sur mobile (PWA), dans l'en-tête sur grand écran. #}
+    <nav class="tabs" aria-label="Navigation principale">
+      {{ tab("/", "Accueil", "home", path == "/" or (path.startswith("/veilles/") and path != "/veilles/new")) }}
+      {{ tab("/composants", "Composants", "chip", path.startswith("/composants")) }}
+      {{ tab("/veilles/new", "Nouvelle", "plus", path == "/veilles/new") }}
+      {{ tab("/health", "Santé", "pulse", path == "/health") }}
+      <details class="more">
+        <summary{% if path in ("/sources", "/settings") %} aria-current="page"{% endif %}>{{ icon("more") }}<span>Plus</span></summary>
+        <div class="menu">
+          <a href="/sources"{% if path == "/sources" %} aria-current="page"{% endif %}>Sources</a>
+          <a href="/settings"{% if path == "/settings" %} aria-current="page"{% endif %}>Paramètres</a>
+          <form method="post" action="/logout">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="link">Déconnexion</button>
+          </form>
+        </div>
+      </details>
     </nav>
     {% endif %}
   </header>
