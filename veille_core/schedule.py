@@ -35,6 +35,19 @@ class ScheduleError(ValueError):
     pass
 
 
+def parse_when(value) -> dt.datetime | None:
+    """Horodatage de Hermes (ISO, « Z » accepté) ou datetime -> datetime aware (heure naïve : Paris) ;
+    None si vide ou illisible."""
+    if isinstance(value, str):
+        try:
+            value = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, dt.datetime):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=ZONE)
+
+
 def _int(value, lo, hi, label):
     try:
         n = int(value)

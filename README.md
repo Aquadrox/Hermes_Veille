@@ -63,9 +63,13 @@ Host veille
 
 Fonctions :
 
-- **tableau de bord** : état de chaque veille (active, en pause, en échec), prochain et dernier
-  run, dernier rapport et nombre de rapports (lien vers l'historique). Pause, reprise et
-  lancement immédiat en un clic ; avancement d'une analyse composants en cours (étape, composant) ;
+- **accueil** : compte à rebours jusqu'à la prochaine exécution, indicateurs (veilles actives, en échec, coût
+  DeepSeek du mois, composants en fin de vie), puis une carte par veille : état (liseré de couleur), rythme,
+  prochain et dernier run, dernier rapport et nombre de rapports, mini-graphe du coût des 12 dernières
+  exécutions (heures pleines en ambre). Pause, reprise et lancement immédiat en un clic ; avancement d'une
+  analyse composants en cours (étape, composant) ; derniers rapports toutes veilles confondues ;
+- **navigation** : barre d'onglets en bas de l'écran sur mobile (PWA : Accueil, Composants, Nouvelle, Santé,
+  Plus → Sources, Paramètres, Déconnexion), dans l'en-tête sur grand écran ;
 - **créer / modifier une veille** : nom, sujet, fréquence (quotidienne, jours ouvrés,
   hebdomadaire, mensuelle ou expression cron, avec aperçu des prochaines exécutions),
   destinataires (puces, autocomplétion sur le **carnet d'adresses**, ajout au toucher ou par
@@ -200,7 +204,7 @@ lundi 6h30 — job de la veille thématique rattachée
 - **Avancement en direct** de ces lancements manuels : étape 1/3 « Statut Digi-Key » (référence en
   cours, `124 / 310`), 2/3 « Recherche web » (une pastille par composant du lot : à rechercher, en
   cours, fait), 3/3 « Rapport et envoi » ; à la fin, les nouveaux avis par composant, ou l'étape où le
-  lancement s'est arrêté. Page de la veille (rafraîchi toutes les 5 s), tableau de bord (10 s) et
+  lancement s'est arrêté. Page de la veille (rafraîchi toutes les 5 s), accueil (10 s) et
   Telegram (« Où en est l'analyse de la veille composants ? », outil `get_run_log`). Pendant la
   recherche web, c'est l'agent qui signale chaque groupe de recherches
   (`veillectl components progress`) : au mieux de ce qu'il fait, et seulement lors d'un lancement

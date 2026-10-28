@@ -22,3 +22,19 @@ Lancer « {{ v.name }} » maintenant ? Un rapport sera envoyé aux destinataires
 {% macro watch_links(watches, active) -%}
 {% for s in watches %}{% if s in active %}<a href="/veilles/{{ s }}">{{ s }}</a>{% else %}<span class="muted">{{ s|archived }}</span>{% endif %}{{ ", " if not loop.last }}{% endfor %}
 {%- endmacro %}
+
+{# Icônes de la navigation : traits en currentColor (style dans app.css, la CSP interdit les styles en ligne). #}
+{% macro icon(name) -%}
+<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
+{%- if name == "home" %}<path d="M3.5 11 12 4l8.5 7"/><path d="M6 9.5V20h12V9.5"/><path d="M10 20v-5h4v5"/>
+{%- elif name == "chip" %}<rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/>
+{%- elif name == "plus" %}<circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/>
+{%- elif name == "pulse" %}<path d="M3 12h4l2.5-6 5 12 2.5-6h4"/>
+{%- elif name == "more" %}<circle cx="5.5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18.5" cy="12" r="1.2"/>
+{%- endif %}</svg>
+{%- endmacro %}
+
+{# Onglet de la navigation principale ; `active` : page courante (aria-current, mis en évidence). #}
+{% macro tab(href, label, name, active) -%}
+<a href="{{ href }}"{% if active %} aria-current="page"{% endif %}>{{ icon(name) }}<span>{{ label }}</span></a>
+{%- endmacro %}

@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import urllib.request
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -89,15 +90,44 @@ _md = MarkdownIt("commonmark", {"html": False}).enable("table")
 def fmt_dt(value) -> str:
     if not value:
         return "—"
-    if isinstance(value, str):
-        try:
-            value = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return value
-    if value.tzinfo:
-        value = value.astimezone(schedule.ZONE)
+    when = schedule.parse_when(value)
+    if when is None:
+        return str(value)
+    when = when.astimezone(schedule.ZONE)
     days = ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."]
-    return f"{days[value.weekday()]} {value:%d/%m/%Y %H:%M}"
+    return f"{days[when.weekday()]} {when:%d/%m/%Y %H:%M}"
+
+
+def fmt_until(value, now: dt.datetime | None = None) -> str:
+    """Délai avant `value`, à la minute : « dans 4 h 12 », « dans 2 j 5 h » ; « imminente » si dépassé."""
+    when = schedule.parse_when(value)
+    if when is None:
+        return "—"
+    minutes = int((when - (now or dt.datetime.now(dt.UTC))).total_seconds() // 60)
+    if minutes < 1:
+        return "imminente"
+    days, rest = divmod(minutes, 1440)
+    hours, mins = divmod(rest, 60)
+    if days:
+        return f"dans {days} j {hours} h" if hours else f"dans {days} j"
+    if hours:
+        return f"dans {hours} h {mins:02d}" if mins else f"dans {hours} h"
+    return f"dans {mins} min"
+
+
+def spark(runs: list[dict], width: int = 120, height: int = 28, gap: int = 2) -> list[dict]:
+    """Barres SVG du coût des exécutions (x, y, w, h en px ; la plus chère occupe toute la hauteur).
+    Attributs SVG et non styles en ligne : la CSP n'autorise que la feuille de style."""
+    if not runs:
+        return []
+    top = max(r["cost_usd"] for r in runs) or 1
+    step = width / len(runs)  # pas fractionnaire : les barres tiennent dans `width` quel que soit leur nombre
+    w = round(max(1, step - gap), 2)
+    bars = []
+    for i, r in enumerate(runs):
+        h = max(2, round(r["cost_usd"] / top * height))  # 2 px au moins : une exécution reste visible
+        bars.append({"x": round(i * step, 2), "y": height - h, "w": w, "h": h, "run": r})
+    return bars
 
 
 def fmt_size(n) -> str:
@@ -138,11 +168,13 @@ def static_version() -> str:
 
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 templates.env.filters["dt"] = fmt_dt
+templates.env.filters["until"] = fmt_until
 templates.env.filters["size"] = fmt_size
 templates.env.filters["usd"] = fmt_usd
 templates.env.filters["num"] = fmt_int
 templates.env.filters["archived"] = catalog.archived_label
 templates.env.globals["status_class"] = status_class
+templates.env.globals["spark"] = spark
 templates.env.globals["DAYS"] = schedule.DAYS
 templates.env.globals["NOTICE_TYPES"] = components.TYPES
 templates.env.globals["WEB_STATUSES"] = components.WEB_STATUSES
@@ -368,10 +400,11 @@ def create_app() -> FastAPI:
     # -------------------------------------------------------------- tableau de bord
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
-        return render(request, "dashboard.html", rows=service.overview())
+        dash = service.dashboard()
+        return render(request, "dashboard.html", dash=dash, states=Counter(status_class(c) for c in dash["cards"]))
 
     def row_response(request: Request, slug: str, error: str | None = None):
-        row = service.describe(store.load(slug))
+        row = service.card(store.load(slug))
         return render(request, "partials/row.html", 400 if error else 200, row=row, error=error)
 
     @app.get("/veilles/{slug}/row", response_class=HTMLResponse)

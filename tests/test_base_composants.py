@@ -150,7 +150,7 @@ def test_page_lists_every_analysed_reference(base, monkeypatch):
     watch_, archived = base
     client, _ = _client(monkeypatch)
     t = client.get("/composants").text
-    assert '<a href="/composants">Composants</a>' in t  # menu
+    assert re.search(r'<a href="/composants" aria-current="page">.*?<span>Composants</span></a>', t)  # menu, onglet actif
     assert len(re.findall(r'<tr class="comp[^"]*"', t)) == 4  # LM317T (2 veilles), STM32, NE555P, BC547
     assert f'<option value="{archived}">carte-b (archivée le 20' in t
     assert f'<option value="{watch_.slug}">{watch_.slug}</option>' in t

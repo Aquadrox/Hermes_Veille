@@ -1,46 +1,50 @@
-{% from "partials/macros.html" import run_confirm %}{% set v = row.veille %}{% set st = row.status %}
-{# Pendant un lancement, la ligne se ré-interroge toutes les 10 s (avancement, puis état final) ; plus après. #}
-<tr id="row-{{ v.slug }}"{% if row.running %} hx-get="/veilles/{{ v.slug }}/row" hx-trigger="every 10s" hx-swap="outerHTML"{% endif %}>
-  <td data-label="Veille">
-    <a href="/veilles/{{ v.slug }}"><strong>{{ v.name }}</strong></a>
-    {% if v.kind == "composants" %} <span class="badge kind">composants</span>{% endif %}
-    <div class="muted small">{{ v.subject }} · {{ row.recipients|length }} destinataire{{ 's' if row.recipients|length > 1 }}</div>
-    {% set c = row.components %}{% if c %}
-    <div class="small">{% if c.error %}<span class="err">{{ c.error }}</span>{% else %}{{ c.components }} composant{{ 's' if c.components > 1 }} · {{ c.notices }} avis
-      {% if c.critical %}· <a class="badge eol" href="/veilles/{{ v.slug }}#composants">{{ c.critical }} en fin de vie</a>{% endif %}{% endif %}</div>
-    {% endif %}
-    {% if error %}<div class="err small">{{ error }}</div>{% endif %}
-  </td>
-  <td data-label="Fréquence">{{ row.schedule_human }}</td>
-  <td data-label="État">
-    {% set cls = status_class(row) %}
+{% from "partials/macros.html" import run_confirm %}{% set v = row.veille %}{% set st = row.status %}{% set cls = status_class(row) %}
+{# Carte d'une veille (accueil). Pendant un lancement, elle se ré-interroge toutes les 10 s (avancement, puis état final). #}
+<article id="row-{{ v.slug }}" class="vcard {{ cls }}"{% if row.running %} hx-get="/veilles/{{ v.slug }}/row" hx-trigger="every 10s" hx-swap="outerHTML"{% endif %}>
+  <div class="vcard-head">
+    <h2><a href="/veilles/{{ v.slug }}">{{ v.name }}</a></h2>
     <span class="badge {{ cls }}">
       {% if not st.exists %}job absent{% elif row.running %}en cours{% elif st.paused %}en pause{% elif cls == 'bad' %}en échec{% else %}actif{% endif %}
     </span>
-    {% set p = row.progress %}{% if p %}
-    <div class="small">{{ p.summary }}</div>
-    {% if p.max %}<progress value="{{ p.value }}" max="{{ p.max }}" aria-label="Avancement">{{ p.value }} / {{ p.max }}</progress>{% endif %}
-    {% endif %}
-  </td>
-  <td data-label="Prochain run">{{ st.next_run_at|dt }}</td>
-  <td data-label="Dernier run">{{ st.last_run_at|dt }}{% if st.last_status %} <span class="muted small">({{ st.last_status }})</span>{% endif %}</td>
-  <td data-label="Dernier rapport">
-    {% if row.last_report and row.last_report.pdf %}
-    <a href="/veilles/{{ v.slug }}/reports/{{ row.last_report.pdf }}" target="_blank" rel="noopener">{{ row.last_report.date }}</a>
-    {% else %}—{% endif %}
-    {% if row.report_count %}<div class="small"><a href="/veilles/{{ v.slug }}#rapports">{{ row.report_count }} rapport{{ 's' if row.report_count > 1 }}</a></div>{% endif %}
-  </td>
-  <td class="actions">
+  </div>
+  <p class="muted small">{% if v.kind == "composants" %}<span class="badge kind">composants</span> {% endif %}{{ v.subject }}</p>
+  {% set c = row.components %}{% if c %}
+  <p class="small">{% if c.error %}<span class="err">{{ c.error }}</span>{% else %}{{ c.components }} composant{{ 's' if c.components > 1 }}, {{ c.notices }} avis
+    {% if c.critical %} <a class="badge eol" href="/veilles/{{ v.slug }}#composants">{{ c.critical }} en fin de vie</a>{% endif %}{% endif %}</p>
+  {% endif %}
+  {% if error %}<p class="err small">{{ error }}</p>{% endif %}
+  {% if cls == "bad" and st.last_error and not row.running %}<p class="err small clamp" title="{{ st.last_error }}">{{ st.last_error }}</p>{% endif %}
+  {% set p = row.progress %}{% if p %}
+  <div class="small">{{ p.summary }}</div>
+  {% if p.max %}<progress value="{{ p.value }}" max="{{ p.max }}" aria-label="Avancement">{{ p.value }} / {{ p.max }}</progress>{% endif %}
+  {% endif %}
+  <dl class="facts">
+    <div><dt>Rythme</dt><dd>{{ row.schedule_human }}</dd></div>
+    <div><dt>Prochain run</dt><dd>{{ st.next_run_at|dt }}</dd></div>
+    <div><dt>Dernier run</dt><dd>{{ st.last_run_at|dt }}{% if st.last_status %} <span class="muted small">({{ st.last_status }})</span>{% endif %}</dd></div>
+    <div><dt>Dernier rapport</dt><dd>
+      {% if row.last_report and row.last_report.pdf %}<a href="/veilles/{{ v.slug }}/reports/{{ row.last_report.pdf }}" target="_blank" rel="noopener">{{ row.last_report.date }}</a>{% else %}—{% endif %}
+      {% if row.report_count %}<span class="small block"><a href="/veilles/{{ v.slug }}#rapports">{{ row.report_count }} rapport{{ 's' if row.report_count > 1 }}</a></span>{% endif %}</dd></div>
+  </dl>
+  {% set bars = spark(row.spark or []) %}{% if bars %}
+  <a class="spark" href="/veilles/{{ v.slug }}#couts">
+    <svg viewBox="0 0 120 28" width="120" height="28" role="img" aria-label="Coût des {{ bars|length }} dernières exécutions">
+      {% for b in bars %}<rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="1"{% if b.run.peak %} class="peak"{% endif %}><title>{{ b.run.started_at|dt }} : {{ b.run.cost_usd|usd }}</title></rect>{% endfor %}
+    </svg>
+    <span><strong>{{ row.month_usd|usd }}</strong> <span class="muted small">ce mois</span></span>
+  </a>
+  {% endif %}
+  <div class="actions">
     {% if st.exists %}
       {% if st.paused %}
       <button hx-post="/veilles/{{ v.slug }}/resume" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML" hx-disabled-elt="this">Reprendre</button>
       {% else %}
-      <button hx-post="/veilles/{{ v.slug }}/pause" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML" hx-disabled-elt="this">Pause</button>
-      <button hx-post="/veilles/{{ v.slug }}/run" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML" hx-disabled-elt="this"
+      <button class="primary" hx-post="/veilles/{{ v.slug }}/run" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML" hx-disabled-elt="this"
               hx-confirm="{{ run_confirm(row) }}"
               {% if row.running %}disabled{% endif %}>Lancer</button>
+      <button hx-post="/veilles/{{ v.slug }}/pause" hx-target="#row-{{ v.slug }}" hx-swap="outerHTML" hx-disabled-elt="this">Pause</button>
       {% endif %}
     {% endif %}
     <a class="button" href="/veilles/{{ v.slug }}/edit">Modifier</a>
-  </td>
-</tr>
+  </div>
+</article>
