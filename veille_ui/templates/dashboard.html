@@ -9,7 +9,7 @@
     <p><a href="/veilles/{{ nv.slug }}">{{ nv.name }}</a> <span class="muted">{{ dash.next.at|dt }}</span></p>
     {% elif cards %}
     <p class="countdown">Rien de planifié</p>
-    <p class="muted">Toutes les veilles sont en pause.</p>
+    <p class="muted">{% if states.paused == cards|length %}Toutes les veilles sont en pause.{% else %}Hermes n'annonce aucune prochaine exécution : voir <a href="/health">Santé</a>.{% endif %}</p>
     {% else %}
     <p class="countdown">Aucune veille</p>
     <p class="muted">Crée une veille thématique ou une veille composants pour démarrer.</p>

@@ -19,6 +19,7 @@
   window.addEventListener("pageshow", function (e) {
     if (!e.persisted) return;
     document.querySelectorAll("button.busy").forEach(function (b) { b.disabled = false; b.classList.remove("busy"); });
+    closeMenus(null);
   });
 
   // Menu « Plus » de la navigation (<details class="more">) : refermé par un toucher ailleurs ou Échap.
@@ -26,7 +27,12 @@
     document.querySelectorAll("details.more[open]").forEach(function (d) { if (d !== except) d.open = false; });
   }
   document.addEventListener("click", function (e) { closeMenus(e.target.closest && e.target.closest("details.more")); });
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeMenus(null); });
+  document.addEventListener("keydown", function (e) {
+    var open = e.key === "Escape" && document.querySelector("details.more[open]");
+    if (!open) return;
+    open.open = false;
+    open.querySelector("summary").focus();  // le focus revient au bouton qui a ouvert le menu
+  });
 
   // Affiche seulement les champs utiles au rythme choisi : <label data-show="weekly monthly">.
   function syncFreq() {

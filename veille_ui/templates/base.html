@@ -24,7 +24,7 @@
       {{ tab("/veilles/new", "Nouvelle", "plus", path == "/veilles/new") }}
       {{ tab("/health", "Santé", "pulse", path == "/health") }}
       <details class="more">
-        <summary{% if path in ("/sources", "/settings") %} aria-current="page"{% endif %}>{{ icon("more") }}<span>Plus</span></summary>
+        <summary{% if path in ("/sources", "/settings") %} class="active"{% endif %}>{{ icon("more") }}<span>Plus</span></summary>
         <div class="menu">
           <a href="/sources"{% if path == "/sources" %} aria-current="page"{% endif %}>Sources</a>
           <a href="/settings"{% if path == "/settings" %} aria-current="page"{% endif %}>Paramètres</a>

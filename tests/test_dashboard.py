@@ -194,7 +194,11 @@ def test_dashboard_empty_and_all_paused(client, env):  # noqa: F811
     assert "Aucune veille" in page and 'class="kpis"' not in page and 'class="cards"' not in page
     _veille("En pause", paused=True)
     page = client.get("/").text
-    assert "Rien de planifié" in page and "<dt>Fin de vie</dt>" not in page  # pas de veille composants
+    assert "Rien de planifié" in page and "Toutes les veilles sont en pause." in page
+    assert "<dt>Fin de vie</dt>" not in page  # pas de veille composants
+    (env / "cron" / "jobs.json").write_text("illisible")  # jobs de Hermes illisibles : jamais « tout en pause »
+    page = client.get("/").text
+    assert "Rien de planifié" in page and "en pause." not in page and 'href="/health">Santé</a>' in page
 
 
 @pytest.mark.parametrize("path,current", [
@@ -209,7 +213,8 @@ def test_navigation_marks_current_page(client, three, path, current):  # noqa: F
     login(client)
     page = client.get(path).text
     nav = page[page.index('<nav class="tabs"'):page.index("</nav>")]
-    assert current in nav and nav.count('aria-current="page"') == (2 if path in ("/settings", "/sources") else 1)
+    assert current in nav and nav.count('aria-current="page"') == 1  # sur le seul lien de la page (pas sur « Plus »)
+    assert ('<summary class="active">' in nav) == (path in ("/settings", "/sources"))
     assert 'action="/logout"' in nav  # déconnexion dans le menu « Plus »
 
 

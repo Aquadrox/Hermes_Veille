@@ -552,6 +552,7 @@ def test_dashboard_mobile_tab_bar_and_more_menu(watch, monkeypatch):  # noqa: F8
         pg.click("details.more summary")
         pg.keyboard.press("Escape")
         assert not pg.is_visible("nav a[href='/settings']")
+        assert pg.evaluate("document.activeElement.matches('details.more summary')")  # focus rendu au menu
         assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
         pg.click("nav.tabs a[href='/composants']")
         pg.wait_for_url("**/composants")
