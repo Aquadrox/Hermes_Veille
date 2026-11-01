@@ -16,7 +16,7 @@
 #
 # Image amont ÉPINGLÉE (FROM littéral : Dependabot propose les montées de version
 # en PR, validées par les tests et le smoke test de la CI — jamais de dérive silencieuse).
-FROM nousresearch/hermes-agent:v0.22.2
+FROM nousresearch/hermes-agent:v0.22.5
 
 LABEL org.opencontainers.image.title="veille-hermes" \
       org.opencontainers.image.description="Veille technologique hebdomadaire : Hermes Agent + chaîne PDF (pandoc/WeasyPrint) + envoi e-mail Brevo" \
