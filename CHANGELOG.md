@@ -7,6 +7,16 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le pr
 
 ## [Non publié]
 
+## [0.11.1] — 2026-11-06
+
+Licence MIT, avant la publication du dépôt.
+
+### Ajouté
+
+- **Licence MIT** : fichier `LICENSE` à la racine, cohérent avec ce que déclaraient déjà les skills et le label
+  `org.opencontainers.image.licenses` de l'image. Le README y renvoie. Le plugin vendorisé `deepseek-search-fetch`
+  garde sa propre licence MIT (Jason Swindle).
+
 ## [0.11.0] — 2026-10-28
 
 Accueil repensé et nouvelle navigation, pensés d'abord pour la PWA mobile (Capacitor).

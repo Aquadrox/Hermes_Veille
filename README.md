@@ -757,4 +757,5 @@ par e-mail** (`deliver: local`) ; le gateway Telegram de l'hôte reste indépend
 
 ## Licence
 
-À définir (les skills et le label de l'image déclarent MIT ; aucun fichier `LICENSE` pour l'instant).
+[MIT](LICENSE). Le plugin vendorisé `deepseek-search-fetch` garde sa propre licence MIT (Jason Swindle) :
+[`docker/hermes-plugins/deepseek-search-fetch/LICENSE`](docker/hermes-plugins/deepseek-search-fetch/LICENSE).
